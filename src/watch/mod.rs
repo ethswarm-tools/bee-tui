@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bee::debug::{
-    ChainState, ChequebookBalance, LastCheque, RedistributionState, Settlements, Status, Topology,
-    Wallet,
+    Addresses, ChainState, ChequebookBalance, LastCheque, RedistributionState, Settlements, Status,
+    Topology, Wallet,
 };
 use bee::postage::PostageBatch;
 use num_bigint::BigInt;
@@ -97,6 +97,23 @@ impl SwapSnapshot {
     }
 }
 
+/// Snapshot fed to the S7 Network/NAT screen. `/addresses` doesn't
+/// change unless the node restarts, so the cadence is 60 s — slow
+/// enough to be invisible in the command-log pane but quick enough
+/// to catch a restart-induced overlay change.
+#[derive(Clone, Debug, Default)]
+pub struct NetworkSnapshot {
+    pub addresses: Option<Addresses>,
+    pub last_error: Option<String>,
+    pub last_update: Option<Instant>,
+}
+
+impl NetworkSnapshot {
+    pub fn is_loaded(&self) -> bool {
+        self.addresses.is_some() && self.last_error.is_none()
+    }
+}
+
 /// Snapshot fed to the S6 Peers screen and the S1 bin-saturation
 /// gate. `/topology` is polled at 5 s — per-bin populations don't
 /// drift faster than peer churn, but the operator does want to see
@@ -135,7 +152,7 @@ impl LotterySnapshot {
 
 /// Watch-channel hub. Owns one [`watch::Sender`] per resource group;
 /// hands out clones of the receiver via `health()` / `stamps()` /
-/// `swap()` / `lottery()` / `topology()` etc.
+/// `swap()` / `lottery()` / `topology()` / `network()` etc.
 #[derive(Clone, Debug)]
 pub struct BeeWatch {
     health_rx: watch::Receiver<HealthSnapshot>,
@@ -143,6 +160,7 @@ pub struct BeeWatch {
     swap_rx: watch::Receiver<SwapSnapshot>,
     lottery_rx: watch::Receiver<LotterySnapshot>,
     topology_rx: watch::Receiver<TopologySnapshot>,
+    network_rx: watch::Receiver<NetworkSnapshot>,
     cancel: CancellationToken,
 }
 
@@ -181,13 +199,21 @@ impl BeeWatch {
             Duration::from_secs(30),
         );
         let (topology_tx, topology_rx) = watch::channel(TopologySnapshot::default());
-        spawn_topology_poller(client, topology_tx, cancel.clone(), Duration::from_secs(5));
+        spawn_topology_poller(
+            client.clone(),
+            topology_tx,
+            cancel.clone(),
+            Duration::from_secs(5),
+        );
+        let (network_tx, network_rx) = watch::channel(NetworkSnapshot::default());
+        spawn_network_poller(client, network_tx, cancel.clone(), Duration::from_secs(60));
         Self {
             health_rx,
             stamps_rx,
             swap_rx,
             lottery_rx,
             topology_rx,
+            network_rx,
             cancel,
         }
     }
@@ -216,6 +242,11 @@ impl BeeWatch {
     /// Subscribe to the topology snapshot stream (`/topology`).
     pub fn topology(&self) -> watch::Receiver<TopologySnapshot> {
         self.topology_rx.clone()
+    }
+
+    /// Subscribe to the network snapshot stream (`/addresses`).
+    pub fn network(&self) -> watch::Receiver<NetworkSnapshot> {
+        self.network_rx.clone()
     }
 
     /// Cancel every polling task this hub owns. Idempotent.
@@ -423,6 +454,46 @@ async fn collect_topology(client: &ApiClient) -> TopologySnapshot {
         Err(e) => TopologySnapshot {
             topology: None,
             last_error: Some(format!("topology: {e}")),
+            last_update: Some(Instant::now()),
+        },
+    }
+}
+
+/// Poll `/addresses` every `interval` and broadcast a fresh
+/// [`NetworkSnapshot`].
+fn spawn_network_poller(
+    client: Arc<ApiClient>,
+    tx: watch::Sender<NetworkSnapshot>,
+    cancel: CancellationToken,
+    interval: Duration,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = tick.tick() => {
+                    let snap = collect_network(&client).await;
+                    if tx.send(snap).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn collect_network(client: &ApiClient) -> NetworkSnapshot {
+    match client.bee().debug().addresses().await {
+        Ok(addresses) => NetworkSnapshot {
+            addresses: Some(addresses),
+            last_error: None,
+            last_update: Some(Instant::now()),
+        },
+        Err(e) => NetworkSnapshot {
+            addresses: None,
+            last_error: Some(format!("addresses: {e}")),
             last_update: Some(Instant::now()),
         },
     }
