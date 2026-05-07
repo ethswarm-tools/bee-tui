@@ -47,11 +47,35 @@ pub struct BeeLogEntry {
 }
 
 impl BeeLogEntry {
-    /// Map the `level` field to the cockpit tab it belongs on.
-    /// Returns `None` for unrecognised levels (the parser keeps the
-    /// raw string in `self.level`; the caller decides whether to
-    /// drop or fall through to a default tab).
+    /// Lines coming from Bee's REST API server have logger names
+    /// that start with `node/api` (covers `node/api`,
+    /// `node/api/access`, and similar variants across Bee versions).
+    /// They get their own tab so served-request traffic doesn't
+    /// drown out the severity views.
+    ///
+    /// Limitation: bee-tui's *own* requests against Bee also produce
+    /// these lines on the server side. There's no reliable way to
+    /// filter them out from Bee's perspective (User-Agent isn't in
+    /// the structured fields). The cockpit's bee::http tab — fed
+    /// from bee-tui's own client tracing — is the better place to
+    /// see "what bee-tui called"; this tab is "everything Bee
+    /// served", which usually overlaps but doesn't have to.
+    pub fn is_bee_http(&self) -> bool {
+        self.logger.starts_with("node/api")
+    }
+
+    /// Map the `level` + logger combination to the cockpit tab it
+    /// belongs on. The Bee-HTTP check wins over severity routing —
+    /// an `error`-level line from `node/api` shows up on Bee HTTP,
+    /// not on Errors. (Reason: an operator looking at Errors wants
+    /// to see *infrastructure* errors, not "client sent a malformed
+    /// request" lines that flood under load testing.) Returns
+    /// `None` for unrecognised levels so a future Bee build with a
+    /// new severity isn't silently misfiled.
     pub fn tab(&self) -> Option<LogTab> {
+        if self.is_bee_http() {
+            return Some(LogTab::BeeHttp);
+        }
         match self.level.as_str() {
             "error" | "err" | "fatal" => Some(LogTab::Errors),
             "warning" | "warn" => Some(LogTab::Warning),
@@ -264,6 +288,46 @@ mod tests {
         assert_eq!(e.tab(), None);
         let e = BeeLogEntry::default();
         assert_eq!(e.tab(), None);
+    }
+
+    #[test]
+    fn node_api_logger_routes_to_bee_http() {
+        // Bee's REST API server uses `node/api` as the logger name.
+        // Should land on the Bee HTTP tab regardless of severity.
+        for logger in ["node/api", "node/api/access", "node/api/handler"] {
+            let e = BeeLogEntry {
+                logger: logger.into(),
+                level: "debug".into(),
+                ..Default::default()
+            };
+            assert_eq!(e.tab(), Some(LogTab::BeeHttp), "logger {logger}");
+        }
+    }
+
+    #[test]
+    fn bee_http_wins_over_severity_routing() {
+        // An error-level line from node/api goes to BeeHttp, not
+        // Errors — the spec says "errors" is for infrastructure
+        // problems, not 4xx replies to clients.
+        let e = BeeLogEntry {
+            logger: "node/api".into(),
+            level: "error".into(),
+            ..Default::default()
+        };
+        assert_eq!(e.tab(), Some(LogTab::BeeHttp));
+    }
+
+    #[test]
+    fn non_api_logger_falls_through_to_severity() {
+        // Sanity check the regression: the logger filter should
+        // ONLY catch `node/api*`, not anything that happens to
+        // contain `api`.
+        let e = BeeLogEntry {
+            logger: "node/batchapi".into(),
+            level: "error".into(),
+            ..Default::default()
+        };
+        assert_eq!(e.tab(), Some(LogTab::Errors));
     }
 
     #[test]

@@ -11,6 +11,30 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **Bee HTTP tab fed from server-side log (increment 4 of 4).**
+  Lines with `logger=node/api*` (covers `node/api`,
+  `node/api/access`, etc. across Bee versions) now route to the
+  Bee HTTP tab instead of the severity tabs. The Bee-HTTP check
+  wins over severity routing — an `error`-level line from
+  `node/api` lands on Bee HTTP, not Errors. Reason: operators
+  looking at Errors want to see *infrastructure* problems, not
+  4xx replies to misbehaving clients.
+
+  Caveat documented inline: bee-tui's *own* requests against Bee
+  also produce these lines from Bee's perspective. There's no
+  reliable way to filter them server-side. The cockpit's
+  `bee::http` tab — fed from bee-tui's own client tracing — is
+  the right place to see "what bee-tui called"; the Bee HTTP tab
+  is "everything Bee served", which usually overlaps but doesn't
+  have to (e.g. when you also have curl / swarm-cli hitting the
+  node from a separate shell).
+
+  This is the final increment of the four-part log-pane redesign.
+  bee-tui is now a fully-shaped log cockpit when [bee] is set:
+  spawn → tail → parse → route → render. With [bee] unset, the
+  legacy "connect to running Bee" flow keeps the bee::http tab
+  populated and the four severity tabs explain themselves.
+
 - **Bee log file-tail + parser + severity routing (increment 3 of 4).**
   When bee-tui spawns Bee (`[bee]` configured), a background tailer
   follows the supervisor's captured log file at 200 ms cadence.
