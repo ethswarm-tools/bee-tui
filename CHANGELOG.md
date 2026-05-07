@@ -11,6 +11,34 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **k9s-style `:command` bar.** `:` opens an input line at the bottom
+  of the screen; Backspace edits, Enter dispatches, Esc cancels.
+  Component-level key dispatch is suppressed while the bar is open,
+  so typing `r` inside `:diagnose` doesn't fire Lottery's rchash
+  benchmark behind the prompt.
+- **Direct screen jumps.** `:health`, `:stamps`, `:swap`, `:lottery`,
+  `:peers`, `:network`, `:warmup`, `:api` jump straight to the named
+  tab. Case-insensitive against `SCREEN_NAMES`. Unknown commands
+  surface a one-line error in the status row.
+- **`:diagnose` (alias `:diag`).** Writes a redacted, paste-ready
+  bundle (profile + endpoint + every health gate's status + last
+  50 captured Bee API calls) to
+  `$TMPDIR/bee-tui-diagnostic-<unixtime>.txt`. URLs are reduced to
+  their path component before being written; Bearer tokens, if any,
+  live in headers and aren't captured.
+- **`:context <name>` (alias `:ctx`).** Multi-node switcher — drops
+  the current `BeeWatch` hub and respawns against another `Config`
+  entry. Component-internal state is intentionally lost since a
+  profile switch is a fresh slate. `:context` with no argument lists
+  the configured node names.
+- **Top bar.** Replaces the bare "Tab to switch" hint with a richer
+  metadata line — `bee-tui` badge, active profile name, endpoint URL,
+  live ping value off the existing health stream, UTC HH:MM:SS clock.
+  Tab strip stays on row 2.
+- **`:quit` / `:q`.** Routes through the existing Action::Quit
+  pipeline so the operator can exit without leaving the keyboard
+  home row.
+
 - **S8 RPC / API health** — eighth operator screen, closing out
   v0.3 from `docs/PLAN.md` § 12. PLAN's framing was Gnosis-RPC
   latency + remote block height; Bee doesn't expose either, so we
