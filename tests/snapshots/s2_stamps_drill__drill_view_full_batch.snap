@@ -1,0 +1,42 @@
+---
+source: tests/s2_stamps_drill.rs
+expression: view
+---
+StampDrillView {
+    depth: 22,
+    bucket_depth: 16,
+    upper_bound: 64,
+    total_chunks: 64,
+    theoretical_capacity: 4194304,
+    fill_distribution: [
+        3,
+        0,
+        0,
+        0,
+        0,
+        1,
+    ],
+    worst_buckets: [
+        WorstBucket {
+            bucket_id: 7,
+            collisions: 64,
+            pct: 100,
+        },
+        WorstBucket {
+            bucket_id: 8,
+            collisions: 0,
+            pct: 0,
+        },
+        WorstBucket {
+            bucket_id: 9,
+            collisions: 0,
+            pct: 0,
+        },
+        WorstBucket {
+            bucket_id: 10,
+            collisions: 0,
+            pct: 0,
+        },
+    ],
+    worst_pct: 100,
+}

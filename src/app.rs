@@ -821,7 +821,7 @@ impl App {
 /// Network, 6 is Warmup, 7 is API, 8 is Tags.
 fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Component>> {
     let health = Health::new(api.clone(), watch.health(), watch.topology());
-    let stamps = Stamps::new(watch.stamps());
+    let stamps = Stamps::new(api.clone(), watch.stamps());
     let swap = Swap::new(watch.swap());
     let lottery = Lottery::new(api.clone(), watch.health(), watch.lottery());
     let peers = Peers::new(watch.topology());

@@ -7,11 +7,22 @@
 //! — operators see exactly which batch is about to fail uploads
 //! even though average usage is far from 100%.
 //!
-//! Behaviour is data-driven via [`Stamps::rows_for`] so insta
-//! snapshot tests can stub the input and verify status / value /
-//! `why` strings without launching a TUI.
+//! `Enter` on a selected row drills into the per-bucket histogram
+//! (`/stamps/{id}/buckets`): the batch ID alone tells you the
+//! worst bucket, but the drill answers the next operator question
+//! — *how concentrated* is the load? A batch where 98 buckets are
+//! at 90% behaves very differently from one where two are at 100%
+//! and the rest are near-empty.
+//!
+//! Behaviour is data-driven via [`Stamps::rows_for`] and
+//! [`Stamps::compute_drill_view`] so insta snapshot tests can stub
+//! the input and verify status / value / `why` strings without
+//! launching a TUI.
+
+use std::sync::Arc;
 
 use color_eyre::Result;
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -19,14 +30,16 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use super::Component;
 use crate::action::Action;
+use crate::api::ApiClient;
 use crate::theme;
 use crate::watch::StampsSnapshot;
 
-use bee::postage::PostageBatch;
+use bee::postage::{BatchBucket, PostageBatch, PostageBatchBuckets};
+use bee::swarm::BatchId;
 
 /// Tri-state row outcome with `Pending` for chain-confirmation gating.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,19 +103,126 @@ pub struct StampRow {
     pub why: Option<String>,
 }
 
+/// Bucket fill distribution for [`StampDrillView`]. Six buckets keep
+/// the display compact while still distinguishing "nearly full" from
+/// "actually full". Ordered low → high.
+pub const FILL_BIN_LABELS: &[&str] = &[
+    "0 %",
+    "1 – 19 %",
+    "20 – 49 %",
+    "50 – 79 %",
+    "80 – 99 %",
+    "100 %",
+];
+
+/// Aggregated drill view for the bucket histogram screen. Pure —
+/// computed from [`PostageBatchBuckets`] without any I/O.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StampDrillView {
+    pub depth: u8,
+    pub bucket_depth: u8,
+    pub upper_bound: u32,
+    /// Sum of every bucket's collisions count (the chunks-stamped
+    /// total Bee tracks for the batch).
+    pub total_chunks: u64,
+    /// `2^bucket_depth × upper_bound` — the headline "what the batch
+    /// could hold if perfectly distributed" number. Computed in
+    /// `u128` to dodge overflow on max-depth batches.
+    pub theoretical_capacity: u128,
+    /// Count of buckets whose fill percentage falls in each
+    /// [`FILL_BIN_LABELS`] bin. `[u32; 6]` matches the bin labels
+    /// 1-for-1.
+    pub fill_distribution: [u32; 6],
+    /// Up to 10 worst buckets sorted by collisions descending.
+    /// Stable ordering: ties broken by bucket-id ascending.
+    pub worst_buckets: Vec<WorstBucket>,
+    /// Worst single bucket fill percentage (matches the row's
+    /// `worst_bucket_pct`).
+    pub worst_pct: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorstBucket {
+    pub bucket_id: u32,
+    pub collisions: u32,
+    pub pct: u32,
+}
+
+/// Drill-pane state machine. `Idle` keeps the regular table
+/// rendered; the other variants replace it with the drill view.
+#[derive(Debug, Clone)]
+pub enum DrillState {
+    Idle,
+    Loading {
+        batch_id: BatchId,
+    },
+    Loaded {
+        batch_id: BatchId,
+        view: StampDrillView,
+    },
+    Failed {
+        batch_id: BatchId,
+        error: String,
+    },
+}
+
+type DrillFetchResult = (BatchId, std::result::Result<PostageBatchBuckets, String>);
+
 pub struct Stamps {
+    client: Arc<ApiClient>,
     rx: watch::Receiver<StampsSnapshot>,
     snapshot: StampsSnapshot,
+    selected: usize,
+    drill: DrillState,
+    fetch_tx: mpsc::UnboundedSender<DrillFetchResult>,
+    fetch_rx: mpsc::UnboundedReceiver<DrillFetchResult>,
 }
 
 impl Stamps {
-    pub fn new(rx: watch::Receiver<StampsSnapshot>) -> Self {
+    pub fn new(client: Arc<ApiClient>, rx: watch::Receiver<StampsSnapshot>) -> Self {
         let snapshot = rx.borrow().clone();
-        Self { rx, snapshot }
+        let (fetch_tx, fetch_rx) = mpsc::unbounded_channel();
+        Self {
+            client,
+            rx,
+            snapshot,
+            selected: 0,
+            drill: DrillState::Idle,
+            fetch_tx,
+            fetch_rx,
+        }
     }
 
     fn pull_latest(&mut self) {
         self.snapshot = self.rx.borrow().clone();
+        // If batches disappear/shrink, clamp the selection so we don't
+        // dangle an out-of-bounds index.
+        let n = self.snapshot.batches.len();
+        if n == 0 {
+            self.selected = 0;
+        } else if self.selected >= n {
+            self.selected = n - 1;
+        }
+    }
+
+    /// Drain any drill fetches that completed since the last tick.
+    /// Late results from a since-cancelled drill (operator hit Esc
+    /// then Enter on a different row before the network came back)
+    /// are dropped silently — `drill` already moved on.
+    fn drain_fetches(&mut self) {
+        while let Ok((batch_id, result)) = self.fetch_rx.try_recv() {
+            match &self.drill {
+                DrillState::Loading { batch_id: pending } if *pending == batch_id => {}
+                _ => continue, // user moved on; ignore
+            }
+            self.drill = match result {
+                Ok(buckets) => DrillState::Loaded {
+                    batch_id,
+                    view: Self::compute_drill_view(&buckets),
+                },
+                Err(error) => DrillState::Failed { batch_id, error },
+            };
+        }
     }
 
     /// Pure, snapshot-driven row computation. Exposed for snapshot
@@ -110,6 +230,103 @@ impl Stamps {
     pub fn rows_for(snap: &StampsSnapshot) -> Vec<StampRow> {
         snap.batches.iter().map(row_from_batch).collect()
     }
+
+    /// Pure compute path for the drill pane. Buckets the per-bucket
+    /// collisions into [`FILL_BIN_LABELS`] bins, picks the top-10
+    /// worst, totals the chunk count.
+    pub fn compute_drill_view(buckets: &PostageBatchBuckets) -> StampDrillView {
+        let upper_bound = buckets.bucket_upper_bound.max(1);
+        let mut fill_distribution = [0u32; 6];
+        let mut total_chunks: u64 = 0;
+        for b in &buckets.buckets {
+            total_chunks += u64::from(b.collisions);
+            let bin = bucket_fill_bin(b.collisions, upper_bound);
+            fill_distribution[bin] += 1;
+        }
+        let mut sorted: Vec<&BatchBucket> = buckets.buckets.iter().collect();
+        // Worst first; ties broken by bucket-id ascending so the list
+        // is deterministic regardless of how Bee returns the array.
+        sorted.sort_by(|a, b| {
+            b.collisions
+                .cmp(&a.collisions)
+                .then_with(|| a.bucket_id.cmp(&b.bucket_id))
+        });
+        let worst_buckets: Vec<WorstBucket> = sorted
+            .iter()
+            .take(10)
+            .map(|b| WorstBucket {
+                bucket_id: b.bucket_id,
+                collisions: b.collisions,
+                pct: pct_of(b.collisions, upper_bound),
+            })
+            .collect();
+        let worst_pct = worst_buckets.first().map(|w| w.pct).unwrap_or(0);
+        let theoretical_capacity = (1u128 << buckets.bucket_depth) * u128::from(upper_bound);
+        StampDrillView {
+            depth: buckets.depth,
+            bucket_depth: buckets.bucket_depth,
+            upper_bound,
+            total_chunks,
+            theoretical_capacity,
+            fill_distribution,
+            worst_buckets,
+            worst_pct,
+        }
+    }
+
+    /// Spawn a background fetch for the batch under the cursor.
+    /// No-op if there are no batches or a fetch is already in
+    /// flight for the same batch.
+    fn maybe_start_drill(&mut self) {
+        if self.snapshot.batches.is_empty() {
+            return;
+        }
+        let i = self.selected.min(self.snapshot.batches.len() - 1);
+        let batch_id = self.snapshot.batches[i].batch_id;
+        if let DrillState::Loading { batch_id: pending } = &self.drill {
+            if *pending == batch_id {
+                return; // already in flight
+            }
+        }
+        let client = self.client.clone();
+        let tx = self.fetch_tx.clone();
+        tokio::spawn(async move {
+            let res = client
+                .bee()
+                .postage()
+                .get_postage_batch_buckets(&batch_id)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send((batch_id, res));
+        });
+        self.drill = DrillState::Loading { batch_id };
+    }
+}
+
+fn bucket_fill_bin(collisions: u32, upper_bound: u32) -> usize {
+    if collisions == 0 {
+        return 0;
+    }
+    if collisions >= upper_bound {
+        return 5; // 100 % (and over-saturated edge — Bee can over-report)
+    }
+    let pct = pct_of(collisions, upper_bound);
+    match pct {
+        0 => 0, // belt-and-braces; the early return handles 0
+        1..=19 => 1,
+        20..=49 => 2,
+        50..=79 => 3,
+        80..=99 => 4,
+        _ => 5,
+    }
+}
+
+fn pct_of(collisions: u32, upper_bound: u32) -> u32 {
+    if upper_bound == 0 {
+        return 0;
+    }
+    let pct = (u64::from(collisions) * 100) / u64::from(upper_bound);
+    pct.min(100) as u32
 }
 
 fn row_from_batch(b: &PostageBatch) -> StampRow {
@@ -236,6 +453,35 @@ impl Component for Stamps {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if matches!(action, Action::Tick) {
             self.pull_latest();
+            self.drain_fetches();
+        }
+        Ok(None)
+    }
+
+    fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        // Drill mode swallows Esc to dismiss; otherwise keys behave
+        // the same as in list mode (so `j`/`k` etc. don't surprise
+        // the operator after pressing Enter).
+        if matches!(self.drill, DrillState::Loaded { .. } | DrillState::Loading { .. } | DrillState::Failed { .. })
+            && matches!(key.code, KeyCode::Esc)
+        {
+            self.drill = DrillState::Idle;
+            return Ok(None);
+        }
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                let n = self.snapshot.batches.len();
+                if n > 0 && self.selected + 1 < n {
+                    self.selected += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.selected = self.selected.saturating_sub(1);
+            }
+            KeyCode::Enter => {
+                self.maybe_start_drill();
+            }
+            _ => {}
         }
         Ok(None)
     }
@@ -243,17 +489,26 @@ impl Component for Stamps {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let chunks = Layout::vertical([
             Constraint::Length(3), // header
-            Constraint::Min(0),    // table
+            Constraint::Min(0),    // body (table or drill)
             Constraint::Length(1), // footer
         ])
         .split(area);
 
         // Header
         let count = self.snapshot.batches.len();
-        let header_l1 = Line::from(vec![
+        let mut header_l1 = vec![
             Span::styled("STAMPS", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw(format!("  {count} batch(es)")),
-        ]);
+        ];
+        if let DrillState::Loaded { batch_id, .. }
+        | DrillState::Loading { batch_id }
+        | DrillState::Failed { batch_id, .. } = &self.drill
+        {
+            let hex = batch_id.to_hex();
+            let short = if hex.len() > 8 { &hex[..8] } else { &hex };
+            header_l1.push(Span::raw(format!("   · drill {short}…")));
+        }
+        let header_l1 = Line::from(header_l1);
         let mut header_l2 = Vec::new();
         let t = theme::active();
         if let Some(err) = &self.snapshot.last_error {
@@ -271,28 +526,86 @@ impl Component for Stamps {
             chunks[0],
         );
 
-        // Table (rendered as a Paragraph of styled Lines for control)
+        // Body
+        match &self.drill {
+            DrillState::Idle => self.draw_table(frame, chunks[1]),
+            DrillState::Loading { .. } => {
+                let msg = Line::from(Span::styled(
+                    "  fetching /stamps/<id>/buckets…  (Esc cancel)",
+                    Style::default().fg(t.dim),
+                ));
+                frame.render_widget(Paragraph::new(msg), chunks[1]);
+            }
+            DrillState::Failed { error, .. } => {
+                let msg = Line::from(vec![
+                    Span::raw("  drill failed: "),
+                    Span::styled(error.clone(), Style::default().fg(t.fail)),
+                    Span::raw("    (Esc to dismiss)"),
+                ]);
+                frame.render_widget(Paragraph::new(msg), chunks[1]);
+            }
+            DrillState::Loaded { view, .. } => self.draw_drill(frame, chunks[1], view),
+        }
+
+        // Footer — keymap shifts in drill mode.
+        let footer = match &self.drill {
+            DrillState::Idle => Line::from(vec![
+                Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" switch screen  "),
+                Span::styled(" ↑↓/jk ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" select  "),
+                Span::styled(" ↵ ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" drill  "),
+                Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" quit  "),
+                Span::styled(" I/M ", Style::default().fg(t.dim)),
+                Span::raw(" immutable / mutable "),
+            ]),
+            _ => Line::from(vec![
+                Span::styled(" Esc ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" close drill  "),
+                Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" switch screen  "),
+                Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" quit "),
+            ]),
+        };
+        frame.render_widget(Paragraph::new(footer), chunks[2]);
+
+        Ok(())
+    }
+}
+
+impl Stamps {
+    fn draw_table(&self, frame: &mut Frame, area: Rect) {
+        let t = theme::active();
         let mut lines: Vec<Line> = Vec::new();
         // Column header
         lines.push(Line::from(vec![Span::styled(
-            "  LABEL                BATCH        VOLUME      WORST BUCKET                TTL         STATUS",
+            "   LABEL                BATCH        VOLUME      WORST BUCKET                TTL         STATUS",
             Style::default()
                 .fg(t.dim)
                 .add_modifier(Modifier::BOLD),
         )]));
         if self.snapshot.batches.is_empty() {
             lines.push(Line::from(Span::styled(
-                "  (no batches yet — buy one with swarm-cli or `bee stamps buy`)",
+                "   (no batches yet — buy one with swarm-cli or `bee stamps buy`)",
                 Style::default()
                     .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
         } else {
-            for r in Self::rows_for(&self.snapshot) {
+            for (i, r) in Self::rows_for(&self.snapshot).into_iter().enumerate() {
                 let bar = fill_bar(r.worst_bucket_pct, 8);
                 let immut_glyph = if r.immutable { "I" } else { "M" };
+                let cursor = if i == self.selected { "▶ " } else { "  " };
                 lines.push(Line::from(vec![
-                    Span::raw("  "),
+                    Span::styled(
+                        cursor,
+                        Style::default()
+                            .fg(if i == self.selected { t.accent } else { t.dim })
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(
                         format!("{:<20}", truncate(&r.label, 20)),
                         Style::default().add_modifier(Modifier::BOLD),
@@ -316,7 +629,7 @@ impl Component for Stamps {
                 ]));
                 if let Some(why) = r.why {
                     lines.push(Line::from(vec![
-                        Span::raw("       └─ "),
+                        Span::raw("        └─ "),
                         Span::styled(
                             why,
                             Style::default()
@@ -327,22 +640,121 @@ impl Component for Stamps {
                 }
             }
         }
-        frame.render_widget(Paragraph::new(lines), chunks[1]);
+        frame.render_widget(Paragraph::new(lines), area);
+    }
 
-        // Footer
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
-                Span::raw(" switch screen  "),
-                Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
-                Span::raw(" quit  "),
-                Span::styled(" I/M ", Style::default().fg(t.dim)),
-                Span::raw(" immutable / mutable "),
-            ])),
-            chunks[2],
-        );
+    fn draw_drill(&self, frame: &mut Frame, area: Rect, view: &StampDrillView) {
+        let t = theme::active();
+        let mut lines: Vec<Line> = Vec::new();
+        // Headline summary line.
+        let total_buckets: u32 = view.fill_distribution.iter().sum();
+        lines.push(Line::from(vec![
+            Span::raw("  depth "),
+            Span::styled(
+                format!("{}", view.depth),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   bucket-depth "),
+            Span::styled(
+                format!("{}", view.bucket_depth),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   per-bucket cap "),
+            Span::styled(
+                format!("{}", view.upper_bound),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled(
+                format!("{} buckets", total_buckets),
+                Style::default().fg(t.dim),
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("  total chunks "),
+            Span::styled(
+                format!("{}", view.total_chunks),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" / "),
+            Span::styled(
+                format!("{}", view.theoretical_capacity),
+                Style::default().fg(t.dim),
+            ),
+            Span::raw("   worst bucket "),
+            Span::styled(
+                format!("{}%", view.worst_pct),
+                Style::default()
+                    .fg(bucket_color(view.worst_pct))
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        lines.push(Line::from(""));
 
-        Ok(())
+        // Fill-distribution histogram.
+        lines.push(Line::from(Span::styled(
+            "  FILL %       COUNT   DISTRIBUTION",
+            Style::default()
+                .fg(t.dim)
+                .add_modifier(Modifier::BOLD),
+        )));
+        let max_bin = view.fill_distribution.iter().copied().max().unwrap_or(1).max(1);
+        for (idx, count) in view.fill_distribution.iter().enumerate() {
+            let label = FILL_BIN_LABELS[idx];
+            let bar_width = ((u64::from(*count) * 30) / u64::from(max_bin)) as usize;
+            let bar: String = std::iter::repeat_n('▇', bar_width).collect();
+            // Bin colour follows the fill range so the operator's eye
+            // jumps to the rows that matter (red 100 %, yellow 80–99,
+            // pass otherwise).
+            let bin_color = match idx {
+                5 => t.fail,
+                4 => t.warn,
+                _ => t.pass,
+            };
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::raw(format!("{label:<10}  ")),
+                Span::styled(
+                    format!("{count:>5}   "),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(bar, Style::default().fg(bin_color)),
+            ]));
+        }
+        lines.push(Line::from(""));
+
+        // Top-N worst buckets.
+        if !view.worst_buckets.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  WORST BUCKETS",
+                Style::default()
+                    .fg(t.dim)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for w in &view.worst_buckets {
+                if w.collisions == 0 {
+                    // Once we hit zero-collision buckets the rest are
+                    // also zero — don't pad the worst-N with junk.
+                    break;
+                }
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::raw(format!("#{:<8}", w.bucket_id)),
+                    Span::raw(format!(
+                        "{:>4} / {}    ",
+                        w.collisions, view.upper_bound
+                    )),
+                    Span::styled(
+                        format!("{}%", w.pct),
+                        Style::default()
+                            .fg(bucket_color(w.pct))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+            }
+        }
+
+        frame.render_widget(Paragraph::new(lines), area);
     }
 }
 
@@ -370,6 +782,23 @@ fn bucket_color(pct: u32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn buckets_with(counts: &[(u32, u32)], depth: u8, bucket_depth: u8) -> PostageBatchBuckets {
+        let upper_bound = 1u32 << (depth - bucket_depth);
+        let buckets = counts
+            .iter()
+            .map(|(id, c)| BatchBucket {
+                bucket_id: *id,
+                collisions: *c,
+            })
+            .collect();
+        PostageBatchBuckets {
+            depth,
+            bucket_depth,
+            bucket_upper_bound: upper_bound,
+            buckets,
+        }
+    }
 
     #[test]
     fn fill_bar_clamps_to_width() {
@@ -403,5 +832,82 @@ mod tests {
     #[test]
     fn format_ttl_under_a_day_uses_hours_minutes() {
         assert_eq!(format_ttl_seconds(2 * 3_600 + 30 * 60), "2h 30m");
+    }
+
+    #[test]
+    fn drill_view_bins_and_worst_n() {
+        // depth=22, bucket_depth=16 → upper_bound=64. Construct a
+        // small sample with one full bucket, one near-full, two
+        // mid, rest empty.
+        let buckets = buckets_with(
+            &[
+                (0, 64), // 100 %  → bin 5
+                (1, 60), // 93 %   → bin 4
+                (2, 40), // 62 %   → bin 3
+                (3, 20), // 31 %   → bin 2
+                (4, 1),  // 1 %    → bin 1
+                (5, 0),  // 0 %    → bin 0
+            ],
+            22,
+            16,
+        );
+        let view = Stamps::compute_drill_view(&buckets);
+        assert_eq!(view.depth, 22);
+        assert_eq!(view.bucket_depth, 16);
+        assert_eq!(view.upper_bound, 64);
+        assert_eq!(view.total_chunks, 64 + 60 + 40 + 20 + 1);
+        assert_eq!(view.fill_distribution, [1, 1, 1, 1, 1, 1]);
+        assert_eq!(view.worst_pct, 100);
+        // Worst-N is the worst-3 here (rest are zero — truncated).
+        // The order is: bucket 0 (64), bucket 1 (60), bucket 2 (40),
+        // then 20, 1; the trailing zero-bucket is included only up
+        // to 10 entries — we filter zero-collisions in the renderer
+        // but compute_drill_view includes them up to the cap.
+        assert_eq!(view.worst_buckets.len(), 6);
+        assert_eq!(view.worst_buckets[0].bucket_id, 0);
+        assert_eq!(view.worst_buckets[0].pct, 100);
+        assert_eq!(view.worst_buckets[1].bucket_id, 1);
+        assert_eq!(view.worst_buckets[1].pct, 93);
+    }
+
+    #[test]
+    fn drill_view_handles_empty_buckets() {
+        let buckets = buckets_with(&[], 22, 16);
+        let view = Stamps::compute_drill_view(&buckets);
+        assert_eq!(view.total_chunks, 0);
+        assert_eq!(view.fill_distribution, [0; 6]);
+        assert_eq!(view.worst_pct, 0);
+        assert!(view.worst_buckets.is_empty());
+    }
+
+    #[test]
+    fn drill_view_caps_worst_at_ten() {
+        // 12 distinct buckets, all collisions=1 — top-10 should
+        // truncate at 10 entries.
+        let entries: Vec<(u32, u32)> = (0..12).map(|i| (i, 1)).collect();
+        let buckets = buckets_with(&entries, 22, 16);
+        let view = Stamps::compute_drill_view(&buckets);
+        assert_eq!(view.worst_buckets.len(), 10);
+    }
+
+    #[test]
+    fn drill_view_breaks_ties_by_bucket_id() {
+        let buckets = buckets_with(&[(7, 5), (3, 5), (10, 5)], 22, 16);
+        let view = Stamps::compute_drill_view(&buckets);
+        // All three tie on collisions=5 → ascending by bucket_id.
+        assert_eq!(
+            view.worst_buckets
+                .iter()
+                .map(|w| w.bucket_id)
+                .collect::<Vec<_>>(),
+            vec![3, 7, 10],
+        );
+    }
+
+    #[test]
+    fn fill_bin_handles_overflow_collisions() {
+        // Bee occasionally over-reports collisions vs upper_bound.
+        // Treat it as the saturated 100 % bin rather than panicking.
+        assert_eq!(bucket_fill_bin(70, 64), 5);
     }
 }
