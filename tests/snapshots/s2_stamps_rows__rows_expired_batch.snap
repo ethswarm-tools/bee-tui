@@ -1,0 +1,20 @@
+---
+source: tests/s2_stamps_rows.rs
+assertion_line: 146
+expression: rows
+---
+[
+    StampRow {
+        label: "burned",
+        batch_id_short: "ffffffff…",
+        volume: "16.0 GiB",
+        worst_bucket_pct: 46,
+        worst_bucket_raw: "30/64",
+        ttl: "expired",
+        immutable: true,
+        status: Expired,
+        why: Some(
+            "paid balance exhausted; topup or stop using.",
+        ),
+    },
+]

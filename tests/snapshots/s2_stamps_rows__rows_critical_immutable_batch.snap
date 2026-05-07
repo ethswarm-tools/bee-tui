@@ -1,0 +1,20 @@
+---
+source: tests/s2_stamps_rows.rs
+assertion_line: 120
+expression: rows
+---
+[
+    StampRow {
+        label: "about-to-fail",
+        batch_id_short: "dddddddd…",
+        volume: "16.0 GiB",
+        worst_bucket_pct: 98,
+        worst_bucket_raw: "63/64",
+        ttl: "5d  0h",
+        immutable: true,
+        status: Critical,
+        why: Some(
+            "immutable batch will REJECT next upload at this bucket.",
+        ),
+    },
+]

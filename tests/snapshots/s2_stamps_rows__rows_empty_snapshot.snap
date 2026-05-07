@@ -1,0 +1,6 @@
+---
+source: tests/s2_stamps_rows.rs
+assertion_line: 54
+expression: rows
+---
+[]

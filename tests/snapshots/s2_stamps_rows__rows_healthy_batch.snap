@@ -1,0 +1,18 @@
+---
+source: tests/s2_stamps_rows.rs
+assertion_line: 88
+expression: rows
+---
+[
+    StampRow {
+        label: "prod-mainnet",
+        batch_id_short: "bbbbbbbb…",
+        volume: "16.0 GiB",
+        worst_bucket_pct: 21,
+        worst_bucket_raw: "14/64",
+        ttl: "47d 12h",
+        immutable: true,
+        status: Healthy,
+        why: None,
+    },
+]
