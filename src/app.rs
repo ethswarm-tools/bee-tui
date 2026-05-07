@@ -64,6 +64,9 @@ pub struct App {
     /// the command-bar line until the user enters command mode again.
     /// Cleared when `command_buffer` transitions to `Some`.
     command_status: Option<CommandStatus>,
+    /// `true` while the `?` help overlay is up. Renders on top of
+    /// the active screen; `?` toggles, `Esc` dismisses.
+    help_visible: bool,
 }
 
 /// Outcome from the most recently executed `:command`. Drives the
@@ -146,6 +149,7 @@ impl App {
             health_rx,
             command_buffer: None,
             command_status: None,
+            help_visible: false,
         })
     }
 
@@ -192,7 +196,13 @@ impl App {
             return Ok(());
         };
         let action_tx = self.action_tx.clone();
-        let in_command_mode = self.command_buffer.is_some();
+        // Sample modal state both before and after handling: a key
+        // that *opens* a modal (`?` → help) only flips state inside
+        // handle, but the same key shouldn't propagate to screens;
+        // a key that *closes* one (Esc on help) flips it the other
+        // way but also shouldn't propagate. Either side of the
+        // transition counts as "modal" for swallowing purposes.
+        let modal_before = self.command_buffer.is_some() || self.help_visible;
         match event {
             Event::Quit => action_tx.send(Action::Quit)?,
             Event::Tick => action_tx.send(Action::Tick)?,
@@ -201,11 +211,11 @@ impl App {
             Event::Key(key) => self.handle_key_event(key)?,
             _ => {}
         }
-        // While the command bar is open we swallow key events at the
-        // App level — components shouldn't react to typed letters.
-        // Non-key events (Tick / Resize / Render) still propagate so
-        // the screens keep refreshing under the prompt.
-        let propagate = !(in_command_mode && matches!(event, Event::Key(_)));
+        let modal_after = self.command_buffer.is_some() || self.help_visible;
+        // Non-key events (Tick / Resize / Render) always propagate
+        // so screens keep refreshing under modals.
+        let propagate =
+            !((modal_before || modal_after) && matches!(event, Event::Key(_)));
         if propagate {
             for component in self.iter_components_mut() {
                 if let Some(action) = component.handle_events(Some(event.clone()))? {
@@ -231,6 +241,27 @@ impl App {
         // applies.
         if self.command_buffer.is_some() {
             self.handle_command_mode_key(key)?;
+            return Ok(());
+        }
+        // While the `?` help overlay is up, only Esc / ? / q close
+        // it. Don't propagate to components or process other keys
+        // — the operator is reading reference, not driving.
+        if self.help_visible {
+            match key.code {
+                crossterm::event::KeyCode::Esc
+                | crossterm::event::KeyCode::Char('?')
+                | crossterm::event::KeyCode::Char('q') => {
+                    self.help_visible = false;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+        // `?` opens the help overlay. We capture it at the app level
+        // so every screen gets the overlay for free without each one
+        // having to wire its own.
+        if matches!(key.code, crossterm::event::KeyCode::Char('?')) {
+            self.help_visible = true;
             return Ok(());
         }
         let action_tx = self.action_tx.clone();
@@ -711,6 +742,7 @@ impl App {
         let command_log = &mut self.command_log;
         let command_buffer = self.command_buffer.clone();
         let command_status = self.command_status.clone();
+        let help_visible = self.help_visible;
         let profile = self.api.name.clone();
         let endpoint = self.api.url.clone();
         let last_ping = self.health_rx.borrow().last_ping;
@@ -780,7 +812,7 @@ impl App {
                 tabs.push(Span::raw(" "));
             }
             tabs.push(Span::styled(
-                ":cmd · Tab to cycle",
+                ":cmd · Tab to cycle · ? help",
                 Style::default().fg(theme.dim),
             ));
             frame.render_widget(Paragraph::new(Line::from(tabs)), top_chunks[1]);
@@ -820,8 +852,144 @@ impl App {
             if let Err(err) = command_log.draw(frame, chunks[3]) {
                 let _ = tx.send(Action::Error(format!("Failed to draw log: {err:?}")));
             }
+
+            // Help overlay — drawn last so it floats above everything
+            // else. Centred with a fixed width that fits even narrow
+            // terminals (≥60 cols). Falls back to the full screen on
+            // anything narrower.
+            if help_visible {
+                draw_help_overlay(frame, frame.area(), active, &theme);
+            }
         })?;
         Ok(())
+    }
+}
+
+/// Render the `?` help overlay. Pulls a per-screen keymap from
+/// [`screen_keymap`] and pairs it with the global keys (Tab, `:`,
+/// `q`). Drawn as a centred floating box; everything outside is
+/// dimmed via a [`Clear`] underlay.
+fn draw_help_overlay(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    active_screen: usize,
+    theme: &theme::Theme,
+) {
+    use ratatui::layout::Rect;
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+    let screen_name = SCREEN_NAMES.get(active_screen).copied().unwrap_or("?");
+    let screen_rows = screen_keymap(active_screen);
+    let global_rows: &[(&str, &str)] = &[
+        ("Tab", "next screen"),
+        ("?", "toggle this help"),
+        (":", "open command bar"),
+        ("q  /  Ctrl+C", "quit"),
+    ];
+
+    // Layout: pick the smaller of (screen size, 70x22) so we always
+    // fit on small terminals.
+    let w = area.width.min(72);
+    let h = area.height.min(22);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect { x, y, width: w, height: h };
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!(" {screen_name} "),
+            Style::default()
+                .fg(theme.tab_active_fg)
+                .bg(theme.tab_active_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("   screen-specific keys"),
+    ]));
+    lines.push(Line::from(""));
+    if screen_rows.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no extra keys for this screen — use the command bar via :)",
+            Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC),
+        )));
+    } else {
+        for (key, desc) in screen_rows {
+            lines.push(format_help_row(key, desc, theme));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  global",
+        Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
+    )));
+    for (key, desc) in global_rows {
+        lines.push(format_help_row(key, desc, theme));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Esc / ? / q to dismiss",
+        Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC),
+    )));
+
+    // `Clear` blanks the underlying rendered region so the overlay
+    // doesn't ghost over screen content.
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.accent))
+                .title(" help "),
+        ),
+        rect,
+    );
+}
+
+fn format_help_row<'a>(
+    key: &'a str,
+    desc: &'a str,
+    theme: &theme::Theme,
+) -> ratatui::text::Line<'a> {
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            format!("{key:<14}"),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::raw(desc),
+    ])
+}
+
+/// Per-screen keymap rows, indexed by the same position as
+/// [`SCREEN_NAMES`]. Edit here when a screen grows new keys —
+/// no other place needs updating.
+fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)] {
+    match active_screen {
+        // 0: Health — read-only
+        1 => &[
+            ("↑↓ / j k", "move row selection"),
+            ("Enter", "drill batch — bucket histogram + worst-N"),
+            ("Esc", "close drill"),
+        ],
+        // 2: Swap — read-only
+        3 => &[
+            ("r", "run on-demand rchash benchmark"),
+        ],
+        4 => &[
+            ("↑↓ / j k", "move peer selection"),
+            ("Enter", "drill peer — balance / cheques / settlement / ping"),
+            ("Esc", "close drill"),
+        ],
+        // 5: Network — read-only
+        // 6: Warmup — read-only
+        // 7: API — read-only
+        // 8: Tags — read-only
+        _ => &[],
     }
 }
 
@@ -985,6 +1153,34 @@ mod tests {
     fn sanitize_for_filename_replaces_unsafe_chars() {
         assert_eq!(sanitize_for_filename("a/b\\c d"), "a-b-c-d");
         assert_eq!(sanitize_for_filename("name:colon"), "name-colon");
+    }
+
+    #[test]
+    fn screen_keymap_covers_drill_screens() {
+        // Stamps (1) and Peers (4) are the two screens with drill
+        // panes — both must list ↑↓ / Enter / Esc in the help.
+        for idx in [1usize, 4] {
+            let rows = screen_keymap(idx);
+            assert!(
+                rows.iter().any(|(k, _)| k.contains("Enter")),
+                "screen {idx} keymap must mention Enter (drill)"
+            );
+            assert!(
+                rows.iter().any(|(k, _)| k.contains("Esc")),
+                "screen {idx} keymap must mention Esc (close drill)"
+            );
+        }
+    }
+
+    #[test]
+    fn screen_keymap_lottery_advertises_rchash() {
+        let rows = screen_keymap(3);
+        assert!(rows.iter().any(|(k, _)| k.contains("r")));
+    }
+
+    #[test]
+    fn screen_keymap_unknown_index_is_empty_not_panic() {
+        assert!(screen_keymap(999).is_empty());
     }
 
     #[test]
