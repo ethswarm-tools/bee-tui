@@ -223,9 +223,8 @@ async fn collect_stamps(client: &ApiClient) -> StampsSnapshot {
     }
 }
 
-/// Poll `/chequebook/balance` + `/chequebook/cheque` + `/settlements`
-/// + `/timesettlements` every `interval` and broadcast a fresh
-/// [`SwapSnapshot`].
+/// Poll the four `/chequebook` + `/settlement` endpoints every
+/// `interval` and broadcast a fresh [`SwapSnapshot`].
 fn spawn_swap_poller(
     client: Arc<ApiClient>,
     tx: watch::Sender<SwapSnapshot>,

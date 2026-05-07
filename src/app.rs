@@ -11,7 +11,9 @@ use tracing::{debug, info};
 use crate::{
     action::Action,
     api::ApiClient,
-    components::{Component, command_log::CommandLog, health::Health, stamps::Stamps},
+    components::{
+        Component, command_log::CommandLog, health::Health, stamps::Stamps, swap::Swap,
+    },
     config::Config,
     log_capture,
     tui::{Event, Tui},
@@ -50,7 +52,7 @@ pub struct App {
 
 /// Names the top-level screens. Index matches position in
 /// [`App::screens`].
-const SCREEN_NAMES: &[&str] = &["Health", "Stamps"];
+const SCREEN_NAMES: &[&str] = &["Health", "Stamps", "Swap"];
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
@@ -78,6 +80,8 @@ impl App {
         let health = Health::new(api.clone(), watch.health());
         // S2 Stamps is the second screen — Tab to switch.
         let stamps = Stamps::new(watch.stamps());
+        // S3 SWAP / cheques — third tab.
+        let swap = Swap::new(watch.swap());
         // S10 Command-log subscribes to the bee::http capture set up
         // by logging::init. If logging hasn't initialised the capture
         // (e.g. running in a test harness), the pane just shows
@@ -88,8 +92,8 @@ impl App {
             tick_rate,
             frame_rate,
             // Order matters — the SCREEN_NAMES table assumes index 0
-            // is Health, index 1 is Stamps.
-            screens: vec![Box::new(health), Box::new(stamps)],
+            // is Health, index 1 is Stamps, index 2 is Swap.
+            screens: vec![Box::new(health), Box::new(stamps), Box::new(swap)],
             current_screen: 0,
             command_log,
             should_quit: false,
