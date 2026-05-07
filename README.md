@@ -196,17 +196,16 @@ Runtime theme switching (`:theme <name>`) lands in v0.6.
 
 ## Status
 
-**v0.2.0** on crates.io (May 2026). All 9 screens + S10 command log + command
-bar + multi-node profiles + diagnostic bundle + theme foundation + drill panes
-on S2/S6 + scrollbars + `?` help overlay + ASCII fallback.
+**v1.0.0** on crates.io (May 2026). Full nine-screen cockpit with drill panes,
+command bar, multi-node, theme system, ASCII fallback, scrollbars, `?` help
+overlay, and prebuilt installers for all five major targets.
 
 | Version | Scope | State |
 |---|---|---|
 | v0.1.0 | S1 Health, S2 Stamps, S10 Command log; single-node; CI; insta tests | ✅ shipped |
 | v0.2.0 | S3 SWAP, S4 Lottery, S5 Warmup, S6 Peers, S7 NAT, S8 RPC, S9 Tags, command bar, multi-node, theme system | ✅ shipped |
-| (post-0.2) | `:pins-check` / `:loggers` / `:set-logger`, S2 + S6 drill panes, scrollbars, `?` help, `--ascii` / `--no-color` | ✅ on `main` |
-| v0.9 | mdBook docs, VHS demos, beta program, R3 long-run live observation | 🔜 in progress |
-| v1.0 | Stable, awesome-swarm PR, blog post, prebuilt installers go live | release-only |
+| v0.9.0 | `:pins-check` / `:loggers` / `:set-logger`, S2 + S6 drill panes, scrollbars, `?` help, `--ascii` / `--no-color`, cargo-dist | ✅ shipped |
+| v1.0.0 | Cold-start spinner, footer `?` chips, copy-affordance docs, semver-stable surface | ✅ shipped |
 
 Backed by [bee-rs](https://github.com/ethswarm-tools/bee-rs) v1.6 (full
 coverage of the Bee 8.0.0 OpenAPI surface). Full screen specs in

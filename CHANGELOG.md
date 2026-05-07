@@ -9,6 +9,49 @@ format follows [Keep a Changelog]; the project adheres to
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-07
+
+First stable release. The full nine-screen operator cockpit
+plus drill panes, command bar, multi-node, theme system,
+ASCII fallback, scrollbars, `?` help overlay, and prebuilt
+installers — committed surface, semver discipline from here on.
+
+### Added
+
+- **Cold-start spinner.** Every `loading…` line now leads with
+  a tick-driven spinner glyph (10-frame braille for Unicode,
+  4-frame `|/-\` for ASCII) so the first few seconds feel
+  alive instead of stuck. Single process-wide AtomicUsize
+  advanced once per `Action::Tick` from
+  `App::handle_actions`; honours `--ascii`.
+- **`?` footer chip on every screen.** The `?` overlay was
+  reachable from the top tab strip's hint already; this adds
+  matching ` ? help ` chip to every screen's bottom-bar
+  keymap so operators reading from there discover it too.
+- **README copy-affordance note.** Documents that mouse mode
+  is off by default so terminal-native click-drag selection
+  works for copying peer overlays / batch IDs / cheque hashes
+  out of the cockpit.
+
+### Notes
+
+- **Backwards compatibility commitment.** Public crate-level
+  surface (`bee_tui::components::*::view_for` /
+  `compute_*_view` pure functions, `bee_tui::watch::*`
+  snapshot shapes, CLI flags, `[ui]` config schema) is now
+  semver-stable. Breaking changes go to v2. Internal
+  refactors (component fields, render helpers) are not part
+  of the contract.
+- **bee-rs dependency**: 1.6 (full Bee 8.0.0 OpenAPI
+  coverage). bee-rs has its own semver track.
+- **Test count**: 107 lib + ~75 insta integration tests.
+  cargo clippy --all-targets --all-features clean. Binary
+  2.1 MiB stripped on linux x86_64.
+- **Distribution**: cargo-dist autobuilds binaries for five
+  targets (mac arm64/x86_64, linux arm64/x86_64, windows
+  x86_64) on every tag push, plus `curl|sh` / `irm|iex`
+  one-line installers.
+
 ## [0.9.0] - 2026-05-07
 
 The 1.0 candidate. Phases A/B/C of the 1.0 push complete; this
