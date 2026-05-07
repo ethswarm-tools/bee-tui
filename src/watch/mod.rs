@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bee::debug::{ChainState, RedistributionState, Status, Wallet};
+use bee::postage::PostageBatch;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -56,11 +57,28 @@ impl HealthSnapshot {
     }
 }
 
+/// Snapshot fed to the S2 Stamps screen. `/stamps` polled at the
+/// slower 10 s cadence per `docs/PLAN.md` § 9 — postage state is
+/// updated on chain, not at request rate.
+#[derive(Clone, Debug, Default)]
+pub struct StampsSnapshot {
+    pub batches: Vec<PostageBatch>,
+    pub last_error: Option<String>,
+    pub last_update: Option<Instant>,
+}
+
+impl StampsSnapshot {
+    pub fn is_loaded(&self) -> bool {
+        self.last_update.is_some() && self.last_error.is_none()
+    }
+}
+
 /// Watch-channel hub. Owns one [`watch::Sender`] per resource group;
-/// hands out clones of the receiver via `health()` etc.
+/// hands out clones of the receiver via `health()` / `stamps()` etc.
 #[derive(Clone, Debug)]
 pub struct BeeWatch {
     health_rx: watch::Receiver<HealthSnapshot>,
+    stamps_rx: watch::Receiver<StampsSnapshot>,
     cancel: CancellationToken,
 }
 
@@ -71,14 +89,30 @@ impl BeeWatch {
     pub fn start(client: Arc<ApiClient>, parent_cancel: &CancellationToken) -> Self {
         let cancel = parent_cancel.child_token();
         let (health_tx, health_rx) = watch::channel(HealthSnapshot::default());
-        spawn_health_poller(client, health_tx, cancel.clone(), Duration::from_secs(2));
-        Self { health_rx, cancel }
+        spawn_health_poller(
+            client.clone(),
+            health_tx,
+            cancel.clone(),
+            Duration::from_secs(2),
+        );
+        let (stamps_tx, stamps_rx) = watch::channel(StampsSnapshot::default());
+        spawn_stamps_poller(client, stamps_tx, cancel.clone(), Duration::from_secs(10));
+        Self {
+            health_rx,
+            stamps_rx,
+            cancel,
+        }
     }
 
     /// Subscribe to the health snapshot stream. Cheap; cloning the
     /// receiver does not start a new poller.
     pub fn health(&self) -> watch::Receiver<HealthSnapshot> {
         self.health_rx.clone()
+    }
+
+    /// Subscribe to the stamps snapshot stream.
+    pub fn stamps(&self) -> watch::Receiver<StampsSnapshot> {
+        self.stamps_rx.clone()
     }
 
     /// Cancel every polling task this hub owns. Idempotent.
@@ -110,6 +144,46 @@ fn spawn_health_poller(
             }
         }
     });
+}
+
+/// Poll `/stamps` every `interval` and broadcast a fresh
+/// [`StampsSnapshot`].
+fn spawn_stamps_poller(
+    client: Arc<ApiClient>,
+    tx: watch::Sender<StampsSnapshot>,
+    cancel: CancellationToken,
+    interval: Duration,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = tick.tick() => {
+                    let snap = collect_stamps(&client).await;
+                    if tx.send(snap).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn collect_stamps(client: &ApiClient) -> StampsSnapshot {
+    match client.bee().postage().get_postage_batches().await {
+        Ok(batches) => StampsSnapshot {
+            batches,
+            last_error: None,
+            last_update: Some(Instant::now()),
+        },
+        Err(e) => StampsSnapshot {
+            batches: Vec::new(),
+            last_error: Some(format!("stamps: {e}")),
+            last_update: Some(Instant::now()),
+        },
+    }
 }
 
 async fn collect_health(client: &ApiClient) -> HealthSnapshot {
