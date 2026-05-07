@@ -1,11 +1,12 @@
 ---
 source: tests/s7_network_view.rs
-assertion_line: 84
 expression: view
 ---
 NetworkView {
     overlay_short: "—",
     ethereum_short: "—",
+    overlay_full: "—",
+    ethereum_full: "—",
     underlays: [],
     inbound: 0,
     outbound: 0,

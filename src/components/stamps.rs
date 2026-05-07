@@ -503,6 +503,7 @@ impl Component for Stamps {
         .split(area);
 
         // Header
+        let t = theme::active();
         let count = self.snapshot.batches.len();
         let mut header_l1 = vec![
             Span::styled("STAMPS", Style::default().add_modifier(Modifier::BOLD)),
@@ -512,13 +513,15 @@ impl Component for Stamps {
         | DrillState::Loading { batch_id }
         | DrillState::Failed { batch_id, .. } = &self.drill
         {
+            // Render the full hex so operators can click-drag to copy
+            // for block-explorer / Discord / support-thread use. The
+            // batch ID is 64 chars — fits cleanly on the second line.
             let hex = batch_id.to_hex();
-            let short = if hex.len() > 8 { &hex[..8] } else { &hex };
-            header_l1.push(Span::raw(format!("   · drill {short}…")));
+            header_l1.push(Span::raw("   · drill "));
+            header_l1.push(Span::styled(hex, Style::default().fg(t.info)));
         }
         let header_l1 = Line::from(header_l1);
         let mut header_l2 = Vec::new();
-        let t = theme::active();
         if let Some(err) = &self.snapshot.last_error {
             let (color, msg) = theme::classify_header_error(err);
             header_l2.push(Span::styled(msg, Style::default().fg(color)));

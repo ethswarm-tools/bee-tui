@@ -1,11 +1,12 @@
 ---
 source: tests/s7_network_view.rs
-assertion_line: 111
 expression: view
 ---
 NetworkView {
     overlay_short: "aaaaaa…aaaa",
     ethereum_short: "bbbbbb…bbbb",
+    overlay_full: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ethereum_full: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     underlays: [
         UnderlayRow {
             multiaddr: "/ip4/77.123.45.6/tcp/1634/p2p/16Uiu...",

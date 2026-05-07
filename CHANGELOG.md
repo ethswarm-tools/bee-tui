@@ -9,6 +9,17 @@ format follows [Keep a Changelog]; the project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **S7 Network shows full overlay + ethereum addresses.** Previously
+  truncated to first-4-last-4 hex; operators couldn't click-drag to
+  copy them for block-explorer / support-thread use. Now rendered
+  in full (overlay = 64 chars, ethereum = 0x + 40) on their own
+  identity lines. Mouse-mode is still off so terminal-native
+  selection just works.
+- **S2 Stamps drill header shows the full batch ID.** Same
+  rationale; the drill-pane is now the place to copy a batch ID.
+
 ### Added
 
 - **bee-tui-only User-Agent + Bee HTTP tab filtering.** Every Bee

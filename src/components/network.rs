@@ -149,8 +149,18 @@ pub struct UnderlayRow {
 /// Aggregated view fed to renderer and snapshot tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkView {
+    /// Short form (first 4 + last 4 hex) — used for compact
+    /// references in tooltips / counters. The renderer favours
+    /// the full form below so operators can copy the string with
+    /// the terminal's native click-drag.
     pub overlay_short: String,
     pub ethereum_short: String,
+    /// Full overlay address — 64 hex chars. Rendered verbatim so
+    /// operators can click-drag to copy without us synthesising a
+    /// command-bar copy verb.
+    pub overlay_full: String,
+    /// Full ethereum address — `0x` + 40 hex chars.
+    pub ethereum_full: String,
     pub underlays: Vec<UnderlayRow>,
     pub inbound: u64,
     pub outbound: u64,
@@ -217,6 +227,12 @@ impl Network {
                 .unwrap_or_else(|| "—".into()),
             ethereum_short: addresses
                 .map(|a| short_hex(&a.ethereum))
+                .unwrap_or_else(|| "—".into()),
+            overlay_full: addresses
+                .map(|a| a.overlay.clone())
+                .unwrap_or_else(|| "—".into()),
+            ethereum_full: addresses
+                .map(|a| a.ethereum.clone())
                 .unwrap_or_else(|| "—".into()),
             underlays,
             inbound,
@@ -392,21 +408,23 @@ impl Component for Network {
 
         let view = Self::view_for(&self.network, &self.topology);
 
-        // Identity: overlay + ethereum
+        // Identity: overlay + ethereum, full strings so operators
+        // can click-drag to copy. Each fits comfortably on one line
+        // (overlay = 64 hex chars, ethereum = 0x + 40).
         let identity = vec![
             Line::from(vec![
                 Span::styled(
                     "  overlay   ",
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(view.overlay_short.clone(), Style::default().fg(t.info)),
+                Span::styled(view.overlay_full.clone(), Style::default().fg(t.info)),
             ]),
             Line::from(vec![
                 Span::styled(
                     "  ethereum  ",
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(view.ethereum_short.clone(), Style::default().fg(t.info)),
+                Span::styled(view.ethereum_full.clone(), Style::default().fg(t.info)),
             ]),
         ];
         frame.render_widget(

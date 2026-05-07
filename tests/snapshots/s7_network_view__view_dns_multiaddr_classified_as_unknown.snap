@@ -1,11 +1,12 @@
 ---
 source: tests/s7_network_view.rs
-assertion_line: 156
 expression: view
 ---
 NetworkView {
     overlay_short: "eeeeee…eeee",
     ethereum_short: "ffffff…ffff",
+    overlay_full: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    ethereum_full: "0xffffffffffffffffffffffffffffffffffffffff",
     underlays: [
         UnderlayRow {
             multiaddr: "/dns4/bee.example.com/tcp/1634/p2p/16Uiu...",
