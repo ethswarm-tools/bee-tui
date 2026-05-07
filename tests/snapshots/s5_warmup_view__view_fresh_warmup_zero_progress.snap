@@ -1,0 +1,42 @@
+---
+source: tests/s5_warmup_view.rs
+assertion_line: 104
+expression: view
+---
+WarmupView {
+    is_warming_up: true,
+    elapsed: Some(
+        15s,
+    ),
+    steps: [
+        WarmupStep {
+            label: "Postage snapshot loaded",
+            state: Pending,
+            detail: "no batches yet — node may not have any postage attached",
+        },
+        WarmupStep {
+            label: "Peer bootstrap",
+            state: Pending,
+            detail: "0 connected (target ≥ 50)",
+        },
+        WarmupStep {
+            label: "Kademlia depth stable",
+            state: InProgress(
+                50,
+            ),
+            detail: "depth 0 (still settling)",
+        },
+        WarmupStep {
+            label: "Reserve fill",
+            state: Pending,
+            detail: "0 / 65536 in-radius chunks",
+        },
+        WarmupStep {
+            label: "Stabilization",
+            state: InProgress(
+                50,
+            ),
+            detail: "Bee still reports is_warming_up=true",
+        },
+    ],
+}
