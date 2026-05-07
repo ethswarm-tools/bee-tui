@@ -18,6 +18,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bee::api::Tag;
 use bee::debug::{
     Addresses, ChainState, ChequebookBalance, LastCheque, RedistributionState, Settlements, Status,
     Topology, TransactionInfo, Wallet,
@@ -92,6 +93,25 @@ pub struct SwapSnapshot {
 }
 
 impl SwapSnapshot {
+    pub fn is_loaded(&self) -> bool {
+        self.last_update.is_some() && self.last_error.is_none()
+    }
+}
+
+/// Snapshot fed to the S9 Tags / uploads screen. `/tags` is polled
+/// at 5 s — slow enough to be cheap on a quiet node, quick enough
+/// that an in-progress upload's split / sent / synced columns visibly
+/// tick. PLAN proposes 1 s when uploads are active; bumping the
+/// cadence dynamically can land in a follow-up once we observe real
+/// usage.
+#[derive(Clone, Debug, Default)]
+pub struct TagsSnapshot {
+    pub tags: Vec<Tag>,
+    pub last_error: Option<String>,
+    pub last_update: Option<Instant>,
+}
+
+impl TagsSnapshot {
     pub fn is_loaded(&self) -> bool {
         self.last_update.is_some() && self.last_error.is_none()
     }
@@ -180,6 +200,7 @@ pub struct BeeWatch {
     topology_rx: watch::Receiver<TopologySnapshot>,
     network_rx: watch::Receiver<NetworkSnapshot>,
     transactions_rx: watch::Receiver<TransactionsSnapshot>,
+    tags_rx: watch::Receiver<TagsSnapshot>,
     cancel: CancellationToken,
 }
 
@@ -234,11 +255,13 @@ impl BeeWatch {
         let (transactions_tx, transactions_rx) =
             watch::channel(TransactionsSnapshot::default());
         spawn_transactions_poller(
-            client,
+            client.clone(),
             transactions_tx,
             cancel.clone(),
             Duration::from_secs(30),
         );
+        let (tags_tx, tags_rx) = watch::channel(TagsSnapshot::default());
+        spawn_tags_poller(client, tags_tx, cancel.clone(), Duration::from_secs(5));
         Self {
             health_rx,
             stamps_rx,
@@ -247,6 +270,7 @@ impl BeeWatch {
             topology_rx,
             network_rx,
             transactions_rx,
+            tags_rx,
             cancel,
         }
     }
@@ -286,6 +310,11 @@ impl BeeWatch {
     /// (`/transactions`).
     pub fn transactions(&self) -> watch::Receiver<TransactionsSnapshot> {
         self.transactions_rx.clone()
+    }
+
+    /// Subscribe to the tags snapshot stream (`/tags`).
+    pub fn tags(&self) -> watch::Receiver<TagsSnapshot> {
+        self.tags_rx.clone()
     }
 
     /// Cancel every polling task this hub owns. Idempotent.
@@ -573,6 +602,46 @@ async fn collect_transactions(client: &ApiClient) -> TransactionsSnapshot {
         Err(e) => TransactionsSnapshot {
             pending: Vec::new(),
             last_error: Some(format!("transactions: {e}")),
+            last_update: Some(Instant::now()),
+        },
+    }
+}
+
+/// Poll `/tags` every `interval` and broadcast a fresh
+/// [`TagsSnapshot`].
+fn spawn_tags_poller(
+    client: Arc<ApiClient>,
+    tx: watch::Sender<TagsSnapshot>,
+    cancel: CancellationToken,
+    interval: Duration,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = tick.tick() => {
+                    let snap = collect_tags(&client).await;
+                    if tx.send(snap).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn collect_tags(client: &ApiClient) -> TagsSnapshot {
+    match client.bee().api().list_tags(None, None).await {
+        Ok(tags) => TagsSnapshot {
+            tags,
+            last_error: None,
+            last_update: Some(Instant::now()),
+        },
+        Err(e) => TagsSnapshot {
+            tags: Vec::new(),
+            last_error: Some(format!("tags: {e}")),
             last_update: Some(Instant::now()),
         },
     }
