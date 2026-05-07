@@ -1,0 +1,30 @@
+---
+source: tests/s9_tags_view.rs
+assertion_line: 66
+expression: view
+---
+TagsView {
+    rows: [
+        TagRow {
+            uid: 1,
+            name: "fresh-buy",
+            total: 0,
+            split: 0,
+            seen: 0,
+            stored: 0,
+            sent: 0,
+            synced: 0,
+            address_short: "aaaaaa…aaaa",
+            status: Pending,
+            completion_pct: 0,
+            started_at: "2024-05-07T12:00:00Z",
+        },
+    ],
+    totals: TagsTotals {
+        tags: 1,
+        split: 0,
+        sent: 0,
+        synced: 0,
+        active: 0,
+    },
+}

@@ -1,0 +1,30 @@
+---
+source: tests/s9_tags_view.rs
+assertion_line: 125
+expression: view
+---
+TagsView {
+    rows: [
+        TagRow {
+            uid: 5,
+            name: "site.html",
+            total: 50,
+            split: 50,
+            seen: 50,
+            stored: 50,
+            sent: 50,
+            synced: 50,
+            address_short: "eeeeee…eeee",
+            status: Synced,
+            completion_pct: 100,
+            started_at: "2024-05-07T12:00:00Z",
+        },
+    ],
+    totals: TagsTotals {
+        tags: 1,
+        split: 50,
+        sent: 50,
+        synced: 50,
+        active: 0,
+    },
+}

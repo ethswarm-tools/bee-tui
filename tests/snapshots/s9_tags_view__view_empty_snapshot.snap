@@ -1,0 +1,15 @@
+---
+source: tests/s9_tags_view.rs
+assertion_line: 51
+expression: view
+---
+TagsView {
+    rows: [],
+    totals: TagsTotals {
+        tags: 0,
+        split: 0,
+        sent: 0,
+        synced: 0,
+        active: 0,
+    },
+}

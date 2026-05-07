@@ -1,0 +1,58 @@
+---
+source: tests/s9_tags_view.rs
+assertion_line: 148
+expression: view
+---
+TagsView {
+    rows: [
+        TagRow {
+            uid: 5,
+            name: "newest",
+            total: 100,
+            split: 50,
+            seen: 50,
+            stored: 50,
+            sent: 0,
+            synced: 0,
+            address_short: "bbbbbb…bbbb",
+            status: Splitting,
+            completion_pct: 0,
+            started_at: "2024-05-07T12:00:00Z",
+        },
+        TagRow {
+            uid: 3,
+            name: "mid",
+            total: 100,
+            split: 100,
+            seen: 100,
+            stored: 100,
+            sent: 100,
+            synced: 50,
+            address_short: "cccccc…cccc",
+            status: Syncing,
+            completion_pct: 50,
+            started_at: "2024-05-07T12:00:00Z",
+        },
+        TagRow {
+            uid: 2,
+            name: "older",
+            total: 100,
+            split: 100,
+            seen: 100,
+            stored: 100,
+            sent: 100,
+            synced: 100,
+            address_short: "aaaaaa…aaaa",
+            status: Synced,
+            completion_pct: 100,
+            started_at: "2024-05-07T12:00:00Z",
+        },
+    ],
+    totals: TagsTotals {
+        tags: 3,
+        split: 250,
+        sent: 200,
+        synced: 150,
+        active: 2,
+    },
+}
