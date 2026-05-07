@@ -84,6 +84,11 @@ impl StampsSnapshot {
 #[derive(Clone, Debug, Default)]
 pub struct SwapSnapshot {
     pub chequebook: Option<ChequebookBalance>,
+    /// On-chain chequebook contract address from
+    /// `/chequebook/address`. Pasted onto the S3 header so operators
+    /// can jump straight to a block explorer without unpacking the
+    /// full `/wallet` response.
+    pub chequebook_address: Option<String>,
     pub settlements: Option<Settlements>,
     pub time_settlements: Option<Settlements>,
     /// Last received cheque per peer (from `/chequebook/cheque`).
@@ -416,6 +421,7 @@ fn spawn_swap_poller(
 async fn collect_swap(client: &ApiClient) -> SwapSnapshot {
     let bee = client.bee();
     let chequebook = bee.debug().chequebook_balance().await;
+    let chequebook_address = bee.debug().chequebook_address().await;
     let settlements = bee.debug().settlements().await;
     let time_settlements = bee.debug().time_settlements().await;
     let last_received = bee.debug().last_cheques().await;
@@ -428,6 +434,12 @@ async fn collect_swap(client: &ApiClient) -> SwapSnapshot {
     match chequebook {
         Ok(c) => snap.chequebook = Some(c),
         Err(e) => errors.push(format!("chequebook: {e}")),
+    }
+    // Address-fetch failure is non-fatal — surfacing the contract
+    // address is a "nice to have" header decoration; the rest of the
+    // SWAP screen keeps working without it.
+    if let Ok(a) = chequebook_address {
+        snap.chequebook_address = Some(a);
     }
     match settlements {
         Ok(s) => snap.settlements = Some(s),

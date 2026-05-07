@@ -1,6 +1,5 @@
 ---
 source: tests/s3_swap_view.rs
-assertion_line: 90
 expression: view
 ---
 SwapView {
@@ -11,6 +10,7 @@ SwapView {
         available_pct: 80,
         why: None,
     },
+    chequebook_address: None,
     cheques: [],
     settlements: [],
     time_total_received: None,

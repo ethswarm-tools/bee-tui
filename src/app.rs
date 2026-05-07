@@ -313,6 +313,15 @@ impl App {
                     Err(e) => CommandStatus::Err(format!("diagnose failed: {e}")),
                 });
             }
+            "pins-check" | "pins" => {
+                self.command_status = Some(match self.start_pins_check() {
+                    Ok(path) => CommandStatus::Info(format!(
+                        "pins integrity check running → {} (tail to watch progress)",
+                        path.display()
+                    )),
+                    Err(e) => CommandStatus::Err(format!("pins-check failed to start: {e}")),
+                });
+            }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
@@ -351,7 +360,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :diagnose, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :diagnose, :pins-check, :context, :quit)"
                 )));
             }
         }
@@ -394,6 +403,68 @@ impl App {
     /// support thread (Discord, GitHub issue) without leaking
     /// auth tokens — URLs are reduced to their path component, since
     /// Bearer tokens live in headers, not URLs.
+    /// Kick off `GET /pins/check` in a background task. Returns the
+    /// destination file path immediately so the operator can `tail -f`
+    /// it while bee-rs streams the NDJSON response. Each pin is
+    /// appended as a single line: `<ref>  total=N  missing=N  invalid=N
+    /// (healthy|UNHEALTHY)`. A `# done. <n> pins checked.` trailer
+    /// signals completion.
+    ///
+    /// The task captures `Arc<ApiClient>` so a `:context` switch
+    /// mid-check still completes against the original profile — the
+    /// destination file's name pins the profile so two parallel
+    /// invocations against different profiles don't collide.
+    fn start_pins_check(&self) -> std::io::Result<PathBuf> {
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "bee-tui-pins-check-{}-{secs}.txt",
+            sanitize_for_filename(&self.api.name),
+        ));
+        // Pre-create with a header so the operator's `tail -f` finds
+        // something immediately, even before the first pin lands.
+        std::fs::write(
+            &path,
+            format!(
+                "# bee-tui :pins-check\n# profile  {}\n# endpoint {}\n# started  {}\n",
+                self.api.name,
+                self.api.url,
+                format_utc_now(),
+            ),
+        )?;
+
+        let api = self.api.clone();
+        let dest = path.clone();
+        tokio::spawn(async move {
+            let bee = api.bee();
+            match bee.api().check_pins(None).await {
+                Ok(entries) => {
+                    let mut body = String::new();
+                    for e in &entries {
+                        body.push_str(&format!(
+                            "{}  total={}  missing={}  invalid={}  {}\n",
+                            e.reference.to_hex(),
+                            e.total,
+                            e.missing,
+                            e.invalid,
+                            if e.is_healthy() { "healthy" } else { "UNHEALTHY" },
+                        ));
+                    }
+                    body.push_str(&format!("# done. {} pins checked.\n", entries.len()));
+                    if let Err(e) = append(&dest, &body) {
+                        let _ = append(&dest, &format!("# write error: {e}\n"));
+                    }
+                }
+                Err(e) => {
+                    let _ = append(&dest, &format!("# error: {e}\n"));
+                }
+            }
+        });
+        Ok(path)
+    }
+
     fn export_diagnostic_bundle(&self) -> std::io::Result<PathBuf> {
         let bundle = self.render_diagnostic_bundle();
         let secs = SystemTime::now()
@@ -674,6 +745,27 @@ fn path_only(url: &str) -> String {
 /// Format the current wall-clock UTC time as `HH:MM:SS`. We compute
 /// from `SystemTime::now()` directly so the binary stays free of a
 /// chrono / time dep just for this one display string.
+/// Append-write to `path`. Used by the `:pins-check` background task
+/// to stream NDJSON-style results into a file the operator can
+/// `tail -f`.
+fn append(path: &PathBuf, s: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().append(true).open(path)?;
+    f.write_all(s.as_bytes())
+}
+
+/// Drop characters that are unsafe in a filename. Profile names come
+/// from the user's `config.toml`, so we accept what's in there but
+/// keep the path well-behaved on every shell.
+fn sanitize_for_filename(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => c,
+            _ => '-',
+        })
+        .collect()
+}
+
 fn format_utc_now() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -718,5 +810,17 @@ mod tests {
     #[test]
     fn path_only_passes_relative_through() {
         assert_eq!(path_only("/already/relative"), "/already/relative");
+    }
+
+    #[test]
+    fn sanitize_for_filename_keeps_safe_chars() {
+        assert_eq!(sanitize_for_filename("prod-1"), "prod-1");
+        assert_eq!(sanitize_for_filename("lab_node"), "lab_node");
+    }
+
+    #[test]
+    fn sanitize_for_filename_replaces_unsafe_chars() {
+        assert_eq!(sanitize_for_filename("a/b\\c d"), "a-b-c-d");
+        assert_eq!(sanitize_for_filename("name:colon"), "name-colon");
     }
 }

@@ -1,6 +1,5 @@
 ---
 source: tests/s3_swap_view.rs
-assertion_line: 194
 expression: view
 ---
 SwapView {
@@ -11,6 +10,7 @@ SwapView {
         available_pct: 70,
         why: None,
     },
+    chequebook_address: None,
     cheques: [
         CheckRow {
             peer_short: "aaaaaa…aaaa",

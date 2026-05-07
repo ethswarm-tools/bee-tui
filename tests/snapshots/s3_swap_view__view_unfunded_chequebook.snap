@@ -1,6 +1,5 @@
 ---
 source: tests/s3_swap_view.rs
-assertion_line: 80
 expression: view
 ---
 SwapView {
@@ -13,6 +12,7 @@ SwapView {
             "chequebook holds 0 BZZ — fund it to send cheques.",
         ),
     },
+    chequebook_address: None,
     cheques: [],
     settlements: [],
     time_total_received: None,

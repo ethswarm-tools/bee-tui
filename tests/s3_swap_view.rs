@@ -56,6 +56,7 @@ fn snapshot_with(
 ) -> SwapSnapshot {
     SwapSnapshot {
         chequebook,
+        chequebook_address: None,
         settlements,
         time_settlements,
         last_received,

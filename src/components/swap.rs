@@ -107,6 +107,11 @@ pub struct SettlementRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SwapView {
     pub card: ChequebookCard,
+    /// On-chain chequebook contract address from
+    /// `/chequebook/address`. `None` when the endpoint hasn't
+    /// returned yet (cold start) — the header silently omits the
+    /// row in that case rather than rendering a placeholder.
+    pub chequebook_address: Option<String>,
     pub cheques: Vec<CheckRow>,
     pub settlements: Vec<SettlementRow>,
     pub time_total_received: Option<String>,
@@ -146,6 +151,7 @@ impl Swap {
             .map(format_plur);
         SwapView {
             card,
+            chequebook_address: snap.chequebook_address.clone(),
             cheques,
             settlements,
             time_total_received,
@@ -337,13 +343,18 @@ impl Component for Swap {
         ])
         .split(area);
 
+        let t = theme::active();
         // Header
-        let header_l1 = Line::from(vec![Span::styled(
+        let mut header_l1 = vec![Span::styled(
             "SWAP / CHEQUES",
             Style::default().add_modifier(Modifier::BOLD),
-        )]);
+        )];
+        if let Some(addr) = &self.snapshot.chequebook_address {
+            header_l1.push(Span::raw("   contract "));
+            header_l1.push(Span::styled(addr.clone(), Style::default().fg(t.dim)));
+        }
+        let header_l1 = Line::from(header_l1);
         let mut header_l2 = Vec::new();
-        let t = theme::active();
         if let Some(err) = &self.snapshot.last_error {
             let (color, msg) = theme::classify_header_error(err);
             header_l2.push(Span::styled(msg, Style::default().fg(color)));

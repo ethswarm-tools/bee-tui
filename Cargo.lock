@@ -206,9 +206,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bee-rs"
-version = "1.4.1"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51e829ce49def6195890a498f8b79ce8aad3b7acf11766c10e6a03a043ae4e26"
+checksum = "b592ea22a7d9850a6adaefb430ab6acafd9f0fd57c749b60a7376b72aaf69225"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -4834,7 +4834,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

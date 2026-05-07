@@ -1,6 +1,5 @@
 ---
 source: tests/s3_swap_view.rs
-assertion_line: 101
 expression: view
 ---
 SwapView {
@@ -13,6 +12,7 @@ SwapView {
             "only 10% available — most BZZ is tied up in unsettled debt.",
         ),
     },
+    chequebook_address: None,
     cheques: [],
     settlements: [],
     time_total_received: None,

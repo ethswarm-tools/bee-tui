@@ -1,6 +1,5 @@
 ---
 source: tests/s3_swap_view.rs
-assertion_line: 70
 expression: view
 ---
 SwapView {
@@ -13,6 +12,7 @@ SwapView {
             "/chequebook/balance not available yet",
         ),
     },
+    chequebook_address: None,
     cheques: [],
     settlements: [],
     time_total_received: None,
