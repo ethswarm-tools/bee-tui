@@ -22,6 +22,7 @@ use bee::debug::{
     ChainState, ChequebookBalance, LastCheque, RedistributionState, Settlements, Status, Wallet,
 };
 use bee::postage::PostageBatch;
+use num_bigint::BigInt;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -95,14 +96,34 @@ impl SwapSnapshot {
     }
 }
 
+/// Snapshot fed to the S4 Lottery screen. `/stake` is operator-driven
+/// (deposit / withdraw transactions only) so the cadence is 30 s per
+/// `docs/PLAN.md` § 9 — same as SWAP. The redistribution-state half of
+/// the screen is read off the existing 2 s [`HealthSnapshot`] feed; the
+/// Lottery component subscribes to both.
+#[derive(Clone, Debug, Default)]
+pub struct LotterySnapshot {
+    /// `/stake` — currently staked BZZ (PLUR).
+    pub staked: Option<BigInt>,
+    pub last_error: Option<String>,
+    pub last_update: Option<Instant>,
+}
+
+impl LotterySnapshot {
+    pub fn is_loaded(&self) -> bool {
+        self.last_update.is_some() && self.last_error.is_none()
+    }
+}
+
 /// Watch-channel hub. Owns one [`watch::Sender`] per resource group;
 /// hands out clones of the receiver via `health()` / `stamps()` /
-/// `swap()` etc.
+/// `swap()` / `lottery()` etc.
 #[derive(Clone, Debug)]
 pub struct BeeWatch {
     health_rx: watch::Receiver<HealthSnapshot>,
     stamps_rx: watch::Receiver<StampsSnapshot>,
     swap_rx: watch::Receiver<SwapSnapshot>,
+    lottery_rx: watch::Receiver<LotterySnapshot>,
     cancel: CancellationToken,
 }
 
@@ -127,11 +148,19 @@ impl BeeWatch {
             Duration::from_secs(10),
         );
         let (swap_tx, swap_rx) = watch::channel(SwapSnapshot::default());
-        spawn_swap_poller(client, swap_tx, cancel.clone(), Duration::from_secs(30));
+        spawn_swap_poller(
+            client.clone(),
+            swap_tx,
+            cancel.clone(),
+            Duration::from_secs(30),
+        );
+        let (lottery_tx, lottery_rx) = watch::channel(LotterySnapshot::default());
+        spawn_lottery_poller(client, lottery_tx, cancel.clone(), Duration::from_secs(30));
         Self {
             health_rx,
             stamps_rx,
             swap_rx,
+            lottery_rx,
             cancel,
         }
     }
@@ -150,6 +179,11 @@ impl BeeWatch {
     /// Subscribe to the swap snapshot stream.
     pub fn swap(&self) -> watch::Receiver<SwapSnapshot> {
         self.swap_rx.clone()
+    }
+
+    /// Subscribe to the lottery snapshot stream (`/stake`).
+    pub fn lottery(&self) -> watch::Receiver<LotterySnapshot> {
+        self.lottery_rx.clone()
     }
 
     /// Cancel every polling task this hub owns. Idempotent.
@@ -280,6 +314,46 @@ async fn collect_swap(client: &ApiClient) -> SwapSnapshot {
         snap.last_error = Some(errors.join("; "));
     }
     snap
+}
+
+/// Poll `/stake` every `interval` and broadcast a fresh
+/// [`LotterySnapshot`].
+fn spawn_lottery_poller(
+    client: Arc<ApiClient>,
+    tx: watch::Sender<LotterySnapshot>,
+    cancel: CancellationToken,
+    interval: Duration,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = tick.tick() => {
+                    let snap = collect_lottery(&client).await;
+                    if tx.send(snap).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn collect_lottery(client: &ApiClient) -> LotterySnapshot {
+    match client.bee().debug().stake().await {
+        Ok(staked) => LotterySnapshot {
+            staked: Some(staked),
+            last_error: None,
+            last_update: Some(Instant::now()),
+        },
+        Err(e) => LotterySnapshot {
+            staked: None,
+            last_error: Some(format!("stake: {e}")),
+            last_update: Some(Instant::now()),
+        },
+    }
 }
 
 async fn collect_health(client: &ApiClient) -> HealthSnapshot {
