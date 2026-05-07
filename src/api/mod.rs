@@ -46,8 +46,7 @@ impl ApiClient {
         let inner = match token.as_deref() {
             Some(t) => bee::Client::with_token(&url, t)
                 .map_err(|e| eyre!("invalid bee endpoint or token: {e}"))?,
-            None => bee::Client::new(&url)
-                .map_err(|e| eyre!("invalid bee endpoint: {e}"))?,
+            None => bee::Client::new(&url).map_err(|e| eyre!("invalid bee endpoint: {e}"))?,
         };
         Ok(Self {
             name: node.name.clone(),
@@ -94,8 +93,7 @@ mod tests {
 
     #[test]
     fn from_node_with_token_marks_authenticated() {
-        let c =
-            ApiClient::from_node(&node("http://localhost:1633", Some("dummy-jwt"))).unwrap();
+        let c = ApiClient::from_node(&node("http://localhost:1633", Some("dummy-jwt"))).unwrap();
         assert!(c.authenticated);
     }
 
