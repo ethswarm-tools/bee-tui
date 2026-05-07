@@ -29,6 +29,7 @@ use tokio::sync::watch;
 
 use super::Component;
 use crate::action::Action;
+use crate::theme;
 use crate::watch::TagsSnapshot;
 
 use bee::api::Tag;
@@ -53,11 +54,11 @@ pub enum TagStatus {
 impl TagStatus {
     fn color(self) -> Color {
         match self {
-            Self::Pending => Color::DarkGray,
-            Self::Splitting => Color::Cyan,
-            Self::Pushing => Color::Yellow,
-            Self::Syncing => Color::Yellow,
-            Self::Synced => Color::Green,
+            Self::Pending => theme::active().dim,
+            Self::Splitting => theme::active().info,
+            Self::Pushing => theme::active().warn,
+            Self::Syncing => theme::active().warn,
+            Self::Synced => theme::active().pass,
         }
     }
     fn label(self) -> &'static str {
@@ -228,6 +229,7 @@ impl Component for Tags {
         .split(area);
 
         let view = Self::view_for(&self.snapshot);
+        let t = theme::active();
 
         // Header
         let header_l1 = Line::from(vec![
@@ -238,26 +240,26 @@ impl Component for Tags {
             Span::raw(format!("   {} tag(s)", view.totals.tags)),
             Span::styled(
                 format!("   active {}", view.totals.active),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(t.warn),
             ),
             Span::styled(
                 format!(
                     "   split {} · sent {} · synced {}",
                     view.totals.split, view.totals.sent, view.totals.synced
                 ),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             ),
         ]);
         let mut header_l2 = Vec::new();
         if let Some(err) = &self.snapshot.last_error {
             header_l2.push(Span::styled(
                 format!("error: {err}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(t.fail),
             ));
         } else if !self.snapshot.is_loaded() {
             header_l2.push(Span::styled(
                 "loading…",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             ));
         }
         frame.render_widget(
@@ -271,14 +273,14 @@ impl Component for Tags {
         lines.push(Line::from(Span::styled(
             "  UID    NAME                ADDR          TOTAL   SPLIT  SENT   SYNCED   %    STATUS",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(t.dim)
                 .add_modifier(Modifier::BOLD),
         )));
         if view.rows.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  (no tags reported — uploads via swarm-cli or the API will appear here)",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
         } else {
@@ -319,7 +321,7 @@ impl Component for Tags {
                 Span::raw(" quit  "),
                 Span::styled(
                     "stages: split → sent → synced",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ])),
             chunks[2],

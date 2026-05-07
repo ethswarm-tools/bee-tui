@@ -40,6 +40,7 @@ use tokio::sync::watch;
 
 use super::Component;
 use crate::action::Action;
+use crate::theme;
 use crate::watch::{NetworkSnapshot, TopologySnapshot};
 
 use bee::debug::{Addresses, Topology};
@@ -70,10 +71,10 @@ impl ReachabilityStatus {
     }
     fn color(&self) -> Color {
         match self {
-            Self::NotLoaded => Color::DarkGray,
-            Self::Public => Color::Green,
-            Self::Private => Color::Yellow,
-            Self::Other(_) => Color::DarkGray,
+            Self::NotLoaded => theme::active().dim,
+            Self::Public => theme::active().pass,
+            Self::Private => theme::active().warn,
+            Self::Other(_) => theme::active().dim,
         }
     }
     fn label(&self) -> String {
@@ -108,10 +109,10 @@ impl AvailabilityStatus {
     }
     fn color(&self) -> Color {
         match self {
-            Self::NotLoaded => Color::DarkGray,
-            Self::Available => Color::Green,
-            Self::Unavailable => Color::Red,
-            Self::Other(_) => Color::DarkGray,
+            Self::NotLoaded => theme::active().dim,
+            Self::Available => theme::active().pass,
+            Self::Unavailable => theme::active().fail,
+            Self::Other(_) => theme::active().dim,
         }
     }
     fn label(&self) -> String {
@@ -373,15 +374,16 @@ impl Component for Network {
             Style::default().add_modifier(Modifier::BOLD),
         )]);
         let mut header_l2 = Vec::new();
+        let t = theme::active();
         if let Some(err) = &self.network.last_error {
             header_l2.push(Span::styled(
                 format!("addresses error: {err}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(t.fail),
             ));
         } else if !self.network.is_loaded() {
             header_l2.push(Span::styled(
                 "loading…",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             ));
         }
         frame.render_widget(
@@ -396,13 +398,13 @@ impl Component for Network {
         let identity = vec![
             Line::from(vec![
                 Span::styled("  overlay   ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(view.overlay_short.clone(), Style::default().fg(Color::Cyan)),
+                Span::styled(view.overlay_short.clone(), Style::default().fg(t.info)),
             ]),
             Line::from(vec![
                 Span::styled("  ethereum  ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
                     view.ethereum_short.clone(),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(t.info),
                 ),
             ]),
         ];
@@ -436,7 +438,7 @@ impl Component for Network {
                 ),
                 Span::styled(
                     format!("  (stable for {stability})"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ]),
             Line::from(vec![
@@ -458,22 +460,22 @@ impl Component for Network {
         let mut addr_lines: Vec<Line> = vec![Line::from(Span::styled(
             "  PUBLIC ADDRESSES",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(t.dim)
                 .add_modifier(Modifier::BOLD),
         ))];
         if view.underlays.is_empty() {
             addr_lines.push(Line::from(Span::styled(
                 "  (no addresses reported)",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
         } else {
             for u in &view.underlays {
                 let (style, badge) = match u.kind {
-                    UnderlayKind::Public => (Style::default().fg(Color::Green), " PUB "),
-                    UnderlayKind::Private => (Style::default().fg(Color::DarkGray), " PRIV"),
-                    UnderlayKind::Unknown => (Style::default().fg(Color::Yellow), " ??? "),
+                    UnderlayKind::Public => (Style::default().fg(t.pass), " PUB "),
+                    UnderlayKind::Private => (Style::default().fg(t.dim), " PRIV"),
+                    UnderlayKind::Unknown => (Style::default().fg(t.warn), " ??? "),
                 };
                 addr_lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -485,13 +487,13 @@ impl Component for Network {
             addr_lines.push(Line::from(Span::styled(
                 "  External port-check + relay candidates require services Bee doesn't expose;",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
             addr_lines.push(Line::from(Span::styled(
                 "  use `nmap -p 1634 <ip>` from a separate machine to confirm public reachability.",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
         }
@@ -506,7 +508,7 @@ impl Component for Network {
                 Span::raw(" quit  "),
                 Span::styled(
                     "isReachable flickers under symmetric NAT — watch the stability window",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ])),
             chunks[4],

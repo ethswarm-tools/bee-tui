@@ -40,6 +40,7 @@ use super::Component;
 use crate::action::Action;
 use crate::api::ApiClient;
 use crate::log_capture::{LogCapture, LogEntry};
+use crate::theme;
 use crate::watch::{HealthSnapshot, TransactionsSnapshot};
 
 /// Window of recent calls considered for the latency / error-rate
@@ -262,6 +263,7 @@ impl Component for ApiHealth {
             .map(|c| c.snapshot())
             .unwrap_or_default();
         let view = Self::view_for(&self.api.url, &recent, &self.health, &self.transactions);
+        let t = theme::active();
 
         // Header
         let header_l1 = Line::from(vec![
@@ -270,12 +272,12 @@ impl Component for ApiHealth {
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::raw("   endpoint  "),
-            Span::styled(view.bee_endpoint.clone(), Style::default().fg(Color::Cyan)),
+            Span::styled(view.bee_endpoint.clone(), Style::default().fg(t.info)),
         ]);
         let header_l2 = Line::from(Span::styled(
             "  Bee doesn't expose its eth RPC URL or remote chain tip; this view measures the local Bee API instead.",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(t.dim)
                 .add_modifier(Modifier::ITALIC),
         ));
         frame.render_widget(
@@ -289,26 +291,26 @@ impl Component for ApiHealth {
         let p50 = cs.p50_ms.map(|v| format!("{v} ms")).unwrap_or_else(|| "—".into());
         let p99 = cs.p99_ms.map(|v| format!("{v} ms")).unwrap_or_else(|| "—".into());
         let err_color = if cs.error_rate_pct >= 5.0 {
-            Color::Red
+            t.fail
         } else if cs.error_rate_pct >= 1.0 {
-            Color::Yellow
+            t.warn
         } else {
-            Color::Green
+            t.pass
         };
         let stats_lines = vec![
             Line::from(vec![Span::styled(
                 "  CALL STATS",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::BOLD),
             )]),
             Line::from(vec![
                 Span::raw("    p50 latency   "),
-                Span::styled(p50, Style::default().fg(Color::Green)),
+                Span::styled(p50, Style::default().fg(t.pass)),
             ]),
             Line::from(vec![
                 Span::raw("    p99 latency   "),
-                Span::styled(p99, Style::default().fg(Color::Yellow)),
+                Span::styled(p99, Style::default().fg(t.warn)),
             ]),
             Line::from(vec![
                 Span::raw("    error rate    "),
@@ -321,7 +323,7 @@ impl Component for ApiHealth {
                 Span::raw("    sample size   "),
                 Span::styled(
                     format!("{} call(s) (last {STATS_WINDOW})", cs.sample_size),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ]),
         ];
@@ -350,16 +352,16 @@ impl Component for ApiHealth {
             Line::from(vec![Span::styled(
                 "  CHAIN STATE  (Bee's view, not the wider network)",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::BOLD),
             )]),
             Line::from(vec![
                 Span::raw("    block "),
-                Span::styled(block_str, Style::default().fg(Color::Green)),
+                Span::styled(block_str, Style::default().fg(t.pass)),
                 Span::raw("   chain tip "),
-                Span::styled(tip_str, Style::default().fg(Color::Green)),
+                Span::styled(tip_str, Style::default().fg(t.pass)),
                 Span::raw("   Δ "),
-                Span::styled(delta_str, Style::default().fg(Color::Yellow)),
+                Span::styled(delta_str, Style::default().fg(t.warn)),
             ]),
         ];
         frame.render_widget(
@@ -371,21 +373,21 @@ impl Component for ApiHealth {
         let mut pending_lines = vec![Line::from(Span::styled(
             format!("  PENDING TRANSACTIONS  ({})", view.pending.len()),
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(t.dim)
                 .add_modifier(Modifier::BOLD),
         ))];
         if view.pending.is_empty() {
             pending_lines.push(Line::from(Span::styled(
                 "  (no pending operator transactions — all confirmed)",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
         } else {
             pending_lines.push(Line::from(Span::styled(
                 "  NONCE  HASH           TO              CREATED                DESCRIPTION",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::BOLD),
             )));
             for r in &view.pending {
@@ -394,13 +396,13 @@ impl Component for ApiHealth {
                     Span::raw(format!("{:<6} ", r.nonce)),
                     Span::styled(
                         format!("{:<14} ", r.hash_short),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(t.info),
                     ),
                     Span::raw(format!("{:<15} ", r.to_short)),
                     Span::raw(format!("{:<22} ", truncate(&r.created, 22))),
                     Span::styled(
                         truncate(&r.description, 30),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(t.dim),
                     ),
                 ]));
             }
@@ -416,7 +418,7 @@ impl Component for ApiHealth {
                 Span::raw(" quit  "),
                 Span::styled(
                     "stats live-update from S10's command-log capture",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ])),
             chunks[4],

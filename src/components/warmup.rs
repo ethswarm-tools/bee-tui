@@ -36,6 +36,7 @@ use tokio::sync::watch;
 
 use super::Component;
 use crate::action::Action;
+use crate::theme;
 use crate::watch::{HealthSnapshot, StampsSnapshot, TopologySnapshot};
 
 /// Bee's reserve size at depth (`pkg/storer/storer.go`). The reserve
@@ -77,10 +78,10 @@ impl StepState {
     }
     fn color(self) -> Color {
         match self {
-            Self::Pending => Color::DarkGray,
-            Self::InProgress(_) => Color::Yellow,
-            Self::Done => Color::Green,
-            Self::Unknown => Color::DarkGray,
+            Self::Pending => theme::active().dim,
+            Self::InProgress(_) => theme::active().warn,
+            Self::Done => theme::active().pass,
+            Self::Unknown => theme::active().dim,
         }
     }
 }
@@ -429,20 +430,21 @@ impl Component for Warmup {
             .elapsed
             .map(format_elapsed)
             .unwrap_or_else(|| "—".into());
+        let t = theme::active();
         let status_label = if view.is_warming_up {
             Span::styled(
                 "warming up",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default().fg(t.warn).add_modifier(Modifier::BOLD),
             )
         } else if view.elapsed.is_some() {
             Span::styled(
                 "complete (post-warmup view)",
-                Style::default().fg(Color::Green),
+                Style::default().fg(t.pass),
             )
         } else {
             Span::styled(
                 "(no /status snapshot yet)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             )
         };
         let header_l1 = Line::from(vec![
@@ -453,12 +455,12 @@ impl Component for Warmup {
             Span::raw("  ·  "),
             status_label,
             Span::raw("  ·  elapsed "),
-            Span::styled(elapsed_str, Style::default().fg(Color::Cyan)),
+            Span::styled(elapsed_str, Style::default().fg(t.info)),
         ]);
         let header_l2 = Line::from(Span::styled(
             "  Bee bootstrap is opaque (bee#4746); these checks reconstruct the steps from /status, /stamps, /topology.",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(t.dim)
                 .add_modifier(Modifier::ITALIC),
         ));
         frame.render_widget(
@@ -489,7 +491,7 @@ impl Component for Warmup {
                 ),
                 Span::styled(
                     s.detail.clone(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
                 Span::styled(progress_suffix, Style::default().fg(s.state.color())),
             ]));
@@ -505,7 +507,7 @@ impl Component for Warmup {
                 Span::raw(" quit  "),
                 Span::styled(
                     "warmup typically takes 25–60 minutes on a fresh mainnet node",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ])),
             chunks[2],

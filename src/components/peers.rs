@@ -32,6 +32,7 @@ use tokio::sync::watch;
 
 use super::Component;
 use crate::action::Action;
+use crate::theme;
 use crate::watch::TopologySnapshot;
 
 use bee::debug::{BinInfo, PeerInfo, Topology};
@@ -69,10 +70,10 @@ pub enum BinSaturation {
 impl BinSaturation {
     fn color(self) -> Color {
         match self {
-            Self::Empty => Color::DarkGray,
-            Self::Starving => Color::Red,
-            Self::Healthy => Color::Green,
-            Self::Over => Color::Yellow,
+            Self::Empty => theme::active().dim,
+            Self::Starving => theme::active().fail,
+            Self::Healthy => theme::active().pass,
+            Self::Over => theme::active().warn,
         }
     }
     fn label(self) -> &'static str {
@@ -277,15 +278,16 @@ impl Component for Peers {
             Style::default().add_modifier(Modifier::BOLD),
         )]);
         let mut header_l2 = Vec::new();
+        let t = theme::active();
         if let Some(err) = &self.snapshot.last_error {
             header_l2.push(Span::styled(
                 format!("error: {err}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(t.fail),
             ));
         } else if !self.snapshot.is_loaded() {
             header_l2.push(Span::styled(
                 "loading…",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             ));
         }
         frame.render_widget(
@@ -301,7 +303,7 @@ impl Component for Peers {
                     Paragraph::new(Span::styled(
                         "  topology not loaded yet",
                         Style::default()
-                            .fg(Color::DarkGray)
+                            .fg(t.dim)
                             .add_modifier(Modifier::ITALIC),
                     )),
                     chunks[1],
@@ -330,13 +332,13 @@ impl Component for Peers {
                             view.network_availability.clone()
                         },
                     ),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ]),
             Line::from(Span::styled(
                 "  BIN  POP  CONN  BAR              STATUS",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::BOLD),
             )),
         ];
@@ -370,7 +372,7 @@ impl Component for Peers {
                 Span::raw("  "),
                 Span::styled(
                     format!(" light  —  {}    (separate from main bins)", view.light_connected),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ]));
         }
@@ -383,23 +385,23 @@ impl Component for Peers {
         let mut peer_lines: Vec<Line> = vec![Line::from(Span::styled(
             "  BIN  PEER          DIR  LATENCY   HEALTHY  REACHABILITY",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(t.dim)
                 .add_modifier(Modifier::BOLD),
         ))];
         if view.peers.is_empty() {
             peer_lines.push(Line::from(Span::styled(
                 "  (no connected peers reported)",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
         } else {
             for p in &view.peers {
                 let healthy_glyph = if p.healthy { "✓" } else { "✗" };
                 let healthy_style = if p.healthy {
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(t.pass)
                 } else {
-                    Style::default().fg(Color::Red)
+                    Style::default().fg(t.fail)
                 };
                 peer_lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -423,7 +425,7 @@ impl Component for Peers {
                 Span::raw(" quit  "),
                 Span::styled(
                     format!("thresholds: {SATURATION_PEERS} saturate · {OVER_SATURATION_PEERS} over"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ])),
             chunks[3],
