@@ -331,6 +331,23 @@ impl App {
                     Err(e) => CommandStatus::Err(format!("loggers failed to start: {e}")),
                 });
             }
+            "set-logger" => {
+                let mut parts = trimmed.split_whitespace();
+                let _ = parts.next(); // command head
+                let expr = parts.next().unwrap_or("");
+                let level = parts.next().unwrap_or("");
+                if expr.is_empty() || level.is_empty() {
+                    self.command_status = Some(CommandStatus::Err(
+                        "usage: :set-logger <expr> <level>  (level: none|error|warning|info|debug|all; expr: e.g. node/pushsync or '.' for all)"
+                            .into(),
+                    ));
+                    return Ok(());
+                }
+                self.start_set_logger(expr.to_string(), level.to_string());
+                self.command_status = Some(CommandStatus::Info(format!(
+                    "set-logger {expr:?} → {level:?} (PUT in-flight; check :loggers to verify)"
+                )));
+            }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
@@ -369,7 +386,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :diagnose, :pins-check, :loggers, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :diagnose, :pins-check, :loggers, :set-logger, :context, :quit)"
                 )));
             }
         }
@@ -472,6 +489,52 @@ impl App {
             }
         });
         Ok(path)
+    }
+
+    /// Spawn a fire-and-forget task that calls
+    /// `set_logger(expression, level)` against the node. The result
+    /// (success or error) is appended to a `:loggers`-style log file
+    /// so the operator has a paper trail of mutations made from the
+    /// cockpit. Per-profile and per-call so multiple `:set-logger`
+    /// invocations don't trample each other's record.
+    ///
+    /// Bee will validate `level` against its own enum (`none|error|
+    /// warning|info|debug|all`); bee-rs does the same client-side, so
+    /// a mistyped level errors out before any HTTP request goes out.
+    fn start_set_logger(&self, expression: String, level: String) {
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let dest = std::env::temp_dir().join(format!(
+            "bee-tui-set-logger-{}-{secs}.txt",
+            sanitize_for_filename(&self.api.name),
+        ));
+        let _ = std::fs::write(
+            &dest,
+            format!(
+                "# bee-tui :set-logger\n# profile  {}\n# endpoint {}\n# expr     {expression}\n# level    {level}\n# started  {}\n",
+                self.api.name,
+                self.api.url,
+                format_utc_now(),
+            ),
+        );
+
+        let api = self.api.clone();
+        tokio::spawn(async move {
+            let bee = api.bee();
+            match bee.debug().set_logger(&expression, &level).await {
+                Ok(()) => {
+                    let _ = append(
+                        &dest,
+                        &format!("# done. {expression} → {level} accepted by Bee.\n"),
+                    );
+                }
+                Err(e) => {
+                    let _ = append(&dest, &format!("# error: {e}\n"));
+                }
+            }
+        });
     }
 
     /// Snapshot Bee's logger configuration to a file. Same on-demand
