@@ -19,7 +19,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bee::debug::{
-    ChainState, ChequebookBalance, LastCheque, RedistributionState, Settlements, Status, Wallet,
+    ChainState, ChequebookBalance, LastCheque, RedistributionState, Settlements, Status, Topology,
+    Wallet,
 };
 use bee::postage::PostageBatch;
 use num_bigint::BigInt;
@@ -96,6 +97,23 @@ impl SwapSnapshot {
     }
 }
 
+/// Snapshot fed to the S6 Peers screen and the S1 bin-saturation
+/// gate. `/topology` is polled at 5 s — per-bin populations don't
+/// drift faster than peer churn, but the operator does want to see
+/// "bin 4 starving" go yellow within a few ticks of the issue.
+#[derive(Clone, Debug, Default)]
+pub struct TopologySnapshot {
+    pub topology: Option<Topology>,
+    pub last_error: Option<String>,
+    pub last_update: Option<Instant>,
+}
+
+impl TopologySnapshot {
+    pub fn is_loaded(&self) -> bool {
+        self.topology.is_some() && self.last_error.is_none()
+    }
+}
+
 /// Snapshot fed to the S4 Lottery screen. `/stake` is operator-driven
 /// (deposit / withdraw transactions only) so the cadence is 30 s per
 /// `docs/PLAN.md` § 9 — same as SWAP. The redistribution-state half of
@@ -117,13 +135,14 @@ impl LotterySnapshot {
 
 /// Watch-channel hub. Owns one [`watch::Sender`] per resource group;
 /// hands out clones of the receiver via `health()` / `stamps()` /
-/// `swap()` / `lottery()` etc.
+/// `swap()` / `lottery()` / `topology()` etc.
 #[derive(Clone, Debug)]
 pub struct BeeWatch {
     health_rx: watch::Receiver<HealthSnapshot>,
     stamps_rx: watch::Receiver<StampsSnapshot>,
     swap_rx: watch::Receiver<SwapSnapshot>,
     lottery_rx: watch::Receiver<LotterySnapshot>,
+    topology_rx: watch::Receiver<TopologySnapshot>,
     cancel: CancellationToken,
 }
 
@@ -155,12 +174,20 @@ impl BeeWatch {
             Duration::from_secs(30),
         );
         let (lottery_tx, lottery_rx) = watch::channel(LotterySnapshot::default());
-        spawn_lottery_poller(client, lottery_tx, cancel.clone(), Duration::from_secs(30));
+        spawn_lottery_poller(
+            client.clone(),
+            lottery_tx,
+            cancel.clone(),
+            Duration::from_secs(30),
+        );
+        let (topology_tx, topology_rx) = watch::channel(TopologySnapshot::default());
+        spawn_topology_poller(client, topology_tx, cancel.clone(), Duration::from_secs(5));
         Self {
             health_rx,
             stamps_rx,
             swap_rx,
             lottery_rx,
+            topology_rx,
             cancel,
         }
     }
@@ -184,6 +211,11 @@ impl BeeWatch {
     /// Subscribe to the lottery snapshot stream (`/stake`).
     pub fn lottery(&self) -> watch::Receiver<LotterySnapshot> {
         self.lottery_rx.clone()
+    }
+
+    /// Subscribe to the topology snapshot stream (`/topology`).
+    pub fn topology(&self) -> watch::Receiver<TopologySnapshot> {
+        self.topology_rx.clone()
     }
 
     /// Cancel every polling task this hub owns. Idempotent.
@@ -351,6 +383,46 @@ async fn collect_lottery(client: &ApiClient) -> LotterySnapshot {
         Err(e) => LotterySnapshot {
             staked: None,
             last_error: Some(format!("stake: {e}")),
+            last_update: Some(Instant::now()),
+        },
+    }
+}
+
+/// Poll `/topology` every `interval` and broadcast a fresh
+/// [`TopologySnapshot`].
+fn spawn_topology_poller(
+    client: Arc<ApiClient>,
+    tx: watch::Sender<TopologySnapshot>,
+    cancel: CancellationToken,
+    interval: Duration,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = tick.tick() => {
+                    let snap = collect_topology(&client).await;
+                    if tx.send(snap).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn collect_topology(client: &ApiClient) -> TopologySnapshot {
+    match client.bee().debug().topology().await {
+        Ok(topology) => TopologySnapshot {
+            topology: Some(topology),
+            last_error: None,
+            last_update: Some(Instant::now()),
+        },
+        Err(e) => TopologySnapshot {
+            topology: None,
+            last_error: Some(format!("topology: {e}")),
             last_update: Some(Instant::now()),
         },
     }
