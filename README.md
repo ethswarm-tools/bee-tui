@@ -5,9 +5,11 @@
 
 Production-grade k9s-style terminal cockpit for Ethereum Swarm Bee node operators.
 
-> **Status: pre-implementation.** Plan v2 canonical at [`docs/PLAN.md`](docs/PLAN.md).
-> Initial scaffold from the [ratatui component template](https://github.com/ratatui/templates).
-> No working screens yet — see [`docs/STATUS.md`](docs/STATUS.md) for current session pin.
+> **Status: v0.1 in flight.** S1 Health and S10 Command-log shipped;
+> S2 Stamps next. Crate name reserved at
+> [`bee-tui v0.0.1`](https://crates.io/crates/bee-tui/0.0.1) on crates.io.
+> Plan canonical at [`docs/PLAN.md`](docs/PLAN.md). Current session pin
+> in [`docs/STATUS.md`](docs/STATUS.md).
 
 ## What this is
 
@@ -25,7 +27,14 @@ client for Bee.
 
 ## Status
 
-Pre-implementation. The plan has been validated against:
+| Screen | State |
+|---|---|
+| S1 Health gates | ✅ shipped (9 of 10 gates; bin saturation deferred) |
+| S2 Stamps (volume+duration UX, bucket histogram) | 🔜 next chunk |
+| S10 Command-log pane (`bee::http` tracing tail) | ✅ shipped |
+| S3-S9 | ⏳ later milestones — see [docs/PLAN.md § 12](docs/PLAN.md) |
+
+The plan was validated against:
 
 - ~50 GitHub issues across `ethersphere/bee`, `swarm-cli`, `bee-dashboard` for
   operator pain points
