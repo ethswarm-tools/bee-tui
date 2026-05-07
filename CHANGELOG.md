@@ -11,6 +11,33 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **S9 Tags / uploads** — ninth operator screen, the answer to
+  "where is my upload stuck?". Each row surfaces every Bee tag's
+  lifecycle counters (total / split / seen / stored / sent / synced)
+  with a derived `TagStatus` ladder naming the active phase
+  (Pending / Splitting / Pushing / Syncing / Synced). Sort is
+  newest-first by UID descending, so a fresh upload appears at the
+  top. The header aggregates split / sent / synced across every tag
+  plus an `active` count of non-Pending non-Synced rows. Driven by a
+  new 5 s `/tags` poller. 9 insta snapshot tests pin every status
+  transition + the table-level invariants.
+- **Theme system foundation.** Slot-based palette
+  (`Pass / Warn / Fail / Header / Accent / Dim / …`) with `default`
+  and `mono` variants out of the box. Themes encode *intent*, not
+  literal `Color` values, so future variants are one-file changes
+  instead of many-file refactors. Configured via `[ui] theme` in
+  `config.toml`; unknown names fall back to the default palette with
+  a tracing warning. Active theme is held in a `OnceLock`; runtime
+  switching (`:theme <name>`) is left for v0.6.
+  - Migrated this release: App's top bar, command-bar prompt + status
+    line, S1 Health. Other screens still use hard-coded literals
+    pending follow-up — behaviour is identical until those flip.
+- **`[ui]` config section.** `theme = "default" | "mono"` and
+  `ascii_fallback = false` (reserved for follow-up; not yet wired).
+- **Tab now cycles nine screens** Health → Stamps → Swap → Lottery →
+  Peers → Network → Warmup → API → Tags. `:tags` jumps directly via
+  the `:command` bar.
+
 - **k9s-style `:command` bar.** `:` opens an input line at the bottom
   of the screen; Backspace edits, Enter dispatches, Esc cancels.
   Component-level key dispatch is suppressed while the bar is open,
