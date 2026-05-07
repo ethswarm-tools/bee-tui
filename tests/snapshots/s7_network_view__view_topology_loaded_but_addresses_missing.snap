@@ -1,0 +1,14 @@
+---
+source: tests/s7_network_view.rs
+assertion_line: 184
+expression: view
+---
+NetworkView {
+    overlay_short: "—",
+    ethereum_short: "—",
+    underlays: [],
+    inbound: 1,
+    outbound: 0,
+    reachability: Public,
+    network_availability: Available,
+}

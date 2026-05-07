@@ -1,0 +1,19 @@
+---
+source: tests/s7_network_view.rs
+assertion_line: 156
+expression: view
+---
+NetworkView {
+    overlay_short: "eeeeee…eeee",
+    ethereum_short: "ffffff…ffff",
+    underlays: [
+        UnderlayRow {
+            multiaddr: "/dns4/bee.example.com/tcp/1634/p2p/16Uiu...",
+            kind: Unknown,
+        },
+    ],
+    inbound: 0,
+    outbound: 0,
+    reachability: Public,
+    network_availability: Available,
+}

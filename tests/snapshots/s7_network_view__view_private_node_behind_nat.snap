@@ -1,0 +1,27 @@
+---
+source: tests/s7_network_view.rs
+assertion_line: 140
+expression: view
+---
+NetworkView {
+    overlay_short: "cccccc…cccc",
+    ethereum_short: "dddddd…dddd",
+    underlays: [
+        UnderlayRow {
+            multiaddr: "/ip4/127.0.0.1/tcp/1634/p2p/16Uiu...",
+            kind: Private,
+        },
+        UnderlayRow {
+            multiaddr: "/ip4/192.168.1.5/tcp/1634/p2p/16Uiu...",
+            kind: Private,
+        },
+        UnderlayRow {
+            multiaddr: "/ip4/10.0.0.5/tcp/1634/p2p/16Uiu...",
+            kind: Private,
+        },
+    ],
+    inbound: 0,
+    outbound: 4,
+    reachability: Private,
+    network_availability: Available,
+}
