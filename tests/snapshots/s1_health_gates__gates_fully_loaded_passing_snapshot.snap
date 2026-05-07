@@ -1,0 +1,69 @@
+---
+source: tests/s1_health_gates.rs
+assertion_line: 101
+expression: gates
+---
+[
+    Gate {
+        label: "API reachable",
+        status: Pass,
+        value: "(3ms)",
+        why: None,
+    },
+    Gate {
+        label: "Chain RPC",
+        status: Pass,
+        value: "block 100 · Δ +0",
+        why: None,
+    },
+    Gate {
+        label: "Wallet funded",
+        status: Pass,
+        value: "BZZ 1000000000000000000 · native 5000000000000000000",
+        why: None,
+    },
+    Gate {
+        label: "Warmup complete",
+        status: Pass,
+        value: "ready",
+        why: None,
+    },
+    Gate {
+        label: "Peers",
+        status: Pass,
+        value: "87 connected",
+        why: None,
+    },
+    Gate {
+        label: "Reserve",
+        status: Pass,
+        value: "145231 chunks (in-radius: 65536) · radius 8",
+        why: None,
+    },
+    Gate {
+        label: "Bin saturation",
+        status: Unknown,
+        value: "(/topology not polled yet)",
+        why: Some(
+            "v0.2: per-bin starvation detection",
+        ),
+    },
+    Gate {
+        label: "Healthy for redistribution",
+        status: Pass,
+        value: "yes",
+        why: None,
+    },
+    Gate {
+        label: "Not frozen",
+        status: Pass,
+        value: "active",
+        why: None,
+    },
+    Gate {
+        label: "Sufficient funds to play",
+        status: Pass,
+        value: "yes",
+        why: None,
+    },
+]

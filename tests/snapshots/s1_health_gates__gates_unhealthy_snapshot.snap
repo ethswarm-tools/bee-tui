@@ -1,0 +1,83 @@
+---
+source: tests/s1_health_gates.rs
+assertion_line: 107
+expression: gates
+---
+[
+    Gate {
+        label: "API reachable",
+        status: Pass,
+        value: "(380ms)",
+        why: None,
+    },
+    Gate {
+        label: "Chain RPC",
+        status: Fail,
+        value: "block 100 · Δ +50",
+        why: Some(
+            "RPC out of sync: 50 blocks behind tip",
+        ),
+    },
+    Gate {
+        label: "Wallet funded",
+        status: Fail,
+        value: "0 BZZ · 0 native",
+        why: Some(
+            "fund the operator wallet to participate",
+        ),
+    },
+    Gate {
+        label: "Warmup complete",
+        status: Pass,
+        value: "ready",
+        why: None,
+    },
+    Gate {
+        label: "Peers",
+        status: Warn,
+        value: "3 connected",
+        why: Some(
+            "only 3 connected — bins likely starving",
+        ),
+    },
+    Gate {
+        label: "Reserve",
+        status: Warn,
+        value: "0 chunks (in-radius: 0) · radius 7",
+        why: Some(
+            "reserve empty after warmup — check sync rate",
+        ),
+    },
+    Gate {
+        label: "Bin saturation",
+        status: Unknown,
+        value: "(/topology not polled yet)",
+        why: Some(
+            "v0.2: per-bin starvation detection",
+        ),
+    },
+    Gate {
+        label: "Healthy for redistribution",
+        status: Fail,
+        value: "storageRadius (7) < committed (9)",
+        why: Some(
+            "storageRadius decreases ONLY on the 30-min reserve worker tick — wait it out or check reserve fill",
+        ),
+    },
+    Gate {
+        label: "Not frozen",
+        status: Fail,
+        value: "frozen since round 14523",
+        why: Some(
+            "invalid commit/reveal or desynced reserve in a recent round",
+        ),
+    },
+    Gate {
+        label: "Sufficient funds to play",
+        status: Fail,
+        value: "insufficient gas runway",
+        why: Some(
+            "top up the operator wallet's native-token balance",
+        ),
+    },
+]

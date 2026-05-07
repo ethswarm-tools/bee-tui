@@ -1,23 +1,10 @@
+use bee_tui::{app::App, cli::Cli};
 use clap::Parser;
-use cli::Cli;
-
-use crate::app::App;
-
-mod action;
-mod api;
-mod app;
-mod cli;
-mod components;
-mod config;
-mod errors;
-mod logging;
-mod tui;
-mod watch;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
-    crate::errors::init()?;
-    crate::logging::init()?;
+    bee_tui::errors::init()?;
+    bee_tui::logging::init()?;
 
     let args = Cli::parse();
     let mut app = App::new(args.tick_rate, args.frame_rate)?;
