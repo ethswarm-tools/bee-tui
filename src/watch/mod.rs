@@ -18,7 +18,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bee::debug::{ChainState, RedistributionState, Status, Wallet};
+use bee::debug::{
+    ChainState, ChequebookBalance, LastCheque, RedistributionState, Settlements, Status, Wallet,
+};
 use bee::postage::PostageBatch;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -73,12 +75,34 @@ impl StampsSnapshot {
     }
 }
 
+/// Snapshot fed to the S3 SWAP / cheques screen. `/chequebook/*` and
+/// `/settlements` are slow-changing — chain-rate at most — so the
+/// poll cadence is 30 s per `docs/PLAN.md` § 9.
+#[derive(Clone, Debug, Default)]
+pub struct SwapSnapshot {
+    pub chequebook: Option<ChequebookBalance>,
+    pub settlements: Option<Settlements>,
+    pub time_settlements: Option<Settlements>,
+    /// Last received cheque per peer (from `/chequebook/cheque`).
+    pub last_received: Vec<LastCheque>,
+    pub last_error: Option<String>,
+    pub last_update: Option<Instant>,
+}
+
+impl SwapSnapshot {
+    pub fn is_loaded(&self) -> bool {
+        self.last_update.is_some() && self.last_error.is_none()
+    }
+}
+
 /// Watch-channel hub. Owns one [`watch::Sender`] per resource group;
-/// hands out clones of the receiver via `health()` / `stamps()` etc.
+/// hands out clones of the receiver via `health()` / `stamps()` /
+/// `swap()` etc.
 #[derive(Clone, Debug)]
 pub struct BeeWatch {
     health_rx: watch::Receiver<HealthSnapshot>,
     stamps_rx: watch::Receiver<StampsSnapshot>,
+    swap_rx: watch::Receiver<SwapSnapshot>,
     cancel: CancellationToken,
 }
 
@@ -96,10 +120,18 @@ impl BeeWatch {
             Duration::from_secs(2),
         );
         let (stamps_tx, stamps_rx) = watch::channel(StampsSnapshot::default());
-        spawn_stamps_poller(client, stamps_tx, cancel.clone(), Duration::from_secs(10));
+        spawn_stamps_poller(
+            client.clone(),
+            stamps_tx,
+            cancel.clone(),
+            Duration::from_secs(10),
+        );
+        let (swap_tx, swap_rx) = watch::channel(SwapSnapshot::default());
+        spawn_swap_poller(client, swap_tx, cancel.clone(), Duration::from_secs(30));
         Self {
             health_rx,
             stamps_rx,
+            swap_rx,
             cancel,
         }
     }
@@ -113,6 +145,11 @@ impl BeeWatch {
     /// Subscribe to the stamps snapshot stream.
     pub fn stamps(&self) -> watch::Receiver<StampsSnapshot> {
         self.stamps_rx.clone()
+    }
+
+    /// Subscribe to the swap snapshot stream.
+    pub fn swap(&self) -> watch::Receiver<SwapSnapshot> {
+        self.swap_rx.clone()
     }
 
     /// Cancel every polling task this hub owns. Idempotent.
@@ -184,6 +221,66 @@ async fn collect_stamps(client: &ApiClient) -> StampsSnapshot {
             last_update: Some(Instant::now()),
         },
     }
+}
+
+/// Poll `/chequebook/balance` + `/chequebook/cheque` + `/settlements`
+/// + `/timesettlements` every `interval` and broadcast a fresh
+/// [`SwapSnapshot`].
+fn spawn_swap_poller(
+    client: Arc<ApiClient>,
+    tx: watch::Sender<SwapSnapshot>,
+    cancel: CancellationToken,
+    interval: Duration,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = tick.tick() => {
+                    let snap = collect_swap(&client).await;
+                    if tx.send(snap).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn collect_swap(client: &ApiClient) -> SwapSnapshot {
+    let bee = client.bee();
+    let chequebook = bee.debug().chequebook_balance().await;
+    let settlements = bee.debug().settlements().await;
+    let time_settlements = bee.debug().time_settlements().await;
+    let last_received = bee.debug().last_cheques().await;
+
+    let mut snap = SwapSnapshot {
+        last_update: Some(Instant::now()),
+        ..Default::default()
+    };
+    let mut errors: Vec<String> = Vec::new();
+    match chequebook {
+        Ok(c) => snap.chequebook = Some(c),
+        Err(e) => errors.push(format!("chequebook: {e}")),
+    }
+    match settlements {
+        Ok(s) => snap.settlements = Some(s),
+        Err(e) => errors.push(format!("settlements: {e}")),
+    }
+    match time_settlements {
+        Ok(s) => snap.time_settlements = Some(s),
+        Err(e) => errors.push(format!("timesettlements: {e}")),
+    }
+    match last_received {
+        Ok(v) => snap.last_received = v,
+        Err(e) => errors.push(format!("cheques: {e}")),
+    }
+    if !errors.is_empty() {
+        snap.last_error = Some(errors.join("; "));
+    }
+    snap
 }
 
 async fn collect_health(client: &ApiClient) -> HealthSnapshot {
