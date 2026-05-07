@@ -14,6 +14,7 @@ pub mod network;
 pub mod peers;
 pub mod stamps;
 pub mod swap;
+pub mod warmup;
 
 /// `Component` is a trait that represents a visual and interactive element of the user interface.
 ///

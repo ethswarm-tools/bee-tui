@@ -13,7 +13,7 @@ use crate::{
     api::ApiClient,
     components::{
         Component, command_log::CommandLog, health::Health, lottery::Lottery, network::Network,
-        peers::Peers, stamps::Stamps, swap::Swap,
+        peers::Peers, stamps::Stamps, swap::Swap, warmup::Warmup,
     },
     config::Config,
     log_capture,
@@ -53,7 +53,9 @@ pub struct App {
 
 /// Names the top-level screens. Index matches position in
 /// [`App::screens`].
-const SCREEN_NAMES: &[&str] = &["Health", "Stamps", "Swap", "Lottery", "Peers", "Network"];
+const SCREEN_NAMES: &[&str] = &[
+    "Health", "Stamps", "Swap", "Lottery", "Peers", "Network", "Warmup",
+];
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
@@ -101,6 +103,10 @@ impl App {
         // reachability strings update in lockstep with the rest of
         // the topology view.
         let network = Network::new(watch.network(), watch.topology());
+        // S5 Warmup — seventh tab. Reuses the existing health, stamps,
+        // and topology streams (no new poller); state is derived from
+        // is_warming_up + the same fields the other screens read.
+        let warmup = Warmup::new(watch.health(), watch.stamps(), watch.topology());
         // S10 Command-log subscribes to the bee::http capture set up
         // by logging::init. If logging hasn't initialised the capture
         // (e.g. running in a test harness), the pane just shows
@@ -112,7 +118,8 @@ impl App {
             frame_rate,
             // Order matters — the SCREEN_NAMES table assumes index 0
             // is Health, index 1 is Stamps, index 2 is Swap, index 3
-            // is Lottery, index 4 is Peers, index 5 is Network.
+            // is Lottery, index 4 is Peers, index 5 is Network,
+            // index 6 is Warmup.
             screens: vec![
                 Box::new(health),
                 Box::new(stamps),
@@ -120,6 +127,7 @@ impl App {
                 Box::new(lottery),
                 Box::new(peers),
                 Box::new(network),
+                Box::new(warmup),
             ],
             current_screen: 0,
             command_log,
