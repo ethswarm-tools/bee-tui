@@ -1,0 +1,44 @@
+# Introduction
+
+`bee-tui` is a terminal cockpit for [Ethereum Swarm](https://www.ethswarm.org/)
+Bee node operators. It surfaces the state Bee's API hides — bucket
+collisions, redistribution skip reasons, bin starvation, NAT reality — in
+nine live screens, with an always-on HTTP request tail so operators trust
+what they see.
+
+This handbook is the **per-screen reference**. It explains what each
+screen shows, why it matters, and how to use the keymap. The
+high-level project plan lives in
+[`docs/PLAN.md`](https://github.com/ethswarm-tools/bee-tui/blob/main/docs/PLAN.md);
+the README is the install + quickstart entry point.
+
+## Who this is for
+
+You run a Bee node (mainnet or testnet) and want to know what's wrong
+without reading 50 endpoints worth of JSON. The pain points this tool
+exists to address:
+
+- **"Why is my node unhealthy?"** — answered by S1 with WHY tooltips
+  encoding tribal knowledge from the bee-go source.
+- **"Which batch is about to fail uploads?"** — S2's worst-bucket fill
+  bar + Enter-to-drill bucket histogram.
+- **"Why am I unreachable?"** — S7 distinguishes public-vs-private
+  underlay and tracks AutoNAT reachability stability over a window.
+- **"Why am I not earning rewards?"** — S4's redistribution skip
+  reasons reconstruct the truth `LastPlayedRound` doesn't tell you.
+- **"Where is my upload stuck?"** — S9's TagStatus ladder lights up
+  the exact phase a stuck upload is in.
+
+## What this handbook is *not*
+
+It's not a Bee operations manual. The deep model of how Swarm works —
+postage, neighborhoods, kademlia, redistribution — is best absorbed
+from [the Bee book](https://docs.ethswarm.org/) and the bee-go source.
+This handbook assumes you know that domain and just need to know how
+the cockpit surfaces it.
+
+## Versioning
+
+bee-tui follows [Semantic Versioning](https://semver.org/). The handbook
+on this site reflects whatever version is on `main`; the README's
+**Status** table tells you what's shipped and what's coming.

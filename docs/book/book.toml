@@ -1,0 +1,12 @@
+[book]
+title = "bee-tui — operator handbook"
+authors = ["Calin Martinconi"]
+description = "Per-screen reference for the bee-tui terminal cockpit"
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/ethswarm-tools/bee-tui"
+edit-url-template = "https://github.com/ethswarm-tools/bee-tui/edit/main/docs/book/{path}"
