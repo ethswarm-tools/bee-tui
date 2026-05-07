@@ -22,7 +22,7 @@ After a command runs, the bottom line shows the result for
 ~3 seconds before fading:
 
 - **Info** (green) — `→ Health`, `diagnostic bundle exported to /tmp/...`
-- **Err** (red) — `unknown command: "...", `usage: :set-logger <expr> <level> ...`
+- **Err** (red) — `unknown command: "..."`, `usage: :set-logger <expr> <level> ...`
 
 If you missed the message, just re-run — the status sticks
 until the next command or the next 3 s tick.

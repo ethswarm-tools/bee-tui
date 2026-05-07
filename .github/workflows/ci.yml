@@ -61,3 +61,23 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --document-private-items --all-features --workspace --examples
+
+  mdbook:
+    name: mdBook
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install mdBook
+        uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: "0.4.40"
+      - name: Build book (warnings as errors)
+        working-directory: docs/book
+        run: |
+          set -eo pipefail
+          mdbook build 2>&1 | tee build.log
+          if grep -q ' WARN ' build.log; then
+            echo "::error::mdbook emitted warnings — fix them before merging."
+            exit 1
+          fi

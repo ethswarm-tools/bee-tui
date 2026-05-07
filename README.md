@@ -2,7 +2,11 @@
 
 [![Crates.io](https://img.shields.io/crates/v/bee-tui.svg)](https://crates.io/crates/bee-tui)
 [![CI](https://github.com/ethswarm-tools/bee-tui/workflows/CI/badge.svg)](https://github.com/ethswarm-tools/bee-tui/actions)
+[![Docs](https://img.shields.io/badge/docs-mdBook-blue)](https://ethswarm-tools.github.io/bee-tui/)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+
+> **Operator handbook**: <https://ethswarm-tools.github.io/bee-tui/> — full
+> per-screen reference, command bar, keymap, FAQ.
 
 A k9s-style terminal cockpit for [Ethereum Swarm](https://www.ethswarm.org/) Bee
 node operators — nine live screens that surface the state Bee's API hides:
