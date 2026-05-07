@@ -13,6 +13,8 @@ node operators — nine live screens that surface the state Bee's API hides:
 bucket collisions, redistribution skip reasons, bin starvation, NAT reality,
 and a live HTTP tail so operators trust what they see.
 
+![bee-tui cold-start tour](docs/tapes/cold-start.gif)
+
 ```text
  bee-tui   prod-1 @ http://10.0.1.5:1633   ping 12ms   UTC 14:32:18
  [Health]  Stamps  Swap  Lottery  Peers  Network  Warmup  API  Tags    :cmd · Tab · ? help
@@ -131,11 +133,16 @@ opens the drill, `Esc` closes it.
   10 worst buckets. Two batches with the same headline `utilization`
   can fail uploads under wildly different conditions — the drill answers
   *how concentrated* the load is.
+
+  ![S2 stamp drill](docs/tapes/s2-stamp-drill.gif)
+
 - **S6 Peers** drill: parallel fetch of `peer_balance` + `peer_cheques`
   + `peer_settlement` + `ping_peer` for the selected peer. Each field
   fails independently — a 404 on `/chequebook/cheque/{peer}` (peers
   you've never exchanged cheques with) shows `error: 404` for that one
   field instead of blanking the drill.
+
+  ![S6 peer drill](docs/tapes/s6-peer-drill.gif)
 
 ## Keys
 
@@ -166,7 +173,7 @@ intercept it.
 | `:health`, `:stamps`, `:swap`, `:lottery`, `:peers`, `:network`, `:warmup`, `:api`, `:tags` | jump to that screen |
 | `:context <name>` | switch to another node from `config.nodes` |
 | `:diagnose` | export a redacted bundle to `$TMPDIR/bee-tui-diagnostic-<ts>.txt` (paste-ready for support threads — Bearer tokens never captured) |
-| `:pins-check` | walk every pinned root via `/pins/check`, write results to `$TMPDIR/bee-tui-pins-check-<profile>-<ts>.txt` (NDJSON streamed by Bee, collected and tail-friendly) |
+| `:pins-check` | walk every pinned root via `/pins/check`, write results to `$TMPDIR/bee-tui-pins-check-<profile>-<ts>.txt` (NDJSON streamed by Bee, collected and tail-friendly) — see [demo](docs/tapes/pins-check.gif) |
 | `:loggers` | snapshot `/loggers` to `$TMPDIR/bee-tui-loggers-<profile>-<ts>.txt`, sorted loudest-first |
 | `:set-logger <expr> <level>` | call `PUT /loggers/{exp}/{level}` — bump a Bee subsystem to `debug` / `info` / etc. without curl |
 | `:quit`, `:q` | quit |

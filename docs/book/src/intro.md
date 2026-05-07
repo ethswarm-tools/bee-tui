@@ -6,6 +6,8 @@ collisions, redistribution skip reasons, bin starvation, NAT reality — in
 nine live screens, with an always-on HTTP request tail so operators trust
 what they see.
 
+![bee-tui cold-start tour](https://raw.githubusercontent.com/ethswarm-tools/bee-tui/main/docs/tapes/cold-start.gif)
+
 This handbook is the **per-screen reference**. It explains what each
 screen shows, why it matters, and how to use the keymap. The
 high-level project plan lives in
