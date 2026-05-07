@@ -17,8 +17,8 @@ use crate::{
     components::{
         Component,
         api_health::ApiHealth,
-        command_log::CommandLog,
         health::{Gate, GateStatus, Health},
+        log_pane::{LogPane, LogTab},
         lottery::Lottery,
         network::Network,
         peers::Peers,
@@ -28,7 +28,9 @@ use crate::{
         warmup::Warmup,
     },
     config::Config,
-    log_capture, theme,
+    log_capture,
+    state::State,
+    theme,
     tui::{Event, Tui},
     watch::{BeeWatch, HealthSnapshot},
 };
@@ -44,8 +46,12 @@ pub struct App {
     /// Index into [`Self::screens`] for the currently visible screen.
     current_screen: usize,
     /// Always-on bottom strip; not part of `screens` because it
-    /// renders alongside whatever screen is active.
-    command_log: Box<dyn Component>,
+    /// renders alongside whatever screen is active. Tabbed across
+    /// Errors/Warn/Info/Debug/BeeHttp/SelfHttp.
+    log_pane: LogPane,
+    /// Where the persisted UI state (tab + height) lives on disk.
+    /// Computed once at startup; rewritten on quit.
+    state_path: PathBuf,
     should_quit: bool,
     should_suspend: bool,
     mode: Mode,
@@ -202,18 +208,26 @@ impl App {
         let health_rx = watch.health();
 
         let screens = build_screens(&api, &watch);
-        // S10 Command-log subscribes to the bee::http capture set up
-        // by logging::init. If logging hasn't initialised the capture
-        // (e.g. running in a test harness), the pane just shows
-        // "waiting for first request…".
-        let command_log: Box<dyn Component> = Box::new(CommandLog::new(log_capture::handle()));
+        // Bottom log pane subscribes to the bee::http capture set up
+        // by logging::init for its `bee::http` tab. The four severity
+        // tabs + "Bee HTTP" tab populate from the supervisor's log
+        // tail (increment 3+); for now they show placeholders.
+        let (persisted, state_path) = State::load();
+        let initial_tab = LogTab::from_kebab(&persisted.log_pane_active_tab);
+        let mut log_pane = LogPane::new(
+            log_capture::handle(),
+            initial_tab,
+            persisted.log_pane_height,
+        );
+        log_pane.set_spawn_active(supervisor.is_some());
 
         Ok(Self {
             tick_rate,
             frame_rate,
             screens,
             current_screen: 0,
-            command_log,
+            log_pane,
+            state_path,
             should_quit: false,
             should_suspend: false,
             config,
@@ -268,6 +282,14 @@ impl App {
         // Unwind every spawned task before tearing down the terminal.
         self.watch.shutdown();
         self.root_cancel.cancel();
+        // Persist UI state (last tab + height) so the next launch
+        // restores the operator's preference. Best-effort — failures
+        // log a warning but never block quit.
+        let snapshot = State {
+            log_pane_height: self.log_pane.height(),
+            log_pane_active_tab: self.log_pane.active_tab().to_kebab().to_string(),
+        };
+        snapshot.save(&self.state_path);
         // SIGTERM Bee (pgroup) and wait for clean exit. Done before
         // tui.exit() so any "bee shutting down" messages still land
         // in the supervisor's log file (no race with terminal teardown).
@@ -313,13 +335,15 @@ impl App {
         Ok(())
     }
 
-    /// Iterate every component (screens + command-log strip) for
-    /// uniform lifecycle ticks. Doesn't conflict with rendering,
-    /// which only draws the active screen.
-    fn iter_components_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn Component>> {
+    /// Iterate every component (screens + log pane) for uniform
+    /// lifecycle ticks. Returns trait objects so the heterogeneous
+    /// `LogPane` (a concrete type for direct method access in the
+    /// app layer) walks alongside the boxed screens.
+    fn iter_components_mut(&mut self) -> impl Iterator<Item = &mut dyn Component> {
         self.screens
             .iter_mut()
-            .chain(std::iter::once(&mut self.command_log))
+            .map(|c| c.as_mut() as &mut dyn Component)
+            .chain(std::iter::once(&mut self.log_pane as &mut dyn Component))
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<()> {
@@ -381,6 +405,35 @@ impl App {
                     SCREEN_NAMES.get(self.current_screen).unwrap_or(&"?")
                 );
             }
+            return Ok(());
+        }
+        // Log-pane controls. `[` / `]` cycle tabs (lazygit / k9s
+        // pattern, no conflict with screen-cycling Tab/Shift+Tab).
+        // `+` / `-` resize the pane in 1-line steps, clamped to
+        // [LOG_PANE_MIN_HEIGHT, LOG_PANE_MAX_HEIGHT]. The state is
+        // persisted on quit.
+        if matches!(key.code, crossterm::event::KeyCode::Char('['))
+            && key.modifiers == crossterm::event::KeyModifiers::NONE
+        {
+            self.log_pane.prev_tab();
+            return Ok(());
+        }
+        if matches!(key.code, crossterm::event::KeyCode::Char(']'))
+            && key.modifiers == crossterm::event::KeyModifiers::NONE
+        {
+            self.log_pane.next_tab();
+            return Ok(());
+        }
+        if matches!(key.code, crossterm::event::KeyCode::Char('+'))
+            && key.modifiers == crossterm::event::KeyModifiers::NONE
+        {
+            self.log_pane.grow();
+            return Ok(());
+        }
+        if matches!(key.code, crossterm::event::KeyCode::Char('-'))
+            && key.modifiers == crossterm::event::KeyModifiers::NONE
+        {
+            self.log_pane.shrink();
             return Ok(());
         }
         // `q` is the easy-to-misclick exit. Require a double-tap
@@ -875,7 +928,8 @@ impl App {
         let active = self.current_screen;
         let tx = self.action_tx.clone();
         let screens = &mut self.screens;
-        let command_log = &mut self.command_log;
+        let log_pane = &mut self.log_pane;
+        let log_pane_height = log_pane.height();
         let command_buffer = self.command_buffer.clone();
         let command_status = self.command_status.clone();
         let help_visible = self.help_visible;
@@ -898,10 +952,10 @@ impl App {
             use ratatui::widgets::Paragraph;
 
             let chunks = Layout::vertical([
-                Constraint::Length(2), // top-bar (metadata + tabs)
-                Constraint::Min(0),    // active screen
-                Constraint::Length(1), // command bar / status line
-                Constraint::Length(8), // command-log strip
+                Constraint::Length(2),               // top-bar (metadata + tabs)
+                Constraint::Min(0),                  // active screen
+                Constraint::Length(1),               // command bar / status line
+                Constraint::Length(log_pane_height), // tabbed log pane (operator-resizable)
             ])
             .split(frame.area());
 
@@ -1000,8 +1054,8 @@ impl App {
             };
             frame.render_widget(Paragraph::new(prompt), chunks[2]);
 
-            // Command-log strip
-            if let Err(err) = command_log.draw(frame, chunks[3]) {
+            // Tabbed log pane
+            if let Err(err) = log_pane.draw(frame, chunks[3]) {
                 let _ = tx.send(Action::Error(format!("Failed to draw log: {err:?}")));
             }
 
@@ -1037,6 +1091,8 @@ fn draw_help_overlay(
     let global_rows: &[(&str, &str)] = &[
         ("Tab", "next screen"),
         ("Shift+Tab", "previous screen"),
+        ("[ / ]", "previous / next log-pane tab"),
+        ("+ / -", "grow / shrink log pane"),
         ("?", "toggle this help"),
         (":", "open command bar"),
         ("qq", "quit (double-tap; or :q)"),

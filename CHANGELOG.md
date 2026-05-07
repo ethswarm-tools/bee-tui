@@ -11,6 +11,22 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **Tabbed bottom log pane (increment 2 of 4).** Replaces the
+  single `bee::http` strip with a six-tab pane: Errors / Warn /
+  Info / Debug (filled by Bee's log in increment 3), Bee HTTP
+  (Bee's served-request log in increment 4), and bee::http (the
+  legacy bee-tui own-request tail, kept as the trust anchor).
+  Tab strip in the pane title; counts on each Bee-side tab.
+  - `[` / `]` cycle tabs (lazygit / k9s pattern; no conflict
+    with `Tab` / `Shift+Tab` which switch screens).
+  - `+` / `-` grow / shrink the pane height by one line each
+    (clamped to 4..24, default 10).
+  - The active tab + last height are persisted across launches
+    in `~/.local/state/bee-tui/state.toml` (XDG state dir; falls
+    back to `data_local_dir` on macOS / Windows). Override the
+    location with `$BEE_TUI_STATE`.
+  - The four severity tabs and Bee HTTP tab show a placeholder
+    until increment 3 wires the supervisor's log tail through.
 - **Spawn Bee from bee-tui (increment 1 of 4).** When `[bee].bin`
   + `[bee].config` are set in `config.toml` (or via `--bee-bin` /
   `--bee-config` CLI flags), bee-tui now launches Bee as a child

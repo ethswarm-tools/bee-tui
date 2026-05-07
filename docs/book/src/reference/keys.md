@@ -10,6 +10,8 @@ offline reference.
 |---|---|
 | `Tab` | Next screen |
 | `Shift+Tab` | Previous screen |
+| `[` / `]` | Previous / next tab on the bottom log pane (Errors / Warn / Info / Debug / Bee HTTP / bee::http). Persisted across launches. |
+| `+` / `-` | Grow / shrink the bottom log pane height by one line. Clamped to 4..24. Persisted across launches. |
 | `?` | Toggle help overlay |
 | `:` | Open command bar |
 | `qq` | Quit — double-tap within ~1.5 s. First `q` shows a footer hint; second `q` confirms. `:q` also works for an unguarded quit. |
