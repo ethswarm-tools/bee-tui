@@ -172,6 +172,11 @@ pub struct LogPane {
     /// placeholder text on the Bee-side tabs from "configure [bee]"
     /// to "(awaiting first log line)".
     spawn_active: bool,
+    /// Scroll offset for the active tab, in lines from the bottom.
+    /// 0 = auto-tail (default; latest entries at the bottom). When
+    /// non-zero, new entries arriving auto-bump the offset to keep
+    /// the visible window stable. Reset to 0 on tab switch.
+    scroll_offset: usize,
 }
 
 impl LogPane {
@@ -183,6 +188,7 @@ impl LogPane {
             active_tab: initial_tab,
             height: initial_height.clamp(LOG_PANE_MIN_HEIGHT, LOG_PANE_MAX_HEIGHT),
             spawn_active: false,
+            scroll_offset: 0,
         }
     }
 
@@ -203,9 +209,12 @@ impl LogPane {
 
     /// Cycle to the next tab (left → right, wrapping). Returns the
     /// new active tab so callers can persist state without re-reading.
+    /// Resets the scroll offset — the new tab's content has nothing
+    /// to do with where we were on the old one.
     pub fn next_tab(&mut self) -> LogTab {
         let i = (self.active_tab.index() + 1) % LogTab::ALL.len();
         self.active_tab = LogTab::from_index(i);
+        self.scroll_offset = 0;
         self.active_tab
     }
 
@@ -214,7 +223,39 @@ impl LogPane {
         let len = LogTab::ALL.len();
         let i = (self.active_tab.index() + len - 1) % len;
         self.active_tab = LogTab::from_index(i);
+        self.scroll_offset = 0;
         self.active_tab
+    }
+
+    /// Scroll the active tab up by `lines` (toward older entries).
+    /// Clamped at draw-time to the buffer length so the user can't
+    /// scroll past the top. `lines = 1` is the per-keystroke step;
+    /// callers can pass a larger value for page-scrolling.
+    pub fn scroll_up(&mut self, lines: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_add(lines);
+    }
+
+    /// Scroll the active tab down by `lines` (toward newer entries /
+    /// the tail). Saturates at 0, which is the auto-tail state.
+    pub fn scroll_down(&mut self, lines: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+    }
+
+    /// Snap back to auto-tail mode (scroll_offset = 0). The pane
+    /// resumes following new entries as they arrive.
+    pub fn resume_tail(&mut self) {
+        self.scroll_offset = 0;
+    }
+
+    /// `true` when the pane is auto-tailing (the default state).
+    pub fn is_tailing(&self) -> bool {
+        self.scroll_offset == 0
+    }
+
+    /// Lines the pane is currently scrolled back from the tail.
+    /// Useful for rendering "[paused N]" indicators in the title.
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_offset
     }
 
     /// Grow the pane by one line. Returns the new height. No-op once
@@ -232,8 +273,14 @@ impl LogPane {
     }
 
     /// Push a Bee log line to the appropriate tab. The supervisor's
-    /// log tailer (increment 3) calls this for each parsed line.
-    /// Bounded — when the ring is full the oldest entry is evicted.
+    /// log tailer calls this for each parsed line. Bounded — when
+    /// the ring is full the oldest entry is evicted.
+    ///
+    /// Scroll-stability: if this push lands on the *active* tab
+    /// AND we're currently scrolled back (not auto-tailing), bump
+    /// `scroll_offset` so the visible window stays anchored on the
+    /// same content rather than drifting upward as new lines push
+    /// the old ones up.
     pub fn push_bee(&mut self, tab: LogTab, line: BeeLogLine) {
         let buf = match tab {
             LogTab::Errors => &mut self.bee_buffers.errors,
@@ -243,15 +290,34 @@ impl LogPane {
             LogTab::BeeHttp => &mut self.bee_buffers.bee_http,
             LogTab::SelfHttp => return, // not a bee-side tab
         };
-        if buf.len() == BEE_TAB_RING_CAPACITY {
+        let was_full = buf.len() == BEE_TAB_RING_CAPACITY;
+        if was_full {
             buf.pop_front();
         }
         buf.push_back(line);
+        // Stabilise the user's view if they're scrolled back on
+        // this same tab. When the ring is already full the eviction
+        // already shifted our content by 1, so the offset doesn't
+        // need to bump — the visible range stays in place.
+        if tab == self.active_tab && self.scroll_offset > 0 && !was_full {
+            self.scroll_offset = self.scroll_offset.saturating_add(1);
+        }
     }
 
     fn pull_self_http(&mut self) {
         if let Some(c) = &self.capture {
-            self.self_http_entries = c.snapshot();
+            let new = c.snapshot();
+            // Same stability logic as push_bee: when the operator
+            // is scrolled back on the SelfHttp tab and the capture
+            // grew by N entries, bump the offset by N so the visible
+            // range doesn't drift.
+            if self.active_tab == LogTab::SelfHttp && self.scroll_offset > 0 {
+                let delta = new.len().saturating_sub(self.self_http_entries.len());
+                if delta > 0 {
+                    self.scroll_offset = self.scroll_offset.saturating_add(delta);
+                }
+            }
+            self.self_http_entries = new;
         }
     }
 }
@@ -267,17 +333,26 @@ impl Component for LogPane {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let t = theme::active();
         let active = self.active_tab;
+
+        // Clamp the scroll offset against what the active tab can
+        // actually scroll. Pane content area excludes top + bottom
+        // borders; we approximate from the outer area here.
+        let content_h = (area.height as usize).saturating_sub(2);
+        let total_lines = self.active_tab_total_lines();
+        let max_offset = total_lines.saturating_sub(content_h);
+        if self.scroll_offset > max_offset {
+            self.scroll_offset = max_offset;
+        }
+
         let block = Block::default().borders(Borders::ALL).title(tab_title_line(
             active,
             &self.bee_buffers,
+            self.scroll_offset,
             t,
         ));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        // Single content row — the inner area minus the borders. The
-        // tab strip lives in the title, so we get one extra line for
-        // payload vs. the legacy layout.
         let content_area = Layout::vertical([Constraint::Min(0)])
             .split(inner)
             .first()
@@ -289,12 +364,15 @@ impl Component for LogPane {
             tab => render_bee_tab(&self.bee_buffers, tab, self.spawn_active, t),
         };
 
-        // Show the most recent N lines (newest at bottom — tail
-        // semantics). Empty state already produced its own line.
-        let take_last = content_area.height as usize;
-        let visible: Vec<Line> = if lines.len() > take_last {
-            let skip = lines.len() - take_last;
-            lines.into_iter().skip(skip).collect()
+        // Pick the visible window: tail semantics + scroll offset.
+        // - tailing (offset = 0): show the last `render_h` lines.
+        // - scrolled back: show [end-render_h .. end), where
+        //   end = total - offset.
+        let render_h = content_area.height as usize;
+        let visible: Vec<Line> = if lines.len() > render_h {
+            let end = lines.len().saturating_sub(self.scroll_offset);
+            let start = end.saturating_sub(render_h);
+            lines.into_iter().skip(start).take(end - start).collect()
         } else {
             lines
         };
@@ -304,12 +382,28 @@ impl Component for LogPane {
     }
 }
 
+impl LogPane {
+    /// Number of payload lines the active tab currently has. Used
+    /// by `draw()` to clamp the scroll offset and by tests.
+    pub fn active_tab_total_lines(&self) -> usize {
+        match self.active_tab {
+            LogTab::SelfHttp => self.self_http_entries.len(),
+            tab => self.bee_buffers.count(tab),
+        }
+    }
+}
+
 /// Build the `[Errors 3] [Warn 0] [Info 247] [Debug 1.2k] [Bee HTTP] [bee::http]`
 /// title strip with the active tab highlighted and counters from the
 /// per-tab buffers. Counters above 999 collapse to `1.2k` style so
 /// the strip fits an 80-column terminal.
-fn tab_title_line<'a>(active: LogTab, bufs: &BeeLogBuffers, t: &theme::Theme) -> Line<'a> {
-    let mut spans: Vec<Span> = Vec::with_capacity(LogTab::ALL.len() * 2 + 1);
+fn tab_title_line<'a>(
+    active: LogTab,
+    bufs: &BeeLogBuffers,
+    scroll_offset: usize,
+    t: &theme::Theme,
+) -> Line<'a> {
+    let mut spans: Vec<Span> = Vec::with_capacity(LogTab::ALL.len() * 2 + 2);
     spans.push(Span::raw(" "));
     for tab in LogTab::ALL {
         let count = bufs.count(tab);
@@ -328,6 +422,15 @@ fn tab_title_line<'a>(active: LogTab, bufs: &BeeLogBuffers, t: &theme::Theme) ->
         };
         spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
+    }
+    // "paused N ↑" indicator when the operator has scrolled back.
+    // Bright warn-yellow so it's impossible to miss that the pane
+    // is no longer auto-tailing.
+    if scroll_offset > 0 {
+        spans.push(Span::styled(
+            format!(" paused {scroll_offset} ↑ "),
+            Style::default().fg(t.warn).add_modifier(Modifier::BOLD),
+        ));
     }
     Line::from(spans)
 }
@@ -513,6 +616,105 @@ mod tests {
         pane.shrink();
         pane.shrink();
         assert_eq!(pane.height(), LOG_PANE_MIN_HEIGHT);
+    }
+
+    #[test]
+    fn fresh_pane_is_tailing() {
+        let pane = LogPane::new(None, LogTab::Errors, 10);
+        assert!(pane.is_tailing());
+        assert_eq!(pane.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_up_disables_tail_and_remembers_offset() {
+        let mut pane = LogPane::new(None, LogTab::Errors, 10);
+        pane.scroll_up(3);
+        assert!(!pane.is_tailing());
+        assert_eq!(pane.scroll_offset(), 3);
+        pane.scroll_up(2);
+        assert_eq!(pane.scroll_offset(), 5);
+    }
+
+    #[test]
+    fn scroll_down_eventually_resumes_tail() {
+        let mut pane = LogPane::new(None, LogTab::Errors, 10);
+        pane.scroll_up(5);
+        pane.scroll_down(2);
+        assert_eq!(pane.scroll_offset(), 3);
+        // Saturating-sub: scrolling down past 0 snaps to tail.
+        pane.scroll_down(100);
+        assert_eq!(pane.scroll_offset(), 0);
+        assert!(pane.is_tailing());
+    }
+
+    #[test]
+    fn resume_tail_resets_offset() {
+        let mut pane = LogPane::new(None, LogTab::Errors, 10);
+        pane.scroll_up(7);
+        pane.resume_tail();
+        assert!(pane.is_tailing());
+    }
+
+    #[test]
+    fn tab_switch_resets_scroll_offset() {
+        // A scroll offset on tab A makes no sense on tab B — different
+        // ring buffer, different content. Reset on switch.
+        let mut pane = LogPane::new(None, LogTab::Errors, 10);
+        pane.scroll_up(4);
+        pane.next_tab();
+        assert_eq!(pane.scroll_offset(), 0);
+        assert!(pane.is_tailing());
+        // Same on prev_tab.
+        pane.scroll_up(4);
+        pane.prev_tab();
+        assert_eq!(pane.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn push_bee_bumps_offset_for_active_tab_when_scrolled() {
+        // Scroll-back stability: when the operator is scrolled up
+        // and a new entry lands on the same tab, the offset bumps
+        // so the visible window stays anchored on the same content.
+        let mut pane = LogPane::new(None, LogTab::Errors, 10);
+        pane.push_bee(LogTab::Errors, line("err1"));
+        pane.push_bee(LogTab::Errors, line("err2"));
+        pane.scroll_up(2);
+        pane.push_bee(LogTab::Errors, line("err3"));
+        // Offset went from 2 → 3 to compensate for the new entry
+        // shifting the window's relative position.
+        assert_eq!(pane.scroll_offset(), 3);
+    }
+
+    #[test]
+    fn push_bee_doesnt_bump_offset_when_tailing() {
+        // While tailing (offset = 0) the pane should keep tailing
+        // without spuriously paging into "paused" mode.
+        let mut pane = LogPane::new(None, LogTab::Errors, 10);
+        for i in 0..5 {
+            pane.push_bee(LogTab::Errors, line(&format!("e{i}")));
+        }
+        assert_eq!(pane.scroll_offset(), 0);
+        assert!(pane.is_tailing());
+    }
+
+    #[test]
+    fn push_bee_doesnt_bump_offset_for_inactive_tab() {
+        // Activity on a different tab shouldn't move the operator's
+        // anchor on the one they're reading.
+        let mut pane = LogPane::new(None, LogTab::Errors, 10);
+        pane.push_bee(LogTab::Errors, line("err1"));
+        pane.scroll_up(1);
+        let before = pane.scroll_offset();
+        pane.push_bee(LogTab::Debug, line("dbg1"));
+        assert_eq!(pane.scroll_offset(), before);
+    }
+
+    fn line(msg: &str) -> BeeLogLine {
+        BeeLogLine {
+            timestamp: "t".into(),
+            logger: "node/test".into(),
+            message: msg.into(),
+        }
     }
 
     #[test]

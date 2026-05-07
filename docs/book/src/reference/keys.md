@@ -12,6 +12,9 @@ offline reference.
 | `Shift+Tab` | Previous screen |
 | `[` / `]` | Previous / next tab on the bottom log pane (Errors / Warn / Info / Debug / Bee HTTP / bee::http). Persisted across launches. |
 | `+` / `-` | Grow / shrink the bottom log pane height by one line. Clamped to 4..24. Persisted across launches. |
+| `Shift+↑` / `Shift+↓` | Scroll the active log tab back / forward by one line. Pauses auto-tail; the title shows a `paused N ↑` indicator. |
+| `Shift+PgUp` / `Shift+PgDn` | Same, ten lines at a time. |
+| `Shift+End` | Resume auto-tail (snap back to the latest entries). |
 | `?` | Toggle help overlay |
 | `:` | Open command bar |
 | `qq` | Quit — double-tap within ~1.5 s. First `q` shows a footer hint; second `q` confirms. `:q` also works for an unguarded quit. |

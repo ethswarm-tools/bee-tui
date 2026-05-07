@@ -52,16 +52,34 @@ impl BeeLogEntry {
     /// `node/api/access`, and similar variants across Bee versions).
     /// They get their own tab so served-request traffic doesn't
     /// drown out the severity views.
-    ///
-    /// Limitation: bee-tui's *own* requests against Bee also produce
-    /// these lines on the server side. There's no reliable way to
-    /// filter them out from Bee's perspective (User-Agent isn't in
-    /// the structured fields). The cockpit's bee::http tab — fed
-    /// from bee-tui's own client tracing — is the better place to
-    /// see "what bee-tui called"; this tab is "everything Bee
-    /// served", which usually overlaps but doesn't have to.
     pub fn is_bee_http(&self) -> bool {
         self.logger.starts_with("node/api")
+    }
+
+    /// Heuristic: was this `node/api` line caused by a bee-tui
+    /// request? Checks the line's extras for any User-Agent-like
+    /// field (keys vary across Bee versions: `user_agent`,
+    /// `user-agent`, `useragent`, sometimes `ua`) whose value
+    /// contains `bee-tui`. The cockpit sends a stable UA on every
+    /// request so the filter pivots cleanly.
+    ///
+    /// Returns `false` when no UA field is present — operators
+    /// running an older Bee build that doesn't log UA will see
+    /// bee-tui's own traffic in the Bee HTTP tab. The fallback is
+    /// the bee::http tab (the trust anchor) which always reflects
+    /// bee-tui's perspective regardless of Bee's logging.
+    pub fn is_bee_tui_request(&self) -> bool {
+        for (k, v) in &self.extras {
+            let key = k.to_ascii_lowercase();
+            if matches!(
+                key.as_str(),
+                "user_agent" | "user-agent" | "useragent" | "ua"
+            ) && v.contains("bee-tui")
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Map the `level` + logger combination to the cockpit tab it
@@ -328,6 +346,43 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(e.tab(), Some(LogTab::Errors));
+    }
+
+    #[test]
+    fn is_bee_tui_request_detects_user_agent() {
+        // Bee logs vary by version: user_agent (snake_case),
+        // user-agent (kebab), useragent (squashed), ua (short).
+        // All four should match.
+        for key in ["user_agent", "user-agent", "useragent", "ua"] {
+            let e = BeeLogEntry {
+                extras: vec![(key.into(), "bee-tui/1.0.0".into())],
+                ..Default::default()
+            };
+            assert!(e.is_bee_tui_request(), "key {key:?} should match");
+        }
+    }
+
+    #[test]
+    fn is_bee_tui_request_is_case_insensitive_on_keys() {
+        // Defensive — Bee might capitalize differently across
+        // versions. Match regardless of case on the key.
+        let e = BeeLogEntry {
+            extras: vec![("User-Agent".into(), "bee-tui/1.0.0 extra-suffix".into())],
+            ..Default::default()
+        };
+        assert!(e.is_bee_tui_request());
+    }
+
+    #[test]
+    fn is_bee_tui_request_rejects_other_clients() {
+        let e = BeeLogEntry {
+            extras: vec![("user_agent".into(), "curl/8.0.1".into())],
+            ..Default::default()
+        };
+        assert!(!e.is_bee_tui_request());
+        // Empty extras → not a bee-tui request.
+        let e = BeeLogEntry::default();
+        assert!(!e.is_bee_tui_request());
     }
 
     #[test]

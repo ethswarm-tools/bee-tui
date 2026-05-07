@@ -32,7 +32,7 @@ use crate::{
     state::State,
     theme,
     tui::{Event, Tui},
-    watch::{BeeWatch, HealthSnapshot},
+    watch::{BeeWatch, HealthSnapshot, RefreshProfile},
 };
 
 pub struct App {
@@ -207,8 +207,13 @@ impl App {
 
         // Spawn the watch / informer hub. Pollers attach to children
         // of `root_cancel`, so quitting cancels everything in one go.
+        // The cadence preset comes from `[ui].refresh` — operators
+        // who want the original 2 s health stream can opt into
+        // `"live"`; the default is "calmer" (4 s health, 10 s
+        // topology).
+        let refresh = RefreshProfile::from_config(&config.ui.refresh);
         let root_cancel = CancellationToken::new();
-        let watch = BeeWatch::start(api.clone(), &root_cancel);
+        let watch = BeeWatch::start_with_profile(api.clone(), &root_cancel, refresh);
         let health_rx = watch.health();
 
         let screens = build_screens(&api, &watch);
@@ -456,6 +461,35 @@ impl App {
             self.log_pane.shrink();
             return Ok(());
         }
+        // Log-pane scroll. Shift+Up/Down step one line; Shift+PgUp/PgDn
+        // step ten; Shift+End resumes tail. The Shift modifier
+        // distinguishes from in-screen scroll (j/k/PgUp/PgDn) bound
+        // by S2/S6/S9 — those keep working without conflict.
+        if key.modifiers == crossterm::event::KeyModifiers::SHIFT {
+            match key.code {
+                crossterm::event::KeyCode::Up => {
+                    self.log_pane.scroll_up(1);
+                    return Ok(());
+                }
+                crossterm::event::KeyCode::Down => {
+                    self.log_pane.scroll_down(1);
+                    return Ok(());
+                }
+                crossterm::event::KeyCode::PageUp => {
+                    self.log_pane.scroll_up(10);
+                    return Ok(());
+                }
+                crossterm::event::KeyCode::PageDown => {
+                    self.log_pane.scroll_down(10);
+                    return Ok(());
+                }
+                crossterm::event::KeyCode::End => {
+                    self.log_pane.resume_tail();
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
         // `q` is the easy-to-misclick exit. Require a double-tap
         // within `QUIT_CONFIRM_WINDOW` so a stray keystroke doesn't
         // kill an active monitoring session. `Ctrl+C` / `Ctrl+D`
@@ -652,7 +686,8 @@ impl App {
         // hub spawns under the same root_cancel so quit-time teardown
         // still walks the whole tree in one go.
         self.watch.shutdown();
-        let new_watch = BeeWatch::start(new_api.clone(), &self.root_cancel);
+        let refresh = RefreshProfile::from_config(&self.config.ui.refresh);
+        let new_watch = BeeWatch::start_with_profile(new_api.clone(), &self.root_cancel, refresh);
         let new_health_rx = new_watch.health();
         let new_screens = build_screens(&new_api, &new_watch);
         self.api = new_api;
@@ -1122,6 +1157,9 @@ fn draw_help_overlay(
         ("Shift+Tab", "previous screen"),
         ("[ / ]", "previous / next log-pane tab"),
         ("+ / -", "grow / shrink log pane"),
+        ("Shift+↑/↓", "scroll log pane (1 line); pauses auto-tail"),
+        ("Shift+PgUp/PgDn", "scroll log pane (10 lines)"),
+        ("Shift+End", "resume auto-tail"),
         ("?", "toggle this help"),
         (":", "open command bar"),
         ("qq", "quit (double-tap; or :q)"),

@@ -20,6 +20,13 @@ use color_eyre::eyre::{WrapErr, eyre};
 
 use crate::config::NodeConfig;
 
+/// User-Agent header bee-tui sends on every Bee API call. Enables
+/// the Bee HTTP log-pane tab to filter bee-tui's own traffic out
+/// of the "everything Bee served" view, leaving only third-party
+/// clients (curl / swarm-cli / browser) visible. Format follows
+/// the convention `<product>/<version>` per RFC 7231 § 5.5.3.
+pub const BEE_TUI_USER_AGENT: &str = concat!("bee-tui/", env!("CARGO_PKG_VERSION"));
+
 /// Active connection to one Bee node. Cheap to clone (`bee::Client`
 /// is `Arc<Inner>` under the hood).
 #[derive(Clone, Debug)]
@@ -43,11 +50,27 @@ impl ApiClient {
         let url = node.url.trim_end_matches('/').to_string();
         let token = node.resolved_token();
         let authenticated = token.is_some();
-        let inner = match token.as_deref() {
-            Some(t) => bee::Client::with_token(&url, t)
-                .map_err(|e| eyre!("invalid bee endpoint or token: {e}"))?,
-            None => bee::Client::new(&url).map_err(|e| eyre!("invalid bee endpoint: {e}"))?,
-        };
+        // Build a reqwest client that stamps every outbound call with
+        // bee-tui's User-Agent. Bee logs the UA on its `node/api`
+        // lines (when configured to do so), which lets the cockpit's
+        // Bee HTTP tab filter bee-tui's own traffic out — leaving the
+        // tab as a clean view of third-party clients.
+        let mut http_builder = reqwest::Client::builder().user_agent(BEE_TUI_USER_AGENT);
+        // Auth is normally injected by `with_token`'s default headers.
+        // Since we're handing in our own client, we replicate that
+        // here so bearer auth still works on restricted-mode nodes.
+        if let Some(t) = token.as_deref() {
+            let mut headers = reqwest::header::HeaderMap::new();
+            let value = reqwest::header::HeaderValue::from_str(&format!("Bearer {t}"))
+                .map_err(|e| eyre!("invalid bearer token: {e}"))?;
+            headers.insert(reqwest::header::AUTHORIZATION, value);
+            http_builder = http_builder.default_headers(headers);
+        }
+        let http = http_builder
+            .build()
+            .map_err(|e| eyre!("failed to build http client: {e}"))?;
+        let inner = bee::Client::with_http_client(&url, http)
+            .map_err(|e| eyre!("invalid bee endpoint: {e}"))?;
         Ok(Self {
             name: node.name.clone(),
             url,

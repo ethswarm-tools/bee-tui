@@ -193,6 +193,100 @@ impl LotterySnapshot {
     }
 }
 
+/// Polling-cadence preset chosen by `[ui].refresh` in `config.toml`.
+/// Each variant maps every per-resource interval to a fixed value,
+/// trading freshness for HTTP volume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshProfile {
+    /// Original cockpit cadence — 2 s health / 5 s topology+tags /
+    /// 30 s swap+lottery+transactions / 60 s network. Use when
+    /// actively diagnosing; floods the bottom Bee HTTP tab.
+    Live,
+    /// Halved-fast-tier cadence (4 s health, 10 s topology+tags,
+    /// otherwise the same as Live). Default for new installs since
+    /// the tabbed log pane shipped — keeps the Bee HTTP tab readable
+    /// without losing operator-relevant freshness.
+    Default,
+    /// Minimal-traffic cadence (8 s health, 20 s topology+tags,
+    /// 60 s mid tier, 120 s network). For "leave it open all day"
+    /// monitoring.
+    Slow,
+}
+
+impl RefreshProfile {
+    /// Parse from the `[ui].refresh` config value. Unknown strings
+    /// fall back to `Default` with a tracing warning so a typo
+    /// can't break startup.
+    pub fn from_config(s: &str) -> Self {
+        match s {
+            "live" => Self::Live,
+            "default" => Self::Default,
+            "slow" => Self::Slow,
+            other => {
+                tracing::warn!(
+                    "unknown [ui].refresh value {other:?}; falling back to \"default\". \
+                     Recognised: live | default | slow."
+                );
+                Self::Default
+            }
+        }
+    }
+
+    pub fn health(self) -> Duration {
+        match self {
+            Self::Live => Duration::from_secs(2),
+            Self::Default => Duration::from_secs(4),
+            Self::Slow => Duration::from_secs(8),
+        }
+    }
+    pub fn topology(self) -> Duration {
+        match self {
+            Self::Live => Duration::from_secs(5),
+            Self::Default => Duration::from_secs(10),
+            Self::Slow => Duration::from_secs(20),
+        }
+    }
+    pub fn stamps(self) -> Duration {
+        // Stamps were already 10s under Live; we slow them under
+        // Slow only. Utilization grows at upload rate, not poll rate.
+        match self {
+            Self::Live | Self::Default => Duration::from_secs(10),
+            Self::Slow => Duration::from_secs(20),
+        }
+    }
+    pub fn tags(self) -> Duration {
+        match self {
+            Self::Live => Duration::from_secs(5),
+            Self::Default => Duration::from_secs(10),
+            Self::Slow => Duration::from_secs(20),
+        }
+    }
+    pub fn swap(self) -> Duration {
+        match self {
+            Self::Live | Self::Default => Duration::from_secs(30),
+            Self::Slow => Duration::from_secs(60),
+        }
+    }
+    pub fn lottery(self) -> Duration {
+        match self {
+            Self::Live | Self::Default => Duration::from_secs(30),
+            Self::Slow => Duration::from_secs(60),
+        }
+    }
+    pub fn transactions(self) -> Duration {
+        match self {
+            Self::Live | Self::Default => Duration::from_secs(30),
+            Self::Slow => Duration::from_secs(60),
+        }
+    }
+    pub fn network(self) -> Duration {
+        match self {
+            Self::Live | Self::Default => Duration::from_secs(60),
+            Self::Slow => Duration::from_secs(120),
+        }
+    }
+}
+
 /// Watch-channel hub. Owns one [`watch::Sender`] per resource group;
 /// hands out clones of the receiver via `health()` / `stamps()` /
 /// `swap()` / `lottery()` / `topology()` / `network()` etc.
@@ -210,62 +304,57 @@ pub struct BeeWatch {
 }
 
 impl BeeWatch {
-    /// Spawn the polling tasks. The returned hub stays alive (and
-    /// pollers keep running) until `shutdown()` is called or `cancel`
-    /// is cancelled by the caller's parent.
+    /// Spawn the polling tasks at [`RefreshProfile::Default`] cadence.
+    /// Use [`BeeWatch::start_with_profile`] to override.
     pub fn start(client: Arc<ApiClient>, parent_cancel: &CancellationToken) -> Self {
+        Self::start_with_profile(client, parent_cancel, RefreshProfile::Default)
+    }
+
+    /// Spawn the polling tasks at the supplied cadence. The returned
+    /// hub stays alive (and pollers keep running) until `shutdown()`
+    /// is called or `cancel` is cancelled by the caller's parent.
+    pub fn start_with_profile(
+        client: Arc<ApiClient>,
+        parent_cancel: &CancellationToken,
+        profile: RefreshProfile,
+    ) -> Self {
         let cancel = parent_cancel.child_token();
         let (health_tx, health_rx) = watch::channel(HealthSnapshot::default());
-        spawn_health_poller(
-            client.clone(),
-            health_tx,
-            cancel.clone(),
-            Duration::from_secs(2),
-        );
+        spawn_health_poller(client.clone(), health_tx, cancel.clone(), profile.health());
         let (stamps_tx, stamps_rx) = watch::channel(StampsSnapshot::default());
-        spawn_stamps_poller(
-            client.clone(),
-            stamps_tx,
-            cancel.clone(),
-            Duration::from_secs(10),
-        );
+        spawn_stamps_poller(client.clone(), stamps_tx, cancel.clone(), profile.stamps());
         let (swap_tx, swap_rx) = watch::channel(SwapSnapshot::default());
-        spawn_swap_poller(
-            client.clone(),
-            swap_tx,
-            cancel.clone(),
-            Duration::from_secs(30),
-        );
+        spawn_swap_poller(client.clone(), swap_tx, cancel.clone(), profile.swap());
         let (lottery_tx, lottery_rx) = watch::channel(LotterySnapshot::default());
         spawn_lottery_poller(
             client.clone(),
             lottery_tx,
             cancel.clone(),
-            Duration::from_secs(30),
+            profile.lottery(),
         );
         let (topology_tx, topology_rx) = watch::channel(TopologySnapshot::default());
         spawn_topology_poller(
             client.clone(),
             topology_tx,
             cancel.clone(),
-            Duration::from_secs(5),
+            profile.topology(),
         );
         let (network_tx, network_rx) = watch::channel(NetworkSnapshot::default());
         spawn_network_poller(
             client.clone(),
             network_tx,
             cancel.clone(),
-            Duration::from_secs(60),
+            profile.network(),
         );
         let (transactions_tx, transactions_rx) = watch::channel(TransactionsSnapshot::default());
         spawn_transactions_poller(
             client.clone(),
             transactions_tx,
             cancel.clone(),
-            Duration::from_secs(30),
+            profile.transactions(),
         );
         let (tags_tx, tags_rx) = watch::channel(TagsSnapshot::default());
-        spawn_tags_poller(client, tags_tx, cancel.clone(), Duration::from_secs(5));
+        spawn_tags_poller(client, tags_tx, cancel.clone(), profile.tags());
         Self {
             health_rx,
             stamps_rx,

@@ -11,6 +11,48 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **bee-tui-only User-Agent + Bee HTTP tab filtering.** Every Bee
+  API call now ships `User-Agent: bee-tui/<version>` (set on the
+  reqwest client we hand into `bee::Client::with_http_client`).
+  The Bee HTTP tab parses each `node/api*` log line for the
+  `user_agent` / `user-agent` / `useragent` / `ua` field
+  (case-insensitive) and drops lines whose value contains
+  `bee-tui` — leaving only third-party clients (curl, swarm-cli,
+  browser) on that tab. The cockpit's bee::http tab — fed from
+  bee-tui's own client tracing — still shows everything bee-tui
+  itself called. The two tabs are now genuinely disjoint when
+  Bee logs the User-Agent header.
+
+  If Bee doesn't log User-Agent (older builds), the filter is a
+  silent no-op and bee-tui's calls still appear on Bee HTTP. No
+  harm done; bee::http remains the trust anchor.
+
+- **`[ui].refresh` polling-cadence preset.** Three presets:
+  - `live` — original 2 s health / 5 s topology+tags / 30 s
+    swap+lottery+transactions / 60 s network. Use when actively
+    diagnosing.
+  - `default` (NEW DEFAULT) — calmer 4 s health / 10 s topology+tags
+    / same mid + slow tiers as live. About half the request volume.
+  - `slow` — minimal 8 s / 20 s / 60 s / 120 s. For
+    "leave it open all day" monitoring.
+
+  Operators upgrading from a prior install will see the new default
+  cadence unless they explicitly set `refresh = "live"` to keep
+  the old feel. UX impact of the slowdown: ping indicator updates
+  every 4 s instead of 2 s; bin saturation / topology refresh every
+  10 s instead of 5 s. Drills, the rchash benchmark, and every
+  Enter-fetch are unaffected (they're synchronous, not poll-driven).
+
+- **Scrollable log pane.** `Shift+↑` / `Shift+↓` step one line back
+  / forward through the active tab's history. `Shift+PgUp` /
+  `Shift+PgDn` step ten. `Shift+End` resumes auto-tail. While
+  scrolled back, the title strip shows a `paused N ↑` indicator in
+  warn-yellow so it's impossible to forget you're not seeing the
+  latest. New entries arriving on the active tab auto-bump the
+  offset to keep the visible window anchored on the same content
+  rather than drifting upward as new lines push the old ones up.
+  Switching tabs (`[` / `]`) resets to tail mode.
+
 - **Bee HTTP tab fed from server-side log (increment 4 of 4).**
   Lines with `logger=node/api*` (covers `node/api`,
   `node/api/access`, etc. across Bee versions) now route to the

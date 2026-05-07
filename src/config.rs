@@ -101,9 +101,21 @@ pub struct UiConfig {
     /// wired through every component; reserved for follow-up.
     #[serde(default)]
     pub ascii_fallback: bool,
+    /// Polling-cadence preset. Recognised values:
+    /// - `"live"` — original 2 s health / 5 s topology+tags / 30 s swap+lottery+transactions / 60 s network. Most chatty; useful when actively diagnosing.
+    /// - `"default"` — calmer (4 s health / 10 s topology+tags / 30 s mid tier / 60 s network). About half the request volume of `live`. The default for new installs since the bottom log pane was tabbed.
+    /// - `"slow"` — minimal (8 s / 20 s / 60 s / 120 s). For "leave it open all day" monitoring.
+    ///
+    /// Unknown values fall back to `default` with a tracing warning.
+    #[serde(default = "default_refresh")]
+    pub refresh: String,
 }
 
 fn default_theme() -> String {
+    "default".into()
+}
+
+fn default_refresh() -> String {
     "default".into()
 }
 

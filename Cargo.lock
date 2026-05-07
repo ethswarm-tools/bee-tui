@@ -253,6 +253,7 @@ dependencies = [
  "num-bigint",
  "pretty_assertions",
  "ratatui",
+ "reqwest",
  "serde",
  "serde_json",
  "signal-hook 0.3.18",

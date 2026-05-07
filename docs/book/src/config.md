@@ -66,6 +66,7 @@ ascii_fallback  = false
 |---|---|---|---|
 | `theme` | `"default"` \| `"mono"` | `"default"` | Slot-based palette. `default` is vibrant green/yellow/red. `mono` is greyscale only — useful on terminals where colour is muted or distracting, or when piping to a recording tool that doesn't preserve colour. |
 | `ascii_fallback` | bool | `false` | If true, every component renders ASCII glyphs (`OK / X / ! / > / # / .`) instead of Unicode (`✓ ⚠ ✗ ▶ ▇ ░`). Equivalent to passing `--ascii` on the command line. Use on Windows Terminal pre-Win11, screen readers, or SSH chains that mangle Unicode. |
+| `refresh` | `"live"` \| `"default"` \| `"slow"` | `"default"` | Polling cadence preset. `live` matches the original 2 s health / 5 s topology+tags rates (chatty; use when actively diagnosing). `default` doubles the fast-tier intervals (4 s / 10 s) — about half the request volume, no perceptible loss for monitoring. `slow` is minimal (8 s / 20 s / 60 s / 120 s) for leave-it-open-all-day operators. |
 
 Unknown values for `theme` fall back to `"default"` with a
 single tracing warning so a typo doesn't break startup.

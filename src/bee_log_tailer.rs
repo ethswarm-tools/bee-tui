@@ -131,10 +131,22 @@ async fn run(
                     let new_leftover = leftover[last_end..].to_string();
                     leftover = new_leftover;
                     for line in emitted_lines {
-                        if let Some(entry) = parse_line(&line)
-                            && let Some(tab) = entry.tab()
-                            && tx.send((tab, entry.to_log_line())).is_err()
-                        {
+                        let Some(entry) = parse_line(&line) else {
+                            continue;
+                        };
+                        let Some(tab) = entry.tab() else {
+                            continue;
+                        };
+                        // Drop bee-tui's own requests from the Bee
+                        // HTTP tab — operators want the tab to show
+                        // *other* clients (curl / swarm-cli /
+                        // browser). bee-tui's own outbound calls
+                        // are still visible on the bee::http tab,
+                        // sourced from the client-side capture.
+                        if tab == LogTab::BeeHttp && entry.is_bee_tui_request() {
+                            continue;
+                        }
+                        if tx.send((tab, entry.to_log_line())).is_err() {
                             tracing::debug!("bee-log tailer: receiver dropped; exiting");
                             return;
                         }
