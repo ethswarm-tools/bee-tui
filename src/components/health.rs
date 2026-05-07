@@ -23,7 +23,7 @@ use tokio::sync::watch;
 use super::Component;
 use crate::action::Action;
 use crate::api::ApiClient;
-use crate::watch::HealthSnapshot;
+use crate::watch::{HealthSnapshot, TopologySnapshot};
 
 /// Tri-state outcome with an `Unknown` for "data not yet loaded".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,27 +66,42 @@ pub struct Gate {
 }
 
 /// S1 component. Subscribes to the [`HealthSnapshot`] watch channel
-/// from the [`crate::watch::BeeWatch`] hub and renders a gate list.
+/// from the [`crate::watch::BeeWatch`] hub plus the [`TopologySnapshot`]
+/// stream that drives the bin-saturation gate.
 pub struct Health {
     api: Arc<ApiClient>,
     rx: watch::Receiver<HealthSnapshot>,
+    topology_rx: watch::Receiver<TopologySnapshot>,
     snapshot: HealthSnapshot,
+    topology: TopologySnapshot,
 }
 
 impl Health {
-    pub fn new(api: Arc<ApiClient>, rx: watch::Receiver<HealthSnapshot>) -> Self {
+    pub fn new(
+        api: Arc<ApiClient>,
+        rx: watch::Receiver<HealthSnapshot>,
+        topology_rx: watch::Receiver<TopologySnapshot>,
+    ) -> Self {
         let snapshot = rx.borrow().clone();
-        Self { api, rx, snapshot }
+        let topology = topology_rx.borrow().clone();
+        Self {
+            api,
+            rx,
+            topology_rx,
+            snapshot,
+            topology,
+        }
     }
 
     fn pull_latest(&mut self) {
         self.snapshot = self.rx.borrow().clone();
+        self.topology = self.topology_rx.borrow().clone();
     }
 
     /// Pure, snapshot-driven gate computation. Exposed for snapshot
-    /// tests so they can stub a [`HealthSnapshot`] and assert the
-    /// resulting gate list without a running app loop.
-    pub fn gates_for(snap: &HealthSnapshot) -> Vec<Gate> {
+    /// tests so they can stub the inputs and assert the resulting
+    /// gate list without a running app loop.
+    pub fn gates_for(snap: &HealthSnapshot, topology: Option<&TopologySnapshot>) -> Vec<Gate> {
         let mut gates = Vec::with_capacity(10);
 
         // 1. API reachable -------------------------------------------------
@@ -231,13 +246,12 @@ impl Health {
             gates.push(unknown("Reserve"));
         }
 
-        // 6. Bin saturation — DEFERRED to v0.2 (needs /topology poller)
-        gates.push(Gate {
-            label: "Bin saturation",
-            status: GateStatus::Unknown,
-            value: "(/topology not polled yet)".into(),
-            why: Some("v0.2: per-bin starvation detection".into()),
-        });
+        // 6. Bin saturation — derived from /topology populations vs
+        // the bee-go SaturationPeers=8 constant. We flag any bin at
+        // or below the kademlia depth that has fewer than 8
+        // connected peers; far bins past the depth are expected to
+        // be sparse and don't trigger this gate.
+        gates.push(bin_saturation_gate(topology));
 
         // 8 / 9 / 10 — redistribution -------------------------------------
         if let Some(r) = &snap.redistribution {
@@ -333,6 +347,81 @@ fn unknown(label: &'static str) -> Gate {
     }
 }
 
+/// Threshold for the bin-saturation gate. Mirrors bee-go's
+/// `SaturationPeers` constant (`pkg/topology/kademlia/kademlia.go:54`).
+const SATURATION_PEERS: u64 = 8;
+/// Cap on the number of starving bin numbers listed inline in the
+/// gate's value string. Avoids one mega-line when a brand-new node
+/// reports every bin as starving.
+const STARVING_LIST_CAP: usize = 5;
+
+fn bin_saturation_gate(topology: Option<&TopologySnapshot>) -> Gate {
+    let Some(snap) = topology else {
+        return unknown("Bin saturation");
+    };
+    if let Some(err) = &snap.last_error {
+        return Gate {
+            label: "Bin saturation",
+            status: GateStatus::Unknown,
+            value: format!("topology error: {err}"),
+            why: None,
+        };
+    }
+    let Some(t) = &snap.topology else {
+        return unknown("Bin saturation");
+    };
+    // Only flag bins at or below the kademlia depth — bins beyond
+    // depth are expected to be sparse during normal operation.
+    let starving: Vec<u8> = t
+        .bins
+        .iter()
+        .enumerate()
+        .filter_map(|(i, b)| {
+            let bin = i as u8;
+            if bin <= t.depth && b.connected < SATURATION_PEERS {
+                Some(bin)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if starving.is_empty() {
+        Gate {
+            label: "Bin saturation",
+            status: GateStatus::Pass,
+            value: format!(
+                "all bins ≤ depth ({}) saturated (≥{SATURATION_PEERS})",
+                t.depth
+            ),
+            why: None,
+        }
+    } else {
+        let listed: Vec<String> = starving
+            .iter()
+            .take(STARVING_LIST_CAP)
+            .map(|b| format!("bin {b}"))
+            .collect();
+        let suffix = if starving.len() > STARVING_LIST_CAP {
+            format!(" (+{} more)", starving.len() - STARVING_LIST_CAP)
+        } else {
+            String::new()
+        };
+        Gate {
+            label: "Bin saturation",
+            status: GateStatus::Warn,
+            value: format!(
+                "{} starving: {}{suffix}",
+                starving.len(),
+                listed.join(", ")
+            ),
+            why: Some(
+                "manually `connect` more peers or wait — kademlia fills bins as the node sees more traffic"
+                    .into(),
+            ),
+        }
+    }
+}
+
 impl Component for Health {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if matches!(action, Action::Tick) {
@@ -382,7 +471,7 @@ impl Component for Health {
 
         // ---- Gates ---------------------------------------------------
         let mut lines: Vec<Line> = Vec::new();
-        for g in Self::gates_for(&self.snapshot) {
+        for g in Self::gates_for(&self.snapshot, Some(&self.topology)) {
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(

@@ -1,6 +1,6 @@
 ---
 source: tests/s1_health_gates.rs
-assertion_line: 109
+assertion_line: 144
 expression: gates
 ---
 [
@@ -42,8 +42,8 @@ expression: gates
     },
     Gate {
         label: "Bin saturation",
-        status: Unknown,
-        value: "—",
+        status: Pass,
+        value: "all bins ≤ depth (8) saturated (≥8)",
         why: None,
     },
     Gate {

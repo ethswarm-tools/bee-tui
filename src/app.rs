@@ -77,8 +77,11 @@ impl App {
         let root_cancel = CancellationToken::new();
         let watch = BeeWatch::start(api.clone(), &root_cancel);
 
-        // S1 Health is the default screen for v0.1.
-        let health = Health::new(api.clone(), watch.health());
+        // S1 Health is the default screen for v0.1. v0.3 onwards it
+        // also subscribes to the topology stream so the
+        // bin-saturation gate can show real per-bin starvation
+        // status instead of a placeholder.
+        let health = Health::new(api.clone(), watch.health(), watch.topology());
         // S2 Stamps is the second screen — Tab to switch.
         let stamps = Stamps::new(watch.stamps());
         // S3 SWAP / cheques — third tab.

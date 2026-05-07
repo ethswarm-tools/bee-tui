@@ -1,6 +1,6 @@
 ---
 source: tests/s1_health_gates.rs
-assertion_line: 109
+assertion_line: 172
 expression: gates
 ---
 [
@@ -42,9 +42,11 @@ expression: gates
     },
     Gate {
         label: "Bin saturation",
-        status: Unknown,
-        value: "—",
-        why: None,
+        status: Warn,
+        value: "4 starving: bin 5, bin 6, bin 7, bin 8",
+        why: Some(
+            "manually `connect` more peers or wait — kademlia fills bins as the node sees more traffic",
+        ),
     },
     Gate {
         label: "Healthy for redistribution",

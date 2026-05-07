@@ -1,6 +1,6 @@
 ---
 source: tests/s1_health_gates.rs
-assertion_line: 107
+assertion_line: 115
 expression: gates
 ---
 [
@@ -51,10 +51,8 @@ expression: gates
     Gate {
         label: "Bin saturation",
         status: Unknown,
-        value: "(/topology not polled yet)",
-        why: Some(
-            "v0.2: per-bin starvation detection",
-        ),
+        value: "—",
+        why: None,
     },
     Gate {
         label: "Healthy for redistribution",
