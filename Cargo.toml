@@ -1,6 +1,6 @@
 [package]
 name = "bee-tui"
-version = "0.2.0"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Production-grade k9s-style terminal cockpit for Ethereum Swarm Bee node operators."
