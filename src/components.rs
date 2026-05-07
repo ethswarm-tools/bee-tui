@@ -13,6 +13,7 @@ pub mod health;
 pub mod lottery;
 pub mod network;
 pub mod peers;
+pub mod scroll;
 pub mod stamps;
 pub mod swap;
 pub mod tags;

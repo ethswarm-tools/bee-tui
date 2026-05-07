@@ -988,7 +988,11 @@ fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)
         // 5: Network — read-only
         // 6: Warmup — read-only
         // 7: API — read-only
-        // 8: Tags — read-only
+        8 => &[
+            ("↑↓ / j k", "scroll one row"),
+            ("PgUp / PgDn", "scroll ten rows"),
+            ("Home", "back to top"),
+        ],
         _ => &[],
     }
 }

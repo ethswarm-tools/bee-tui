@@ -208,6 +208,11 @@ pub struct Peers {
     rx: watch::Receiver<TopologySnapshot>,
     snapshot: TopologySnapshot,
     selected: usize,
+    /// Top row of the visible window in the peer table. Drives both
+    /// the `Paragraph::scroll` offset and the right-edge scrollbar
+    /// state. Updated lazily inside `draw_peer_table` to match the
+    /// area height we get at render time.
+    scroll_offset: usize,
     drill: DrillState,
     fetch_tx: mpsc::UnboundedSender<DrillFetchResult>,
     fetch_rx: mpsc::UnboundedReceiver<DrillFetchResult>,
@@ -222,6 +227,7 @@ impl Peers {
             rx,
             snapshot,
             selected: 0,
+            scroll_offset: 0,
             drill: DrillState::Idle,
             fetch_tx,
             fetch_rx,
@@ -702,52 +708,92 @@ impl Component for Peers {
 }
 
 impl Peers {
-    fn draw_peer_table(&self, frame: &mut Frame, area: Rect, peers: &[PeerRow]) {
+    fn draw_peer_table(&mut self, frame: &mut Frame, area: Rect, peers: &[PeerRow]) {
+        use ratatui::layout::{Constraint, Layout};
+
         let t = theme::active();
-        let mut peer_lines: Vec<Line> = vec![Line::from(Span::styled(
-            "   BIN  PEER          DIR  LATENCY   HEALTHY  REACHABILITY",
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::BOLD),
-        ))];
-        if peers.is_empty() {
-            peer_lines.push(Line::from(Span::styled(
-                "   (no connected peers reported)",
+
+        // Two-row split: pinned column header + scrollable body. The
+        // header doesn't scroll out from under the cursor, which is
+        // what operators expect after using k9s / lazygit.
+        let table_chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .split(area);
+
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "   BIN  PEER          DIR  LATENCY   HEALTHY  REACHABILITY",
                 Style::default()
                     .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
-            )));
-        } else {
-            for (i, p) in peers.iter().enumerate() {
-                let g = theme::active().glyphs;
-                let healthy_glyph = if p.healthy { g.pass } else { g.fail };
-                let healthy_style = if p.healthy {
-                    Style::default().fg(t.pass)
-                } else {
-                    Style::default().fg(t.fail)
-                };
-                let cursor = if i == self.selected {
-                    format!("{} ", t.glyphs.cursor)
-                } else {
-                    "  ".to_string()
-                };
-                peer_lines.push(Line::from(vec![
-                    Span::styled(
-                        cursor,
-                        Style::default()
-                            .fg(if i == self.selected { t.accent } else { t.dim })
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(format!("{:>3}  ", p.bin)),
-                    Span::raw(format!("{:<13} ", p.peer_short)),
-                    Span::raw(format!("{:<4} ", p.direction)),
-                    Span::raw(format!("{:<8}  ", p.latency)),
-                    Span::styled(format!("{healthy_glyph:<7} "), healthy_style),
-                    Span::raw(p.reachability.clone()),
-                ]));
-            }
+                    .add_modifier(Modifier::BOLD),
+            ))),
+            table_chunks[0],
+        );
+
+        if peers.is_empty() {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "   (no connected peers reported)",
+                    Style::default()
+                        .fg(t.dim)
+                        .add_modifier(Modifier::ITALIC),
+                ))),
+                table_chunks[1],
+            );
+            return;
         }
-        frame.render_widget(Paragraph::new(peer_lines), area);
+
+        let mut peer_lines: Vec<Line> = Vec::with_capacity(peers.len());
+        for (i, p) in peers.iter().enumerate() {
+            let g = theme::active().glyphs;
+            let healthy_glyph = if p.healthy { g.pass } else { g.fail };
+            let healthy_style = if p.healthy {
+                Style::default().fg(t.pass)
+            } else {
+                Style::default().fg(t.fail)
+            };
+            let cursor = if i == self.selected {
+                format!("{} ", t.glyphs.cursor)
+            } else {
+                "  ".to_string()
+            };
+            peer_lines.push(Line::from(vec![
+                Span::styled(
+                    cursor,
+                    Style::default()
+                        .fg(if i == self.selected { t.accent } else { t.dim })
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!("{:>3}  ", p.bin)),
+                Span::raw(format!("{:<13} ", p.peer_short)),
+                Span::raw(format!("{:<4} ", p.direction)),
+                Span::raw(format!("{:<8}  ", p.latency)),
+                Span::styled(format!("{healthy_glyph:<7} "), healthy_style),
+                Span::raw(p.reachability.clone()),
+            ]));
+        }
+
+        let body = table_chunks[1];
+        let visible_rows = body.height as usize;
+        self.scroll_offset = super::scroll::clamp_scroll(
+            self.selected,
+            self.scroll_offset,
+            visible_rows,
+            peer_lines.len(),
+        );
+        frame.render_widget(
+            Paragraph::new(peer_lines.clone()).scroll((self.scroll_offset as u16, 0)),
+            body,
+        );
+        super::scroll::render_scrollbar(
+            frame,
+            body,
+            self.scroll_offset,
+            visible_rows,
+            peer_lines.len(),
+        );
     }
 
     fn draw_peer_drill(&self, frame: &mut Frame, area: Rect, view: &PeerDrillView) {

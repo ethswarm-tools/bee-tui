@@ -112,12 +112,19 @@ pub struct TagsView {
 pub struct Tags {
     rx: watch::Receiver<TagsSnapshot>,
     snapshot: TagsSnapshot,
+    /// Visual-line scroll offset. No selection cursor on S9 yet —
+    /// j/k / ↑↓ / PageUp/PageDown move this directly.
+    scroll_offset: usize,
 }
 
 impl Tags {
     pub fn new(rx: watch::Receiver<TagsSnapshot>) -> Self {
         let snapshot = rx.borrow().clone();
-        Self { rx, snapshot }
+        Self {
+            rx,
+            snapshot,
+            scroll_offset: 0,
+        }
     }
 
     fn pull_latest(&mut self) {
@@ -220,6 +227,32 @@ impl Component for Tags {
         Ok(None)
     }
 
+    fn handle_key_event(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+    ) -> Result<Option<Action>> {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.scroll_offset = self.scroll_offset.saturating_add(1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+            }
+            KeyCode::PageDown => {
+                self.scroll_offset = self.scroll_offset.saturating_add(10);
+            }
+            KeyCode::PageUp => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(10);
+            }
+            KeyCode::Home => {
+                self.scroll_offset = 0;
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let chunks = Layout::vertical([
             Constraint::Length(3), // header
@@ -266,22 +299,36 @@ impl Component for Tags {
             chunks[0],
         );
 
-        // Table
-        let mut lines: Vec<Line> = Vec::new();
-        lines.push(Line::from(Span::styled(
-            "  UID    NAME                ADDR          TOTAL   SPLIT  SENT   SYNCED   %    STATUS",
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::BOLD),
-        )));
-        if view.rows.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  (no tags reported — uploads via swarm-cli or the API will appear here)",
+        // Pinned column header + scrollable body. j/k/PageUp/PageDown
+        // move scroll_offset; the renderer here just clamps it to
+        // the current row count and area height.
+        let table_chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .split(chunks[1]);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  UID    NAME                ADDR          TOTAL   SPLIT  SENT   SYNCED   %    STATUS",
                 Style::default()
                     .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
-            )));
+                    .add_modifier(Modifier::BOLD),
+            ))),
+            table_chunks[0],
+        );
+
+        if view.rows.is_empty() {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "  (no tags reported — uploads via swarm-cli or the API will appear here)",
+                    Style::default()
+                        .fg(t.dim)
+                        .add_modifier(Modifier::ITALIC),
+                ))),
+                table_chunks[1],
+            );
         } else {
+            let mut lines: Vec<Line> = Vec::with_capacity(view.rows.len());
             for r in &view.rows {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -307,8 +354,29 @@ impl Component for Tags {
                     ),
                 ]));
             }
+            let body = table_chunks[1];
+            let visible_rows = body.height as usize;
+            // No selection cursor on S9 — clamp_scroll with
+            // selected=scroll_offset is a no-op except for the
+            // total-rows clamp, which is exactly what we want here.
+            self.scroll_offset = super::scroll::clamp_scroll(
+                self.scroll_offset,
+                self.scroll_offset,
+                visible_rows,
+                lines.len(),
+            );
+            frame.render_widget(
+                Paragraph::new(lines.clone()).scroll((self.scroll_offset as u16, 0)),
+                body,
+            );
+            super::scroll::render_scrollbar(
+                frame,
+                body,
+                self.scroll_offset,
+                visible_rows,
+                lines.len(),
+            );
         }
-        frame.render_widget(Paragraph::new(lines), chunks[1]);
 
         // Footer
         frame.render_widget(

@@ -173,6 +173,11 @@ pub struct Stamps {
     rx: watch::Receiver<StampsSnapshot>,
     snapshot: StampsSnapshot,
     selected: usize,
+    /// Visual-line scroll offset for the table body. Updated lazily
+    /// inside `draw_table`. Continuations (the `why` tooltip lines)
+    /// count as additional visual lines so the offset is in lines,
+    /// not rows.
+    scroll_offset: usize,
     drill: DrillState,
     fetch_tx: mpsc::UnboundedSender<DrillFetchResult>,
     fetch_rx: mpsc::UnboundedReceiver<DrillFetchResult>,
@@ -187,6 +192,7 @@ impl Stamps {
             rx,
             snapshot,
             selected: 0,
+            scroll_offset: 0,
             drill: DrillState::Idle,
             fetch_tx,
             fetch_rx,
@@ -577,74 +583,122 @@ impl Component for Stamps {
 }
 
 impl Stamps {
-    fn draw_table(&self, frame: &mut Frame, area: Rect) {
+    fn draw_table(&mut self, frame: &mut Frame, area: Rect) {
+        use ratatui::layout::{Constraint, Layout};
+
         let t = theme::active();
-        let mut lines: Vec<Line> = Vec::new();
-        // Column header
-        lines.push(Line::from(vec![Span::styled(
-            "   LABEL                BATCH        VOLUME      WORST BUCKET                TTL         STATUS",
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::BOLD),
-        )]));
-        if self.snapshot.batches.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "   (no batches yet — buy one with swarm-cli or `bee stamps buy`)",
+
+        // Pinned column header + scrollable body, same pattern as
+        // S6. Header doesn't scroll out from under the cursor.
+        let table_chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .split(area);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "   LABEL                BATCH        VOLUME      WORST BUCKET                TTL         STATUS",
                 Style::default()
                     .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
-            )));
-        } else {
-            for (i, r) in Self::rows_for(&self.snapshot).into_iter().enumerate() {
-                let bar = fill_bar(r.worst_bucket_pct, 8);
-                let immut_glyph = if r.immutable { "I" } else { "M" };
-                let cursor = if i == self.selected {
-                    format!("{} ", t.glyphs.cursor)
-                } else {
-                    "  ".to_string()
-                };
+                    .add_modifier(Modifier::BOLD),
+            ))),
+            table_chunks[0],
+        );
+
+        if self.snapshot.batches.is_empty() {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    "   (no batches yet — buy one with swarm-cli or `bee stamps buy`)",
+                    Style::default()
+                        .fg(t.dim)
+                        .add_modifier(Modifier::ITALIC),
+                ))),
+                table_chunks[1],
+            );
+            return;
+        }
+
+        let mut lines: Vec<Line> = Vec::new();
+        // Map batch index → visual line index where that row's main
+        // line starts. Used by `clamp_scroll` to translate a row
+        // selection into a visual-line offset, since rows may emit
+        // 1 or 2 lines depending on whether they have a `why`
+        // continuation.
+        let mut row_starts: Vec<usize> = Vec::new();
+        for (i, r) in Self::rows_for(&self.snapshot).into_iter().enumerate() {
+            row_starts.push(lines.len());
+            let bar = fill_bar(r.worst_bucket_pct, 8);
+            let immut_glyph = if r.immutable { "I" } else { "M" };
+            let cursor = if i == self.selected {
+                format!("{} ", t.glyphs.cursor)
+            } else {
+                "  ".to_string()
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    cursor,
+                    Style::default()
+                        .fg(if i == self.selected { t.accent } else { t.dim })
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<20}", truncate(&r.label, 20)),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!("{:<13}", r.batch_id_short)),
+                Span::raw(format!("{:<12}", r.volume)),
+                Span::styled(
+                    format!("{bar} {:>3}% ({})", r.worst_bucket_pct, r.worst_bucket_raw),
+                    Style::default().fg(bucket_color(r.worst_bucket_pct)),
+                ),
+                Span::raw("    "),
+                Span::raw(format!("{:<10} ", r.ttl)),
+                Span::styled(immut_glyph, Style::default().fg(t.dim)),
+                Span::raw(" "),
+                Span::styled(
+                    r.status.label(),
+                    Style::default()
+                        .fg(r.status.color())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            if let Some(why) = r.why {
                 lines.push(Line::from(vec![
+                    Span::raw(format!("        {} ", t.glyphs.continuation)),
                     Span::styled(
-                        cursor,
+                        why,
                         Style::default()
-                            .fg(if i == self.selected { t.accent } else { t.dim })
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!("{:<20}", truncate(&r.label, 20)),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(format!("{:<13}", r.batch_id_short)),
-                    Span::raw(format!("{:<12}", r.volume)),
-                    Span::styled(
-                        format!("{bar} {:>3}% ({})", r.worst_bucket_pct, r.worst_bucket_raw),
-                        Style::default().fg(bucket_color(r.worst_bucket_pct)),
-                    ),
-                    Span::raw("    "),
-                    Span::raw(format!("{:<10} ", r.ttl)),
-                    Span::styled(immut_glyph, Style::default().fg(t.dim)),
-                    Span::raw(" "),
-                    Span::styled(
-                        r.status.label(),
-                        Style::default()
-                            .fg(r.status.color())
-                            .add_modifier(Modifier::BOLD),
+                            .fg(t.dim)
+                            .add_modifier(Modifier::ITALIC),
                     ),
                 ]));
-                if let Some(why) = r.why {
-                    lines.push(Line::from(vec![
-                        Span::raw("        └─ "),
-                        Span::styled(
-                            why,
-                            Style::default()
-                                .fg(t.dim)
-                                .add_modifier(Modifier::ITALIC),
-                        ),
-                    ]));
-                }
             }
         }
-        frame.render_widget(Paragraph::new(lines), area);
+
+        // Translate the row cursor → visual-line cursor. Use the
+        // first line of the selected row as the "selected visual
+        // line" so clamp_scroll keeps that row's main line on
+        // screen (the continuation tooltip will follow if it fits).
+        let visual_cursor = row_starts.get(self.selected).copied().unwrap_or(0);
+        let body = table_chunks[1];
+        let visible_rows = body.height as usize;
+        self.scroll_offset = super::scroll::clamp_scroll(
+            visual_cursor,
+            self.scroll_offset,
+            visible_rows,
+            lines.len(),
+        );
+        frame.render_widget(
+            Paragraph::new(lines.clone()).scroll((self.scroll_offset as u16, 0)),
+            body,
+        );
+        super::scroll::render_scrollbar(
+            frame,
+            body,
+            self.scroll_offset,
+            visible_rows,
+            lines.len(),
+        );
     }
 
     fn draw_drill(&self, frame: &mut Frame, area: Rect, view: &StampDrillView) {
