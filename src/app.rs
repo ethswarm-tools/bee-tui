@@ -11,7 +11,7 @@ use tracing::{debug, info};
 use crate::{
     action::Action,
     api::ApiClient,
-    components::{Component, command_log::CommandLog, health::Health},
+    components::{Component, command_log::CommandLog, health::Health, stamps::Stamps},
     config::Config,
     log_capture,
     tui::{Event, Tui},
@@ -22,7 +22,15 @@ pub struct App {
     config: Config,
     tick_rate: f64,
     frame_rate: f64,
-    components: Vec<Box<dyn Component>>,
+    /// Top-level screens, in display order. Tab cycles among them
+    /// (v0.4 will replace this with a k9s-style `:command` resource
+    /// switcher).
+    screens: Vec<Box<dyn Component>>,
+    /// Index into [`Self::screens`] for the currently visible screen.
+    current_screen: usize,
+    /// Always-on bottom strip; not part of `screens` because it
+    /// renders alongside whatever screen is active.
+    command_log: Box<dyn Component>,
     should_quit: bool,
     should_suspend: bool,
     mode: Mode,
@@ -39,6 +47,10 @@ pub struct App {
     /// Watch / informer hub feeding screens.
     watch: BeeWatch,
 }
+
+/// Names the top-level screens. Index matches position in
+/// [`App::screens`].
+const SCREEN_NAMES: &[&str] = &["Health", "Stamps"];
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
@@ -64,18 +76,22 @@ impl App {
 
         // S1 Health is the default screen for v0.1.
         let health = Health::new(api.clone(), watch.health());
+        // S2 Stamps is the second screen — Tab to switch.
+        let stamps = Stamps::new(watch.stamps());
         // S10 Command-log subscribes to the bee::http capture set up
         // by logging::init. If logging hasn't initialised the capture
         // (e.g. running in a test harness), the pane just shows
         // "waiting for first request…".
-        let command_log = CommandLog::new(log_capture::handle());
+        let command_log: Box<dyn Component> = Box::new(CommandLog::new(log_capture::handle()));
 
         Ok(Self {
             tick_rate,
             frame_rate,
-            // Render order is also the layout order: index 0 fills the
-            // top region, index 1 is the bottom command-log strip.
-            components: vec![Box::new(health), Box::new(command_log)],
+            // Order matters — the SCREEN_NAMES table assumes index 0
+            // is Health, index 1 is Stamps.
+            screens: vec![Box::new(health), Box::new(stamps)],
+            current_screen: 0,
+            command_log,
             should_quit: false,
             should_suspend: false,
             config,
@@ -96,14 +112,13 @@ impl App {
             .frame_rate(self.frame_rate);
         tui.enter()?;
 
-        for component in self.components.iter_mut() {
-            component.register_action_handler(self.action_tx.clone())?;
-        }
-        for component in self.components.iter_mut() {
-            component.register_config_handler(self.config.clone())?;
-        }
-        for component in self.components.iter_mut() {
-            component.init(tui.size()?)?;
+        let tx = self.action_tx.clone();
+        let cfg = self.config.clone();
+        let size = tui.size()?;
+        for component in self.iter_components_mut() {
+            component.register_action_handler(tx.clone())?;
+            component.register_config_handler(cfg.clone())?;
+            component.init(size)?;
         }
 
         let action_tx = self.action_tx.clone();
@@ -141,7 +156,7 @@ impl App {
             Event::Key(key) => self.handle_key_event(key)?,
             _ => {}
         }
-        for component in self.components.iter_mut() {
+        for component in self.iter_components_mut() {
             if let Some(action) = component.handle_events(Some(event.clone()))? {
                 action_tx.send(action)?;
             }
@@ -149,8 +164,30 @@ impl App {
         Ok(())
     }
 
+    /// Iterate every component (screens + command-log strip) for
+    /// uniform lifecycle ticks. Doesn't conflict with rendering,
+    /// which only draws the active screen.
+    fn iter_components_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn Component>> {
+        self.screens
+            .iter_mut()
+            .chain(std::iter::once(&mut self.command_log))
+    }
+
     fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<()> {
         let action_tx = self.action_tx.clone();
+        // Hard-coded screen-switch hotkey for v0.1; v0.2 routes this
+        // through the regular keybinding table once the `:command`
+        // bar lands.
+        if matches!(key.code, crossterm::event::KeyCode::Tab) {
+            if !self.screens.is_empty() {
+                self.current_screen = (self.current_screen + 1) % self.screens.len();
+                debug!(
+                    "switched to screen {}",
+                    SCREEN_NAMES.get(self.current_screen).unwrap_or(&"?")
+                );
+            }
+            return Ok(());
+        }
         let Some(keymap) = self.config.keybindings.0.get(&self.mode) else {
             return Ok(());
         };
@@ -191,9 +228,10 @@ impl App {
                 Action::Render => self.render(tui)?,
                 _ => {}
             }
-            for component in self.components.iter_mut() {
+            let tx = self.action_tx.clone();
+            for component in self.iter_components_mut() {
                 if let Some(action) = component.update(action.clone())? {
-                    self.action_tx.send(action)?
+                    tx.send(action)?
                 };
             }
         }
@@ -207,20 +245,52 @@ impl App {
     }
 
     fn render(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
+        let active = self.current_screen;
+        let tx = self.action_tx.clone();
+        let screens = &mut self.screens;
+        let command_log = &mut self.command_log;
         tui.draw(|frame| {
-            // v0.1 layout: main screen on top, command-log strip on
-            // the bottom. v0.2+ will replace this with a router-style
-            // layout once we have multiple top screens.
             use ratatui::layout::{Constraint, Layout};
-            let chunks =
-                Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(frame.area());
-            for (i, component) in self.components.iter_mut().enumerate() {
-                let area = if i == 1 { chunks[1] } else { chunks[0] };
-                if let Err(err) = component.draw(frame, area) {
-                    let _ = self
-                        .action_tx
-                        .send(Action::Error(format!("Failed to draw: {:?}", err)));
+            use ratatui::style::{Color, Modifier, Style};
+            use ratatui::text::{Line, Span};
+            use ratatui::widgets::Paragraph;
+
+            let chunks = Layout::vertical([
+                Constraint::Length(1), // top-bar tabs
+                Constraint::Min(0),    // active screen
+                Constraint::Length(8), // command-log strip
+            ])
+            .split(frame.area());
+
+            // Top-bar: tab strip with the active screen highlighted.
+            let mut tabs = Vec::with_capacity(SCREEN_NAMES.len() * 2);
+            for (i, name) in SCREEN_NAMES.iter().enumerate() {
+                let style = if i == active {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                tabs.push(Span::styled(format!(" {name} "), style));
+                tabs.push(Span::raw(" "));
+            }
+            tabs.push(Span::styled(
+                "Tab to switch",
+                Style::default().fg(Color::DarkGray),
+            ));
+            frame.render_widget(Paragraph::new(Line::from(tabs)), chunks[0]);
+
+            // Active screen
+            if let Some(screen) = screens.get_mut(active) {
+                if let Err(err) = screen.draw(frame, chunks[1]) {
+                    let _ = tx.send(Action::Error(format!("Failed to draw screen: {err:?}")));
                 }
+            }
+            // Command-log strip
+            if let Err(err) = command_log.draw(frame, chunks[2]) {
+                let _ = tx.send(Action::Error(format!("Failed to draw log: {err:?}")));
             }
         })?;
         Ok(())
