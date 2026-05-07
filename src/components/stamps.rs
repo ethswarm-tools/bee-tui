@@ -598,7 +598,11 @@ impl Stamps {
             for (i, r) in Self::rows_for(&self.snapshot).into_iter().enumerate() {
                 let bar = fill_bar(r.worst_bucket_pct, 8);
                 let immut_glyph = if r.immutable { "I" } else { "M" };
-                let cursor = if i == self.selected { "▶ " } else { "  " };
+                let cursor = if i == self.selected {
+                    format!("{} ", t.glyphs.cursor)
+                } else {
+                    "  ".to_string()
+                };
                 lines.push(Line::from(vec![
                     Span::styled(
                         cursor,

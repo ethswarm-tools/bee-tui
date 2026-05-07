@@ -12,6 +12,20 @@ pub struct Cli {
     /// Frame rate, i.e. number of frames per second
     #[arg(short, long, value_name = "FLOAT", default_value_t = 60.0)]
     pub frame_rate: f64,
+
+    /// Render with ASCII glyphs only — no Unicode (✓ ⚠ ✗ ▶ ▇ …).
+    /// Use on terminals with poor Unicode support: Windows Terminal
+    /// pre-Win11, screen readers, some SSH chains. Equivalent to
+    /// setting `[ui].ascii_fallback = true` in `config.toml`.
+    #[arg(long)]
+    pub ascii: bool,
+
+    /// Suppress colour output regardless of the configured theme.
+    /// Equivalent to setting `[ui].theme = "mono"` in `config.toml`,
+    /// or to `NO_COLOR=1` in the environment (which is also honoured
+    /// automatically per <https://no-color.org>).
+    #[arg(long)]
+    pub no_color: bool,
 }
 
 const VERSION_MESSAGE: &str = concat!(

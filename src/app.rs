@@ -88,11 +88,25 @@ pub enum Mode {
 
 impl App {
     pub fn new(tick_rate: f64, frame_rate: f64) -> color_eyre::Result<Self> {
+        Self::with_overrides(tick_rate, frame_rate, false, false)
+    }
+
+    /// Build an App with explicit `--ascii` / `--no-color` overrides.
+    /// `ascii` and `no_color` are OR'd with the equivalent config /
+    /// env signals (see [`theme::install_with_overrides`] +
+    /// [`theme::no_color_env`]).
+    pub fn with_overrides(
+        tick_rate: f64,
+        frame_rate: f64,
+        ascii: bool,
+        no_color: bool,
+    ) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         let config = Config::new()?;
         // Install the theme first so any tracing emitted during the
         // rest of `new` already reflects the operator's choice.
-        theme::install(&config.ui);
+        let force_no_color = no_color || theme::no_color_env();
+        theme::install_with_overrides(&config.ui, force_no_color, ascii);
 
         // Pick the active node profile and build an ApiClient for it.
         let node = config
@@ -848,15 +862,16 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
 }
 
 fn format_gate_line(g: &Gate) -> String {
+    let glyphs = crate::theme::active().glyphs;
     let glyph = match g.status {
-        GateStatus::Pass => "✓",
-        GateStatus::Warn => "⚠",
-        GateStatus::Fail => "✗",
-        GateStatus::Unknown => "·",
+        GateStatus::Pass => glyphs.pass,
+        GateStatus::Warn => glyphs.warn,
+        GateStatus::Fail => glyphs.fail,
+        GateStatus::Unknown => glyphs.bullet,
     };
     let mut s = format!("  [{glyph}] {label:<28} {value}\n", label = g.label, value = g.value);
     if let Some(why) = &g.why {
-        s.push_str(&format!("        └─ {why}\n"));
+        s.push_str(&format!("        {} {why}\n", glyphs.continuation));
     }
     s
 }

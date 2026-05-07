@@ -69,11 +69,12 @@ pub enum StepState {
 
 impl StepState {
     fn glyph(self) -> &'static str {
+        let g = theme::active().glyphs;
         match self {
-            Self::Pending => "░",
-            Self::InProgress(_) => "▒",
-            Self::Done => "✓",
-            Self::Unknown => "·",
+            Self::Pending => g.bar_empty,
+            Self::InProgress(_) => g.in_progress,
+            Self::Done => g.pass,
+            Self::Unknown => g.bullet,
         }
     }
     fn color(self) -> Color {

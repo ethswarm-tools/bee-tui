@@ -37,11 +37,12 @@ pub enum GateStatus {
 
 impl GateStatus {
     fn glyph(self) -> &'static str {
+        let g = theme::active().glyphs;
         match self {
-            Self::Pass => "✓",
-            Self::Warn => "⚠",
-            Self::Fail => "✗",
-            Self::Unknown => "·",
+            Self::Pass => g.pass,
+            Self::Warn => g.warn,
+            Self::Fail => g.fail,
+            Self::Unknown => g.bullet,
         }
     }
     fn color(self) -> Color {

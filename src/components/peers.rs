@@ -86,12 +86,13 @@ impl BinSaturation {
             Self::Over => theme::active().warn,
         }
     }
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
+        let g = theme::active().glyphs;
         match self {
-            Self::Empty => "—",
-            Self::Starving => "✗ STARVING",
-            Self::Healthy => "✓",
-            Self::Over => "⚠ over",
+            Self::Empty => g.em_dash.to_string(),
+            Self::Starving => format!("{} STARVING", g.fail),
+            Self::Healthy => g.pass.to_string(),
+            Self::Over => format!("{} over", g.warn),
         }
     }
 }
@@ -718,13 +719,18 @@ impl Peers {
             )));
         } else {
             for (i, p) in peers.iter().enumerate() {
-                let healthy_glyph = if p.healthy { "✓" } else { "✗" };
+                let g = theme::active().glyphs;
+                let healthy_glyph = if p.healthy { g.pass } else { g.fail };
                 let healthy_style = if p.healthy {
                     Style::default().fg(t.pass)
                 } else {
                     Style::default().fg(t.fail)
                 };
-                let cursor = if i == self.selected { "▶ " } else { "  " };
+                let cursor = if i == self.selected {
+                    format!("{} ", t.glyphs.cursor)
+                } else {
+                    "  ".to_string()
+                };
                 peer_lines.push(Line::from(vec![
                     Span::styled(
                         cursor,
