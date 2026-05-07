@@ -12,7 +12,8 @@ use crate::{
     action::Action,
     api::ApiClient,
     components::{
-        Component, command_log::CommandLog, health::Health, stamps::Stamps, swap::Swap,
+        Component, command_log::CommandLog, health::Health, lottery::Lottery, stamps::Stamps,
+        swap::Swap,
     },
     config::Config,
     log_capture,
@@ -52,7 +53,7 @@ pub struct App {
 
 /// Names the top-level screens. Index matches position in
 /// [`App::screens`].
-const SCREEN_NAMES: &[&str] = &["Health", "Stamps", "Swap"];
+const SCREEN_NAMES: &[&str] = &["Health", "Stamps", "Swap", "Lottery"];
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
@@ -82,6 +83,10 @@ impl App {
         let stamps = Stamps::new(watch.stamps());
         // S3 SWAP / cheques — third tab.
         let swap = Swap::new(watch.swap());
+        // S4 Lottery — fourth tab. Subscribes to both the 2 s
+        // redistribution-state stream (off the health hub) and the
+        // 30 s /stake stream.
+        let lottery = Lottery::new(watch.health(), watch.lottery());
         // S10 Command-log subscribes to the bee::http capture set up
         // by logging::init. If logging hasn't initialised the capture
         // (e.g. running in a test harness), the pane just shows
@@ -92,8 +97,14 @@ impl App {
             tick_rate,
             frame_rate,
             // Order matters — the SCREEN_NAMES table assumes index 0
-            // is Health, index 1 is Stamps, index 2 is Swap.
-            screens: vec![Box::new(health), Box::new(stamps), Box::new(swap)],
+            // is Health, index 1 is Stamps, index 2 is Swap, index 3
+            // is Lottery.
+            screens: vec![
+                Box::new(health),
+                Box::new(stamps),
+                Box::new(swap),
+                Box::new(lottery),
+            ],
             current_screen: 0,
             command_log,
             should_quit: false,
