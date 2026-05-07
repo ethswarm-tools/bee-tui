@@ -21,14 +21,69 @@ pub struct AppConfig {
     pub config_dir: PathBuf,
 }
 
+/// One configured Bee node. Multiple may coexist; multi-node UX is
+/// targeted at v0.4 but the schema supports it from day one.
+#[derive(Clone, Debug, Deserialize)]
+pub struct NodeConfig {
+    /// Friendly label shown in the UI (e.g. `"prod-1"`, `"local"`).
+    pub name: String,
+    /// Bee API base URL (e.g. `"http://localhost:1633"`).
+    pub url: String,
+    /// Optional bearer token for restricted-mode nodes. Supports the
+    /// `@env:VAR_NAME` indirection — see [`NodeConfig::resolved_token`].
+    #[serde(default)]
+    pub token: Option<String>,
+    /// Marks the default profile loaded on startup. If no entry has
+    /// `default = true`, the first node in the list is used.
+    #[serde(default)]
+    pub default: bool,
+}
+
+impl NodeConfig {
+    /// Resolve `token` to its concrete value: `Some(env_var)` if the
+    /// configured value starts with `@env:`, otherwise the literal.
+    pub fn resolved_token(&self) -> Option<String> {
+        let raw = self.token.as_deref()?;
+        if let Some(var) = raw.strip_prefix("@env:") {
+            env::var(var).ok()
+        } else {
+            Some(raw.to_string())
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Config {
     #[serde(default, flatten)]
     pub config: AppConfig,
+    #[serde(default = "default_nodes")]
+    pub nodes: Vec<NodeConfig>,
     #[serde(default)]
     pub keybindings: KeyBindings,
     #[serde(default)]
     pub styles: Styles,
+}
+
+impl Config {
+    /// Pick the active node profile: first entry with `default = true`,
+    /// otherwise the first entry, otherwise [`None`].
+    pub fn active_node(&self) -> Option<&NodeConfig> {
+        self.nodes
+            .iter()
+            .find(|n| n.default)
+            .or_else(|| self.nodes.first())
+    }
+}
+
+/// Default node list when the user hasn't configured any: a single
+/// `local` profile pointing at `http://localhost:1633`.
+fn default_nodes() -> Vec<NodeConfig> {
+    vec![NodeConfig {
+        name: "local".to_string(),
+        url: "http://localhost:1633".to_string(),
+        token: None,
+        default: true,
+    }]
 }
 
 lazy_static! {

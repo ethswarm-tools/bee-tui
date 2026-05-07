@@ -1,4 +1,15 @@
 {
+  // List of Bee nodes the cockpit can attach to. Multi-node UX is v0.4;
+  // for now the first entry (or the one with default=true) is used.
+  "nodes": [
+    {
+      "name": "local",
+      "url": "http://localhost:1633",
+      // "token": "@env:BEE_TOKEN_LOCAL",  // for restricted-mode nodes
+      "default": true,
+    },
+  ],
+
   "keybindings": {
     "Home": {
       "<q>": "Quit", // Quit the application
