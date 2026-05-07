@@ -32,10 +32,16 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::{Result, eyre};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+use tokio::sync::Mutex;
+
+use crate::bee_log_writer::BeeLogWriter;
+use crate::config::BeeLogsConfig;
 
 /// Default per-poll interval used by [`BeeSupervisor::wait_for_api`].
 /// Short enough that startup feels live but long enough not to flood
@@ -99,15 +105,16 @@ pub struct BeeSupervisor {
 
 impl BeeSupervisor {
     /// Spawn `bin start --config <config>` as a child process. Stdout
-    /// and stderr go to a temp file the cockpit can tail. The child
-    /// runs in its own process group so we can SIGTERM the whole tree
-    /// at quit without leaking helpers.
+    /// and stderr are piped through a rotating writer (governed by
+    /// `log_cfg`) so a long-running node can't fill `$TMPDIR`. The
+    /// child runs in its own process group so we can SIGTERM the
+    /// whole tree at quit without leaking helpers.
     ///
     /// Errors:
     /// - `bin` doesn't exist or isn't executable
-    /// - the temp log file can't be created
+    /// - the log file can't be created
     /// - the OS rejects the spawn (rare; usually fork resource limits)
-    pub fn spawn(bin: &Path, config: &Path) -> Result<Self> {
+    pub fn spawn(bin: &Path, config: &Path, log_cfg: BeeLogsConfig) -> Result<Self> {
         if !bin.exists() {
             return Err(eyre!(
                 "bee binary not found at {:?} — check [bee].bin / --bee-bin",
@@ -129,20 +136,25 @@ impl BeeSupervisor {
                 .unwrap_or(0)
         ));
 
-        // Open one writer for stdout, clone for stderr — Bee writes
-        // to both and we want them merged in chronological order.
-        let log_file = std::fs::File::create(&log_path)
-            .map_err(|e| eyre!("failed to create log file at {log_path:?}: {e}"))?;
-        let stderr_file = log_file
-            .try_clone()
-            .map_err(|e| eyre!("failed to clone log file fd: {e}"))?;
+        // Open the rotating writer up-front so a configuration error
+        // (bad permissions, full disk) fails fast — *before* spawning
+        // Bee — rather than mid-run when the first log line arrives.
+        let writer =
+            BeeLogWriter::open(log_path.clone(), log_cfg.rotate_size_mb, log_cfg.keep_files)
+                .map_err(|e| {
+                    eyre!(
+                        "failed to open rotating log writer at {log_path:?}: {e} \
+                 (check $TMPDIR is writable and has free space)"
+                    )
+                })?;
+        let writer = Arc::new(Mutex::new(writer));
 
         let mut cmd = Command::new(bin);
         cmd.arg("start")
             .arg("--config")
             .arg(config)
-            .stdout(Stdio::from(log_file))
-            .stderr(Stdio::from(stderr_file))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .stdin(Stdio::null())
             // kill_on_drop is a backstop — Drop fires SIGKILL at the
             // direct child even if our explicit shutdown didn't run
@@ -168,7 +180,7 @@ impl BeeSupervisor {
             }
         }
 
-        let child = cmd.spawn().map_err(|e| {
+        let mut child = cmd.spawn().map_err(|e| {
             eyre!(
                 "failed to spawn {:?}: {e} (check the binary is executable)",
                 bin
@@ -176,6 +188,18 @@ impl BeeSupervisor {
         })?;
 
         let pgid = child.id().map(|pid| pid as i32);
+
+        // Pump stdout and stderr through the rotating writer. Each
+        // pipe gets its own task so the kernel pipe buffers never
+        // back-pressure Bee. Lines from both streams interleave in
+        // chronological order via the shared mutex; lock contention
+        // is negligible (one log line per acquisition).
+        if let Some(stdout) = child.stdout.take() {
+            spawn_pipe_pump(stdout, writer.clone(), "stdout");
+        }
+        if let Some(stderr) = child.stderr.take() {
+            spawn_pipe_pump(stderr, writer.clone(), "stderr");
+        }
 
         Ok(Self {
             child,
@@ -280,6 +304,45 @@ impl Drop for BeeSupervisor {
         // on panic or abrupt drop.
         send_sigkill_pgroup(self.pgid);
     }
+}
+
+/// Read newline-delimited bytes from `pipe` and forward each line
+/// through `writer`. Exits when the pipe returns EOF (Bee closed
+/// the stream — usually because it died) or on an unrecoverable
+/// I/O error. Tagged with `stream_label` for diagnostics.
+fn spawn_pipe_pump<R>(pipe: R, writer: Arc<Mutex<BeeLogWriter>>, stream_label: &'static str)
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(pipe);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => {
+                    tracing::debug!("bee-supervisor: {stream_label} EOF");
+                    break;
+                }
+                Ok(_) => {
+                    // `read_line` keeps the trailing newline; the
+                    // writer adds one of its own, so trim it here.
+                    let trimmed = line.trim_end_matches(['\n', '\r']);
+                    let mut w = writer.lock().await;
+                    if let Err(e) = w.write_line(trimmed.as_bytes()) {
+                        tracing::warn!(
+                            "bee-supervisor: rotating writer failed on {stream_label}: {e}"
+                        );
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("bee-supervisor: {stream_label} read error: {e}");
+                    break;
+                }
+            }
+        }
+    });
 }
 
 /// Translate a `std::process::ExitStatus` into the cockpit's
@@ -395,7 +458,7 @@ mod tests {
     async fn spawn_rejects_missing_binary() {
         let bogus = Path::new("/definitely/does/not/exist/bee");
         let cfg = Path::new("/tmp"); // exists but isn't checked first
-        let err = BeeSupervisor::spawn(bogus, cfg)
+        let err = BeeSupervisor::spawn(bogus, cfg, BeeLogsConfig::default())
             .err()
             .expect("missing binary must error");
         assert!(
@@ -414,7 +477,7 @@ mod tests {
         if !real.exists() {
             return; // Skip if /bin/true isn't here (rare).
         }
-        let err = BeeSupervisor::spawn(real, bogus_cfg)
+        let err = BeeSupervisor::spawn(real, bogus_cfg, BeeLogsConfig::default())
             .err()
             .expect("missing config must error");
         assert!(

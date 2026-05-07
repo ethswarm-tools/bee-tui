@@ -180,10 +180,17 @@ impl App {
         let bee_config = overrides
             .bee_config
             .or_else(|| config.bee.as_ref().map(|b| b.config.clone()));
+        // [bee.logs] sub-config; defaults if [bee] is set but
+        // [bee.logs] isn't.
+        let bee_logs = config
+            .bee
+            .as_ref()
+            .map(|b| b.logs.clone())
+            .unwrap_or_default();
         let supervisor = match (bee_bin, bee_config) {
             (Some(bin), Some(cfg)) => {
                 eprintln!("bee-tui: spawning bee {bin:?} --config {cfg:?}");
-                let mut sup = BeeSupervisor::spawn(&bin, &cfg)?;
+                let mut sup = BeeSupervisor::spawn(&bin, &cfg, bee_logs)?;
                 eprintln!(
                     "bee-tui: log → {} (will appear in the cockpit's bottom pane)",
                     sup.log_path().display()

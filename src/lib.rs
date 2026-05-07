@@ -12,6 +12,7 @@ pub mod api;
 pub mod app;
 pub mod bee_log;
 pub mod bee_log_tailer;
+pub mod bee_log_writer;
 pub mod bee_supervisor;
 pub mod cli;
 pub mod components;

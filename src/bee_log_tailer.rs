@@ -25,20 +25,28 @@
 //! 3. Stops when the cancellation token fires (cockpit quit) or
 //!    the channel receiver is dropped.
 //!
+//! ## Rotation handling
+//!
+//! The supervisor's [`crate::bee_log_writer`] caps the active log
+//! file and rotates older content to numbered siblings. The tailer
+//! detects this two ways every poll tick: an **inode mismatch**
+//! (the path's current inode differs from the fd's — atomic rename
+//! happened) or a **backwards size** (path size < our cursor —
+//! the file was truncated). Either condition drains the old fd one
+//! last time, then re-opens the path and resets the cursor to byte
+//! 0. Lines emitted *between* the rotation and the next poll are
+//! still preserved because the old fd keeps reading the renamed
+//! file's tail.
+//!
 //! ## What it doesn't do
 //!
-//! - **No file rotation handling.** If the file is truncated or
-//!   replaced, we keep reading from the old cursor position and
-//!   may emit garbage. Bee doesn't rotate the supervisor's
-//!   capture, and the file lives in `$TMPDIR` so the operator
-//!   doesn't either.
 //! - **No backfill.** We start from byte 0 the first time the
 //!   file appears, so the supervisor's startup logs make it
 //!   into the cockpit. Subsequent restarts of the *cockpit*
 //!   while Bee is still running re-read the whole file — fine
 //!   for the bounded ring buffers but worth knowing.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
@@ -96,6 +104,11 @@ async fn run(
     };
     tracing::info!("bee-log tailer: following {log_path:?}");
 
+    // Track the open fd's inode + how far we've read so we can
+    // detect rotation (inode mismatch) vs truncation (size < cursor).
+    let mut current_inode: Option<u64> = inode_of_open_file(&file).await;
+    let mut cursor: u64 = 0;
+
     // Pending bytes that didn't end on a newline. Joined with the
     // next read so we never emit half a line.
     let mut leftover = String::new();
@@ -117,6 +130,7 @@ async fn run(
             match file.read(&mut buf).await {
                 Ok(0) => break, // EOF for now; come back next tick
                 Ok(n) => {
+                    cursor += n as u64;
                     let chunk = String::from_utf8_lossy(&buf[..n]);
                     leftover.push_str(&chunk);
                     // Repeated splits on newline. Keep the trailing
@@ -158,6 +172,69 @@ async fn run(
                 }
             }
         }
+
+        // Rotation / truncation check. Done after draining the
+        // current fd so any tail bytes from the now-renamed file
+        // still make it through.
+        if let Some((path_inode, path_size)) = stat_path(&log_path).await {
+            let rotated = current_inode.is_some_and(|ino| ino != path_inode);
+            let truncated = path_size < cursor;
+            if rotated || truncated {
+                tracing::info!(
+                    "bee-log tailer: rotation detected (rotated={rotated}, \
+                     truncated={truncated}); re-opening {log_path:?}"
+                );
+                if let Some(new_file) = reopen(&log_path).await {
+                    file = new_file;
+                    current_inode = inode_of_open_file(&file).await;
+                    cursor = 0;
+                    leftover.clear();
+                }
+            }
+        }
+    }
+}
+
+/// Fresh open of an already-existing file; cheaper than open_with_retry
+/// since we know it exists (we just stat'd it).
+async fn reopen(path: &Path) -> Option<tokio::fs::File> {
+    match tokio::fs::File::open(path).await {
+        Ok(f) => Some(f),
+        Err(e) => {
+            tracing::warn!("bee-log tailer: failed to re-open {path:?} after rotation: {e}");
+            None
+        }
+    }
+}
+
+/// `stat(path)` → `(inode, size)`. None on permission / missing-file
+/// errors (transient during rotation; we'll retry next tick).
+async fn stat_path(path: &Path) -> Option<(u64, u64)> {
+    let meta = tokio::fs::metadata(path).await.ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some((meta.ino(), meta.len()))
+    }
+    #[cfg(not(unix))]
+    {
+        // Best-effort fallback: use file size as both ino + len.
+        // Rotation detection then degrades to truncation-only,
+        // which is fine for bee-tui's primary Unix targets.
+        Some((meta.len(), meta.len()))
+    }
+}
+
+async fn inode_of_open_file(file: &tokio::fs::File) -> Option<u64> {
+    let meta = file.metadata().await.ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(meta.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        Some(meta.len())
     }
 }
 
@@ -248,6 +325,58 @@ mod tests {
         cancel.cancel();
         tokio::time::sleep(Duration::from_millis(50)).await;
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn survives_rotation_via_rename() {
+        // Simulate the bee_log_writer rotation: write a line, rename
+        // the file to a sibling, create a fresh file at the original
+        // path, write another line. The tailer should pick up both.
+        let (path, mut f) = make_temp_file().await;
+        let (tx, mut rx) = unbounded_channel();
+        let cancel = CancellationToken::new();
+        spawn(path.clone(), tx, cancel.clone());
+
+        f.write_all(b"\"time\"=\"t1\" \"level\"=\"info\" \"logger\"=\"node\" \"msg\"=\"first\"\n")
+            .await
+            .unwrap();
+        f.flush().await.unwrap();
+        // Receive the first line so we know the tailer has read past
+        // its initial open and computed a cursor.
+        let recv1 = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
+        let (_, first_line) = recv1
+            .expect("first line should arrive")
+            .expect("channel open");
+        assert_eq!(first_line.timestamp, "t1");
+
+        // Drop the writer's fd; rename simulates rotation.
+        drop(f);
+        let rotated = path.with_extension("log.1");
+        std::fs::rename(&path, &rotated).unwrap();
+
+        // Fresh file at the original path.
+        let mut f2 = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+            .unwrap();
+        f2.write_all(
+            b"\"time\"=\"t2\" \"level\"=\"info\" \"logger\"=\"node\" \"msg\"=\"second\"\n",
+        )
+        .await
+        .unwrap();
+        f2.flush().await.unwrap();
+
+        let recv2 = tokio::time::timeout(Duration::from_secs(3), rx.recv()).await;
+        cancel.cancel();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&rotated);
+
+        let (_, second_line) = recv2
+            .expect("post-rotation line should arrive")
+            .expect("channel open");
+        assert_eq!(second_line.timestamp, "t2");
     }
 
     #[tokio::test]
