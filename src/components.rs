@@ -7,6 +7,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{action::Action, config::Config, tui::Event};
 
+pub mod command_log;
 pub mod health;
 
 /// `Component` is a trait that represents a visual and interactive element of the user interface.

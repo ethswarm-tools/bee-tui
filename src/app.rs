@@ -11,8 +11,9 @@ use tracing::{debug, info};
 use crate::{
     action::Action,
     api::ApiClient,
-    components::{Component, health::Health},
+    components::{Component, command_log::CommandLog, health::Health},
     config::Config,
+    log_capture,
     tui::{Event, Tui},
     watch::BeeWatch,
 };
@@ -63,11 +64,18 @@ impl App {
 
         // S1 Health is the default screen for v0.1.
         let health = Health::new(api.clone(), watch.health());
+        // S10 Command-log subscribes to the bee::http capture set up
+        // by logging::init. If logging hasn't initialised the capture
+        // (e.g. running in a test harness), the pane just shows
+        // "waiting for first request…".
+        let command_log = CommandLog::new(log_capture::handle());
 
         Ok(Self {
             tick_rate,
             frame_rate,
-            components: vec![Box::new(health)],
+            // Render order is also the layout order: index 0 fills the
+            // top region, index 1 is the bottom command-log strip.
+            components: vec![Box::new(health), Box::new(command_log)],
             should_quit: false,
             should_suspend: false,
             config,
@@ -200,8 +208,15 @@ impl App {
 
     fn render(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
         tui.draw(|frame| {
-            for component in self.components.iter_mut() {
-                if let Err(err) = component.draw(frame, frame.area()) {
+            // v0.1 layout: main screen on top, command-log strip on
+            // the bottom. v0.2+ will replace this with a router-style
+            // layout once we have multiple top screens.
+            use ratatui::layout::{Constraint, Layout};
+            let chunks =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).split(frame.area());
+            for (i, component) in self.components.iter_mut().enumerate() {
+                let area = if i == 1 { chunks[1] } else { chunks[0] };
+                if let Err(err) = component.draw(frame, area) {
                     let _ = self
                         .action_tx
                         .send(Action::Error(format!("Failed to draw: {:?}", err)));
