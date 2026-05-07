@@ -54,15 +54,7 @@ fn view_empty_snapshot() {
 #[test]
 fn view_pending_tag() {
     // Bee returned the tag but hasn't started counting yet (total=0).
-    let view = Tags::view_for(&snapshot_with(vec![tag(
-        1,
-        "fresh-buy",
-        0,
-        0,
-        0,
-        0,
-        0xaa,
-    )]));
+    let view = Tags::view_for(&snapshot_with(vec![tag(1, "fresh-buy", 0, 0, 0, 0, 0xaa)]));
     insta::assert_debug_snapshot!(view);
 }
 
@@ -100,13 +92,7 @@ fn view_pushing_tag() {
 fn view_syncing_tag() {
     // Pushed but waiting on receipts: synced lags behind sent.
     let view = Tags::view_for(&snapshot_with(vec![tag(
-        4,
-        "doc.pdf",
-        100,
-        100,
-        100,
-        70,
-        0xdd,
+        4, "doc.pdf", 100, 100, 100, 70, 0xdd,
     )]));
     insta::assert_debug_snapshot!(view);
 }
@@ -153,10 +139,10 @@ fn view_totals_aggregate_across_tags() {
     // Three tags in different states — totals should sum split/sent/
     // synced and count `active` as non-Pending non-Synced.
     let view = Tags::view_for(&snapshot_with(vec![
-        tag(1, "a", 100, 100, 100, 100, 0x01),  // Synced (not active)
-        tag(2, "b", 100, 50, 0, 0, 0x02),        // Splitting (active)
-        tag(3, "c", 100, 100, 100, 50, 0x03),    // Syncing (active)
-        tag(4, "d", 0, 0, 0, 0, 0x04),           // Pending (not active)
+        tag(1, "a", 100, 100, 100, 100, 0x01), // Synced (not active)
+        tag(2, "b", 100, 50, 0, 0, 0x02),      // Splitting (active)
+        tag(3, "c", 100, 100, 100, 50, 0x03),  // Syncing (active)
+        tag(4, "d", 0, 0, 0, 0, 0x04),         // Pending (not active)
     ]));
     insta::assert_debug_snapshot!(view);
 }

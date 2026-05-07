@@ -379,10 +379,7 @@ impl Component for Network {
             let (color, msg) = theme::classify_header_error(err);
             header_l2.push(Span::styled(msg, Style::default().fg(color)));
         } else if !self.network.is_loaded() {
-            header_l2.push(Span::styled(
-                "loading…",
-                Style::default().fg(t.dim),
-            ));
+            header_l2.push(Span::styled("loading…", Style::default().fg(t.dim)));
         }
         frame.render_widget(
             Paragraph::new(vec![header_l1, Line::from(header_l2)])
@@ -395,15 +392,18 @@ impl Component for Network {
         // Identity: overlay + ethereum
         let identity = vec![
             Line::from(vec![
-                Span::styled("  overlay   ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "  overlay   ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(view.overlay_short.clone(), Style::default().fg(t.info)),
             ]),
             Line::from(vec![
-                Span::styled("  ethereum  ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
-                    view.ethereum_short.clone(),
-                    Style::default().fg(t.info),
+                    "  ethereum  ",
+                    Style::default().add_modifier(Modifier::BOLD),
                 ),
+                Span::styled(view.ethereum_short.clone(), Style::default().fg(t.info)),
             ]),
         ];
         frame.render_widget(
@@ -418,7 +418,10 @@ impl Component for Network {
             .unwrap_or_else(|| "—".into());
         let conns = vec![
             Line::from(vec![
-                Span::styled("  inbound   ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "  inbound   ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(format!("{:<6}", view.inbound)),
                 Span::styled("outbound  ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(format!("{}", view.outbound)),
@@ -440,7 +443,10 @@ impl Component for Network {
                 ),
             ]),
             Line::from(vec![
-                Span::styled("  network   ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "  network   ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(
                     view.network_availability.label(),
                     Style::default()
@@ -457,16 +463,12 @@ impl Component for Network {
         // Public addresses
         let mut addr_lines: Vec<Line> = vec![Line::from(Span::styled(
             "  PUBLIC ADDRESSES",
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
         ))];
         if view.underlays.is_empty() {
             addr_lines.push(Line::from(Span::styled(
                 "  (no addresses reported)",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         } else {
             for u in &view.underlays {
@@ -484,15 +486,11 @@ impl Component for Network {
             addr_lines.push(Line::from(""));
             addr_lines.push(Line::from(Span::styled(
                 "  External port-check + relay candidates require services Bee doesn't expose;",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
             addr_lines.push(Line::from(Span::styled(
                 "  use `nmap -p 1634 <ip>` from a separate machine to confirm public reachability.",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         }
         frame.render_widget(Paragraph::new(addr_lines), chunks[3]);
@@ -568,7 +566,10 @@ mod tests {
 
     #[test]
     fn reachability_from_api_known_strings() {
-        assert_eq!(ReachabilityStatus::from_api("Public"), ReachabilityStatus::Public);
+        assert_eq!(
+            ReachabilityStatus::from_api("Public"),
+            ReachabilityStatus::Public
+        );
         assert_eq!(
             ReachabilityStatus::from_api("Private"),
             ReachabilityStatus::Private

@@ -161,10 +161,7 @@ fn view_unknown_reachability_string_passes_through() {
     // Defensive: future Bee builds may add new reachability values.
     // We surface them verbatim instead of misclassifying.
     let topo = topology("Symmetric", "Unavailable", vec![]);
-    let (n, t) = snapshot_with(
-        Some(addresses(0x11, 0x22, vec![])),
-        Some(topo),
-    );
+    let (n, t) = snapshot_with(Some(addresses(0x11, 0x22, vec![])), Some(topo));
     let view = Network::view_for(&n, &t);
     insta::assert_debug_snapshot!(view);
 }

@@ -271,9 +271,7 @@ fn peers_step(health: &HealthSnapshot) -> WarmupStep {
     };
     let connected = s.connected_peers as u64;
     let pct = pct_of(connected, PEER_BOOTSTRAP_TARGET);
-    let detail = format!(
-        "{connected} connected (target ≥ {PEER_BOOTSTRAP_TARGET})"
-    );
+    let detail = format!("{connected} connected (target ≥ {PEER_BOOTSTRAP_TARGET})");
     if connected >= PEER_BOOTSTRAP_TARGET {
         WarmupStep {
             label: "Peer bootstrap",
@@ -438,21 +436,12 @@ impl Component for Warmup {
                 Style::default().fg(t.warn).add_modifier(Modifier::BOLD),
             )
         } else if view.elapsed.is_some() {
-            Span::styled(
-                "complete (post-warmup view)",
-                Style::default().fg(t.pass),
-            )
+            Span::styled("complete (post-warmup view)", Style::default().fg(t.pass))
         } else {
-            Span::styled(
-                "(no /status snapshot yet)",
-                Style::default().fg(t.dim),
-            )
+            Span::styled("(no /status snapshot yet)", Style::default().fg(t.dim))
         };
         let header_l1 = Line::from(vec![
-            Span::styled(
-                "WARMUP",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            Span::styled("WARMUP", Style::default().add_modifier(Modifier::BOLD)),
             Span::raw("  ·  "),
             status_label,
             Span::raw("  ·  elapsed "),
@@ -460,9 +449,7 @@ impl Component for Warmup {
         ]);
         let header_l2 = Line::from(Span::styled(
             "  Bee bootstrap is opaque (bee#4746); these checks reconstruct the steps from /status, /stamps, /topology.",
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::ITALIC),
+            Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
         ));
         frame.render_widget(
             Paragraph::new(vec![header_l1, header_l2])
@@ -490,10 +477,7 @@ impl Component for Warmup {
                     format!("{:<28}", s.label),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    s.detail.clone(),
-                    Style::default().fg(t.dim),
-                ),
+                Span::styled(s.detail.clone(), Style::default().fg(t.dim)),
                 Span::styled(progress_suffix, Style::default().fg(s.state.color())),
             ]));
         }

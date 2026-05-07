@@ -257,8 +257,7 @@ impl BeeWatch {
             cancel.clone(),
             Duration::from_secs(60),
         );
-        let (transactions_tx, transactions_rx) =
-            watch::channel(TransactionsSnapshot::default());
+        let (transactions_tx, transactions_rx) = watch::channel(TransactionsSnapshot::default());
         spawn_transactions_poller(
             client.clone(),
             transactions_tx,

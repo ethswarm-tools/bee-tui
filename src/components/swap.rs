@@ -359,10 +359,7 @@ impl Component for Swap {
             let (color, msg) = theme::classify_header_error(err);
             header_l2.push(Span::styled(msg, Style::default().fg(color)));
         } else if !self.snapshot.is_loaded() {
-            header_l2.push(Span::styled(
-                "loading…",
-                Style::default().fg(t.dim),
-            ));
+            header_l2.push(Span::styled("loading…", Style::default().fg(t.dim)));
         }
         frame.render_widget(
             Paragraph::new(vec![header_l1, Line::from(header_l2)])
@@ -403,9 +400,7 @@ impl Component for Swap {
                 Span::raw("    └─ "),
                 Span::styled(
                     why.clone(),
-                    Style::default()
-                        .fg(t.dim)
-                        .add_modifier(Modifier::ITALIC),
+                    Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
                 ),
             ]));
         }
@@ -422,16 +417,12 @@ impl Component for Swap {
         // Cheques table
         let mut cheque_lines: Vec<Line> = vec![Line::from(Span::styled(
             "  PEER          LAST RECEIVED",
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
         ))];
         if view.cheques.is_empty() {
             cheque_lines.push(Line::from(Span::styled(
                 "  (no peer cheques known yet)",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         } else {
             for r in &view.cheques {
@@ -448,23 +439,19 @@ impl Component for Swap {
             }
         }
         frame.render_widget(
-            Paragraph::new(cheque_lines).block(
-                Block::default()
-                    .borders(Borders::BOTTOM)
-                    .title(Span::styled(
-                        " last cheques ",
-                        Style::default().add_modifier(Modifier::BOLD),
-                    )),
-            ),
+            Paragraph::new(cheque_lines).block(Block::default().borders(Borders::BOTTOM).title(
+                Span::styled(
+                    " last cheques ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            )),
             table_chunks[0],
         );
 
         // Settlements table
         let mut settle_lines: Vec<Line> = vec![Line::from(Span::styled(
             "  PEER          RECEIVED              SENT                 NET",
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
         ))];
         if let (Some(tr), Some(ts)) = (&view.time_total_received, &view.time_total_sent) {
             settle_lines.push(Line::from(vec![Span::styled(
@@ -475,16 +462,12 @@ impl Component for Swap {
         if view.settlements.is_empty() {
             settle_lines.push(Line::from(Span::styled(
                 "  (no peer settlements yet)",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         } else {
             for r in &view.settlements {
                 let net_style = if r.net_flagged {
-                    Style::default()
-                        .fg(t.fail)
-                        .add_modifier(Modifier::BOLD)
+                    Style::default().fg(t.fail).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(t.dim)
                 };

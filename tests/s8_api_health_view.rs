@@ -82,7 +82,9 @@ fn view_all_successful_calls() {
     let view = ApiHealth::view_for(
         "http://localhost:1633",
         &entries,
-        &health_with_chain(r#"{"block":12345,"chainTip":12347,"currentPrice":"42","totalAmount":"1000"}"#),
+        &health_with_chain(
+            r#"{"block":12345,"chainTip":12347,"currentPrice":"42","totalAmount":"1000"}"#,
+        ),
         &TransactionsSnapshot::default(),
     );
     insta::assert_debug_snapshot!(view);
@@ -115,7 +117,9 @@ fn view_pending_transactions() {
     let view = ApiHealth::view_for(
         "http://10.0.1.5:1633",
         &[],
-        &health_with_chain(r#"{"block":777,"chainTip":777,"currentPrice":"100","totalAmount":"5000"}"#),
+        &health_with_chain(
+            r#"{"block":777,"chainTip":777,"currentPrice":"100","totalAmount":"5000"}"#,
+        ),
         &transactions_with(txs),
     );
     insta::assert_debug_snapshot!(view);
@@ -127,7 +131,9 @@ fn view_chain_lagging() {
     let view = ApiHealth::view_for(
         "http://localhost:1633",
         &[],
-        &health_with_chain(r#"{"block":1000,"chainTip":1050,"currentPrice":"42","totalAmount":"1000"}"#),
+        &health_with_chain(
+            r#"{"block":1000,"chainTip":1050,"currentPrice":"42","totalAmount":"1000"}"#,
+        ),
         &TransactionsSnapshot::default(),
     );
     insta::assert_debug_snapshot!(view);

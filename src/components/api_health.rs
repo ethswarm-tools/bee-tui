@@ -276,9 +276,7 @@ impl Component for ApiHealth {
         ]);
         let header_l2 = Line::from(Span::styled(
             "  Bee doesn't expose its eth RPC URL or remote chain tip; this view measures the local Bee API instead.",
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::ITALIC),
+            Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
         ));
         frame.render_widget(
             Paragraph::new(vec![header_l1, header_l2])
@@ -288,8 +286,14 @@ impl Component for ApiHealth {
 
         // Call stats
         let cs = &view.call_stats;
-        let p50 = cs.p50_ms.map(|v| format!("{v} ms")).unwrap_or_else(|| "—".into());
-        let p99 = cs.p99_ms.map(|v| format!("{v} ms")).unwrap_or_else(|| "—".into());
+        let p50 = cs
+            .p50_ms
+            .map(|v| format!("{v} ms"))
+            .unwrap_or_else(|| "—".into());
+        let p99 = cs
+            .p99_ms
+            .map(|v| format!("{v} ms"))
+            .unwrap_or_else(|| "—".into());
         let err_color = if cs.error_rate_pct >= 5.0 {
             t.fail
         } else if cs.error_rate_pct >= 1.0 {
@@ -300,9 +304,7 @@ impl Component for ApiHealth {
         let stats_lines = vec![
             Line::from(vec![Span::styled(
                 "  CALL STATS",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
             )]),
             Line::from(vec![
                 Span::raw("    p50 latency   "),
@@ -351,9 +353,7 @@ impl Component for ApiHealth {
         let chain_lines = vec![
             Line::from(vec![Span::styled(
                 "  CHAIN STATE  (Bee's view, not the wider network)",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
             )]),
             Line::from(vec![
                 Span::raw("    block "),
@@ -372,23 +372,17 @@ impl Component for ApiHealth {
         // Pending tx table
         let mut pending_lines = vec![Line::from(Span::styled(
             format!("  PENDING TRANSACTIONS  ({})", view.pending.len()),
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
         ))];
         if view.pending.is_empty() {
             pending_lines.push(Line::from(Span::styled(
                 "  (no pending operator transactions — all confirmed)",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         } else {
             pending_lines.push(Line::from(Span::styled(
                 "  NONCE  HASH           TO              CREATED                DESCRIPTION",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
             )));
             for r in &view.pending {
                 pending_lines.push(Line::from(vec![
@@ -400,10 +394,7 @@ impl Component for ApiHealth {
                     ),
                     Span::raw(format!("{:<15} ", r.to_short)),
                     Span::raw(format!("{:<22} ", truncate(&r.created, 22))),
-                    Span::styled(
-                        truncate(&r.description, 30),
-                        Style::default().fg(t.dim),
-                    ),
+                    Span::styled(truncate(&r.description, 30), Style::default().fg(t.dim)),
                 ]));
             }
         }

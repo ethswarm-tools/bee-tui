@@ -207,9 +207,17 @@ pub fn install(ui: &UiConfig) {
 ///
 /// Re-calling silently no-ops, same as [`install`].
 pub fn install_with_overrides(ui: &UiConfig, force_no_color: bool, force_ascii: bool) {
-    let palette_name = if force_no_color { "mono" } else { ui.theme.as_str() };
+    let palette_name = if force_no_color {
+        "mono"
+    } else {
+        ui.theme.as_str()
+    };
     let ascii = force_ascii || ui.ascii_fallback;
-    let glyphs = if ascii { Glyphs::ascii() } else { Glyphs::unicode() };
+    let glyphs = if ascii {
+        Glyphs::ascii()
+    } else {
+        Glyphs::unicode()
+    };
     let theme = from_name(palette_name).with_glyphs(glyphs);
     let _ = ACTIVE.set(theme);
 }
@@ -289,9 +297,18 @@ mod tests {
         // Every ascii glyph stays at most 4 chars so column widths
         // don't drift between modes.
         for g in [
-            a.pass, a.warn, a.fail, a.pending, a.in_progress,
-            a.bar_filled, a.bar_empty, a.cursor, a.ellipsis,
-            a.continuation, a.bullet, a.em_dash,
+            a.pass,
+            a.warn,
+            a.fail,
+            a.pending,
+            a.in_progress,
+            a.bar_filled,
+            a.bar_empty,
+            a.cursor,
+            a.ellipsis,
+            a.continuation,
+            a.bullet,
+            a.em_dash,
         ] {
             assert!(g.len() <= 4, "ascii glyph too wide: {g:?}");
         }

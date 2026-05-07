@@ -11,9 +11,7 @@
 use std::time::Instant;
 
 use bee::debug::{BinInfo, MetricSnapshotView, PeerInfo, Topology};
-use bee_tui::components::peers::{
-    OVER_SATURATION_PEERS, Peers, SATURATION_PEERS,
-};
+use bee_tui::components::peers::{OVER_SATURATION_PEERS, Peers, SATURATION_PEERS};
 use bee_tui::watch::TopologySnapshot;
 
 fn empty_bin() -> BinInfo {
@@ -59,14 +57,8 @@ fn topology_with(depth: u8, bins: Vec<BinInfo>) -> Topology {
     }
     Topology {
         base_addr: "ab".repeat(32),
-        population: full
-            .iter()
-            .map(|b| b.population as i64)
-            .sum::<i64>(),
-        connected: full
-            .iter()
-            .map(|b| b.connected as i64)
-            .sum::<i64>(),
+        population: full.iter().map(|b| b.population as i64).sum::<i64>(),
+        connected: full.iter().map(|b| b.connected as i64).sum::<i64>(),
         timestamp: "2024-01-01T00:00:00Z".into(),
         nn_low_watermark: SATURATION_PEERS as i64,
         depth,
@@ -126,7 +118,11 @@ fn view_oversaturated_bin() {
     // Bin 4 has 25 connected — over the OVER_SATURATION_PEERS=18 threshold.
     let mut bins = Vec::new();
     for i in 0..=8u8 {
-        let connected = if i == 4 { OVER_SATURATION_PEERS + 7 } else { 12 };
+        let connected = if i == 4 {
+            OVER_SATURATION_PEERS + 7
+        } else {
+            12
+        };
         bins.push(bin_with_peers(connected + 5, connected, vec![]));
     }
     let t = topology_with(8, bins);

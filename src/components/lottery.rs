@@ -223,10 +223,8 @@ pub enum BenchState {
 /// Fixed anchor pair used for the benchmark. Real-round anchors come
 /// off-chain; for a deterministic local sample we use 0x00…00 vs
 /// 0xff…ff so repeat measurements compare cleanly.
-const BENCH_ANCHOR_LO: &str =
-    "0000000000000000000000000000000000000000000000000000000000000000";
-const BENCH_ANCHOR_HI: &str =
-    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+const BENCH_ANCHOR_LO: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+const BENCH_ANCHOR_HI: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 /// Fallback depth when `/status` hasn't reported a `storage_radius`
 /// yet. 8 is a typical mainnet radius, so the sample size is
 /// representative.
@@ -468,21 +466,13 @@ fn stake_card_for(r: Option<&RedistributionState>, lottery: &LotterySnapshot) ->
                 r.last_frozen_round,
             )),
         ),
-        None => (
-            "—".into(),
-            "—".into(),
-            "—".into(),
-            None,
-            None,
-        ),
+        None => ("—".into(), "—".into(), "—".into(), None, None),
     };
 
     let (status, why) = match (lottery.last_error.as_deref(), staked_bi, status_inputs) {
         (Some(e), _, _) => (StakeStatus::Unknown, Some(format!("/stake error: {e}"))),
         (_, None, _) => (StakeStatus::Unknown, Some("/stake not loaded yet".into())),
-        (_, Some(s), Some((frozen, healthy, sufficient, synced, last_frozen)))
-            if s == &zero =>
-        {
+        (_, Some(s), Some((frozen, healthy, sufficient, synced, last_frozen))) if s == &zero => {
             let _ = (frozen, healthy, sufficient, synced, last_frozen);
             (
                 StakeStatus::Unstaked,
@@ -567,10 +557,7 @@ impl Component for Lottery {
             let (color, msg) = theme::classify_header_error(err);
             header_l2.push(Span::styled(msg, Style::default().fg(color)));
         } else if !self.lottery.is_loaded() {
-            header_l2.push(Span::styled(
-                "loading…",
-                Style::default().fg(t.dim),
-            ));
+            header_l2.push(Span::styled("loading…", Style::default().fg(t.dim)));
         }
         frame.render_widget(
             Paragraph::new(vec![header_l1, Line::from(header_l2)])
@@ -589,8 +576,10 @@ impl Component for Lottery {
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("· phase {} · block-of-round {}/{BLOCKS_PER_ROUND}",
-                        rc.phase_label, rc.block_of_round),
+                    format!(
+                        "· phase {} · block-of-round {}/{BLOCKS_PER_ROUND}",
+                        rc.phase_label, rc.block_of_round
+                    ),
                     Style::default().fg(t.dim),
                 ),
             ]));
@@ -599,9 +588,7 @@ impl Component for Lottery {
         } else {
             round_lines.push(Line::from(Span::styled(
                 "  (redistribution state not loaded yet)",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         }
         frame.render_widget(
@@ -612,16 +599,12 @@ impl Component for Lottery {
         // Anchors
         let mut anchor_lines: Vec<Line> = vec![Line::from(Span::styled(
             "  ANCHORS         ROUND       WHEN",
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
         ))];
         if view.anchors.is_empty() {
             anchor_lines.push(Line::from(Span::styled(
                 "  (no anchor data)",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         } else {
             for a in &view.anchors {
@@ -650,10 +633,7 @@ impl Component for Lottery {
         let stake = &view.stake;
         let mut stake_lines = vec![
             Line::from(vec![
-                Span::styled(
-                    "  Stake  ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
+                Span::styled("  Stake  ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
                     stake.status.label(),
                     Style::default()
@@ -687,9 +667,7 @@ impl Component for Lottery {
                 Span::raw("    └─ "),
                 Span::styled(
                     why.clone(),
-                    Style::default()
-                        .fg(t.dim)
-                        .add_modifier(Modifier::ITALIC),
+                    Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
                 ),
             ]));
         }
@@ -711,10 +689,7 @@ impl Component for Lottery {
             BenchState::Idle => {
                 stake_lines.push(Line::from(vec![
                     Span::raw("    "),
-                    Span::styled(
-                        "press 'r' to run a sample",
-                        Style::default().fg(t.dim),
-                    ),
+                    Span::styled("press 'r' to run a sample", Style::default().fg(t.dim)),
                 ]));
             }
             BenchState::Running => {
@@ -752,10 +727,7 @@ impl Component for Lottery {
             BenchState::Failed { error } => {
                 stake_lines.push(Line::from(vec![
                     Span::raw("    "),
-                    Span::styled(
-                        format!("error: {error}"),
-                        Style::default().fg(t.fail),
-                    ),
+                    Span::styled(format!("error: {error}"), Style::default().fg(t.fail)),
                 ]));
             }
         }
@@ -793,12 +765,7 @@ fn segment_spans(segs: &[PhaseSegment]) -> Vec<Span<'static>> {
             Modifier::empty()
         };
         out.push(Span::styled(
-            format!(
-                " {} {}..{} ",
-                s.phase.label(),
-                s.start_block,
-                s.end_block
-            ),
+            format!(" {} {}..{} ", s.phase.label(), s.start_block, s.end_block),
             Style::default().fg(color).add_modifier(modifier),
         ));
         if i + 1 < segs.len() {
@@ -822,10 +789,7 @@ fn progress_bar_spans(rc: &RoundCard) -> Vec<Span<'static>> {
     vec![
         Span::raw("  "),
         Span::styled(bar, Style::default().fg(theme::active().warn)),
-        Span::raw(format!(
-            "   {}/{BLOCKS_PER_ROUND}",
-            rc.block_of_round
-        )),
+        Span::raw(format!("   {}/{BLOCKS_PER_ROUND}", rc.block_of_round)),
     ]
 }
 

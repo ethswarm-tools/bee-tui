@@ -137,7 +137,7 @@ impl Tags {
         let mut rows: Vec<TagRow> = snap.tags.iter().map(row_from_tag).collect();
         // Newest tags first — Bee assigns monotonically increasing
         // UIDs, so sort by UID descending.
-        rows.sort_by(|a, b| b.uid.cmp(&a.uid));
+        rows.sort_by_key(|r| std::cmp::Reverse(r.uid));
         let totals = compute_totals(&rows);
         TagsView { rows, totals }
     }
@@ -227,10 +227,7 @@ impl Component for Tags {
         Ok(None)
     }
 
-    fn handle_key_event(
-        &mut self,
-        key: crossterm::event::KeyEvent,
-    ) -> Result<Option<Action>> {
+    fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<Option<Action>> {
         use crossterm::event::KeyCode;
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
@@ -288,10 +285,7 @@ impl Component for Tags {
             let (color, msg) = theme::classify_header_error(err);
             header_l2.push(Span::styled(msg, Style::default().fg(color)));
         } else if !self.snapshot.is_loaded() {
-            header_l2.push(Span::styled(
-                "loading…",
-                Style::default().fg(t.dim),
-            ));
+            header_l2.push(Span::styled("loading…", Style::default().fg(t.dim)));
         }
         frame.render_widget(
             Paragraph::new(vec![header_l1, Line::from(header_l2)])
@@ -302,11 +296,8 @@ impl Component for Tags {
         // Pinned column header + scrollable body. j/k/PageUp/PageDown
         // move scroll_offset; the renderer here just clamps it to
         // the current row count and area height.
-        let table_chunks = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .split(chunks[1]);
+        let table_chunks =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(chunks[1]);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "  UID    NAME                ADDR          TOTAL   SPLIT  SENT   SYNCED   %    STATUS",
@@ -321,9 +312,7 @@ impl Component for Tags {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     "  (no tags reported — uploads via swarm-cli or the API will appear here)",
-                    Style::default()
-                        .fg(t.dim)
-                        .add_modifier(Modifier::ITALIC),
+                    Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
                 ))),
                 table_chunks[1],
             );
@@ -383,14 +372,14 @@ impl Component for Tags {
             Paragraph::new(Line::from(vec![
                 Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" switch screen  "),
-                Span::styled(" jk/PgUp/PgDn ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::styled(
+                    " jk/PgUp/PgDn ",
+                    Style::default().fg(Color::Black).bg(Color::White),
+                ),
                 Span::raw(" scroll  "),
                 Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" quit  "),
-                Span::styled(
-                    "stages: split → sent → synced",
-                    Style::default().fg(t.dim),
-                ),
+                Span::styled("stages: split → sent → synced", Style::default().fg(t.dim)),
             ])),
             chunks[2],
         );

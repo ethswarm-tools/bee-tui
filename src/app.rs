@@ -14,14 +14,20 @@ use crate::{
     action::Action,
     api::ApiClient,
     components::{
-        Component, api_health::ApiHealth, command_log::CommandLog,
+        Component,
+        api_health::ApiHealth,
+        command_log::CommandLog,
         health::{Gate, GateStatus, Health},
-        lottery::Lottery, network::Network, peers::Peers, stamps::Stamps, swap::Swap,
-        tags::Tags, warmup::Warmup,
+        lottery::Lottery,
+        network::Network,
+        peers::Peers,
+        stamps::Stamps,
+        swap::Swap,
+        tags::Tags,
+        warmup::Warmup,
     },
     config::Config,
-    log_capture,
-    theme,
+    log_capture, theme,
     tui::{Event, Tui},
     watch::{BeeWatch, HealthSnapshot},
 };
@@ -214,8 +220,7 @@ impl App {
         let modal_after = self.command_buffer.is_some() || self.help_visible;
         // Non-key events (Tick / Resize / Render) always propagate
         // so screens keep refreshing under modals.
-        let propagate =
-            !((modal_before || modal_after) && matches!(event, Event::Key(_)));
+        let propagate = !((modal_before || modal_after) && matches!(event, Event::Key(_)));
         if propagate {
             for component in self.iter_components_mut() {
                 if let Some(action) = component.handle_events(Some(event.clone()))? {
@@ -266,10 +271,7 @@ impl App {
         }
         let action_tx = self.action_tx.clone();
         // ':' opens the command bar.
-        if matches!(
-            key.code,
-            crossterm::event::KeyCode::Char(':')
-        ) {
+        if matches!(key.code, crossterm::event::KeyCode::Char(':')) {
             self.command_buffer = Some(String::new());
             self.command_status = None;
             return Ok(());
@@ -396,12 +398,8 @@ impl App {
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
-                    let known: Vec<String> = self
-                        .config
-                        .nodes
-                        .iter()
-                        .map(|n| n.name.clone())
-                        .collect();
+                    let known: Vec<String> =
+                        self.config.nodes.iter().map(|n| n.name.clone()).collect();
                     self.command_status = Some(CommandStatus::Err(format!(
                         "usage: :context <name>  (known: {})",
                         known.join(", ")
@@ -416,9 +414,10 @@ impl App {
                     Err(e) => CommandStatus::Err(format!("context switch failed: {e}")),
                 });
             }
-            screen if SCREEN_NAMES
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(screen)) =>
+            screen
+                if SCREEN_NAMES
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(screen)) =>
             {
                 if let Some(idx) = SCREEN_NAMES
                     .iter()
@@ -520,7 +519,11 @@ impl App {
                             e.total,
                             e.missing,
                             e.invalid,
-                            if e.is_healthy() { "healthy" } else { "UNHEALTHY" },
+                            if e.is_healthy() {
+                                "healthy"
+                            } else {
+                                "UNHEALTHY"
+                            },
                         ));
                     }
                     body.push_str(&format!("# done. {} pins checked.\n", entries.len()));
@@ -624,10 +627,7 @@ impl App {
                     body.push_str(&format!("# {} loggers registered\n", rows.len()));
                     body.push_str("# VERBOSITY  LOGGER\n");
                     for r in &rows {
-                        body.push_str(&format!(
-                            "  {:<9}  {}\n",
-                            r.verbosity, r.logger,
-                        ));
+                        body.push_str(&format!("  {:<9}  {}\n", r.verbosity, r.logger,));
                     }
                     body.push_str("# done.\n");
                     if let Err(e) = append(&dest, &body) {
@@ -681,7 +681,10 @@ impl App {
         }
         out.push_str("\n## last API calls (path only — Bearer tokens, if any, live in headers and aren't captured)\n");
         for e in &recent {
-            let status = e.status.map(|s| s.to_string()).unwrap_or_else(|| "—".into());
+            let status = e
+                .status
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "—".into());
             let elapsed = e
                 .elapsed_ms
                 .map(|ms| format!("{ms}ms"))
@@ -762,8 +765,7 @@ impl App {
             .split(frame.area());
 
             let top_chunks =
-                Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
-                    .split(chunks[0]);
+                Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(chunks[0]);
 
             // Metadata line: profile · endpoint · ping · clock.
             let ping_str = match last_ping {
@@ -784,10 +786,7 @@ impl App {
                     profile,
                     Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    format!(" @ {endpoint}"),
-                    Style::default().fg(t.dim),
-                ),
+                Span::styled(format!(" @ {endpoint}"), Style::default().fg(t.dim)),
                 Span::raw("   "),
                 Span::styled("ping ", Style::default().fg(t.dim)),
                 Span::styled(ping_str, Style::default().fg(t.info)),
@@ -828,9 +827,7 @@ impl App {
                 Line::from(vec![
                     Span::styled(
                         ":",
-                        Style::default()
-                            .fg(t.accent)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(buf.clone(), Style::default().add_modifier(Modifier::BOLD)),
                     Span::styled("█", Style::default().fg(t.accent)),
@@ -895,7 +892,12 @@ fn draw_help_overlay(
     let h = area.height.min(22);
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let rect = Rect { x, y, width: w, height: h };
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
@@ -912,7 +914,9 @@ fn draw_help_overlay(
     if screen_rows.is_empty() {
         lines.push(Line::from(Span::styled(
             "  (no extra keys for this screen — use the command bar via :)",
-            Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC),
+            Style::default()
+                .fg(theme.dim)
+                .add_modifier(Modifier::ITALIC),
         )));
     } else {
         for (key, desc) in screen_rows {
@@ -930,7 +934,9 @@ fn draw_help_overlay(
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Esc / ? / q to dismiss",
-        Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC),
+        Style::default()
+            .fg(theme.dim)
+            .add_modifier(Modifier::ITALIC),
     )));
 
     // `Clear` blanks the underlying rendered region so the overlay
@@ -958,7 +964,9 @@ fn format_help_row<'a>(
         Span::raw("  "),
         Span::styled(
             format!("{key:<14}"),
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::raw(desc),
@@ -977,12 +985,13 @@ fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)
             ("Esc", "close drill"),
         ],
         // 2: Swap — read-only
-        3 => &[
-            ("r", "run on-demand rchash benchmark"),
-        ],
+        3 => &[("r", "run on-demand rchash benchmark")],
         4 => &[
             ("↑↓ / j k", "move peer selection"),
-            ("Enter", "drill peer — balance / cheques / settlement / ping"),
+            (
+                "Enter",
+                "drill peer — balance / cheques / settlement / ping",
+            ),
             ("Esc", "close drill"),
         ],
         // 5: Network — read-only
@@ -1041,7 +1050,11 @@ fn format_gate_line(g: &Gate) -> String {
         GateStatus::Fail => glyphs.fail,
         GateStatus::Unknown => glyphs.bullet,
     };
-    let mut s = format!("  [{glyph}] {label:<28} {value}\n", label = g.label, value = g.value);
+    let mut s = format!(
+        "  [{glyph}] {label:<28} {value}\n",
+        label = g.label,
+        value = g.value
+    );
     if let Some(why) = &g.why {
         s.push_str(&format!("        {} {why}\n", glyphs.continuation));
     }
@@ -1127,10 +1140,7 @@ mod tests {
 
     #[test]
     fn path_only_strips_scheme_and_host() {
-        assert_eq!(
-            path_only("http://10.0.1.5:1633/status"),
-            "/status"
-        );
+        assert_eq!(path_only("http://10.0.1.5:1633/status"), "/status");
         assert_eq!(
             path_only("https://bee.example.com/stamps?limit=10"),
             "/stamps?limit=10"

@@ -120,9 +120,7 @@ fn view_sample_between_rounds() {
 #[test]
 fn view_unstaked() {
     let block = 14_528 * 152 + 10;
-    let r = rs(
-        14_528, block, "commit", 0, 0, 0, 0, false, true, true, true,
-    );
+    let r = rs(14_528, block, "commit", 0, 0, 0, 0, false, true, true, true);
     let view = Lottery::view_for(&health_with(r), &lot_with(Some(BigInt::from(0))));
     insta::assert_debug_snapshot!(view);
 }

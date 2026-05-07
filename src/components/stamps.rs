@@ -468,8 +468,10 @@ impl Component for Stamps {
         // Drill mode swallows Esc to dismiss; otherwise keys behave
         // the same as in list mode (so `j`/`k` etc. don't surprise
         // the operator after pressing Enter).
-        if matches!(self.drill, DrillState::Loaded { .. } | DrillState::Loading { .. } | DrillState::Failed { .. })
-            && matches!(key.code, KeyCode::Esc)
+        if matches!(
+            self.drill,
+            DrillState::Loaded { .. } | DrillState::Loading { .. } | DrillState::Failed { .. }
+        ) && matches!(key.code, KeyCode::Esc)
         {
             self.drill = DrillState::Idle;
             return Ok(None);
@@ -521,10 +523,7 @@ impl Component for Stamps {
             let (color, msg) = theme::classify_header_error(err);
             header_l2.push(Span::styled(msg, Style::default().fg(color)));
         } else if !self.snapshot.is_loaded() {
-            header_l2.push(Span::styled(
-                "loading…",
-                Style::default().fg(t.dim),
-            ));
+            header_l2.push(Span::styled("loading…", Style::default().fg(t.dim)));
         }
         frame.render_widget(
             Paragraph::new(vec![header_l1, Line::from(header_l2)])
@@ -558,7 +557,10 @@ impl Component for Stamps {
             DrillState::Idle => Line::from(vec![
                 Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" switch screen  "),
-                Span::styled(" ↑↓/jk ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::styled(
+                    " ↑↓/jk ",
+                    Style::default().fg(Color::Black).bg(Color::White),
+                ),
                 Span::raw(" select  "),
                 Span::styled(" ↵ ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" drill  "),
@@ -590,11 +592,8 @@ impl Stamps {
 
         // Pinned column header + scrollable body, same pattern as
         // S6. Header doesn't scroll out from under the cursor.
-        let table_chunks = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .split(area);
+        let table_chunks =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "   LABEL                BATCH        VOLUME      WORST BUCKET                TTL         STATUS",
@@ -609,9 +608,7 @@ impl Stamps {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     "   (no batches yet — buy one with swarm-cli or `bee stamps buy`)",
-                    Style::default()
-                        .fg(t.dim)
-                        .add_modifier(Modifier::ITALIC),
+                    Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
                 ))),
                 table_chunks[1],
             );
@@ -667,9 +664,7 @@ impl Stamps {
                     Span::raw(format!("        {} ", t.glyphs.continuation)),
                     Span::styled(
                         why,
-                        Style::default()
-                            .fg(t.dim)
-                            .add_modifier(Modifier::ITALIC),
+                        Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
                     ),
                 ]));
             }
@@ -692,13 +687,7 @@ impl Stamps {
             Paragraph::new(lines.clone()).scroll((self.scroll_offset as u16, 0)),
             body,
         );
-        super::scroll::render_scrollbar(
-            frame,
-            body,
-            self.scroll_offset,
-            visible_rows,
-            lines.len(),
-        );
+        super::scroll::render_scrollbar(frame, body, self.scroll_offset, visible_rows, lines.len());
     }
 
     fn draw_drill(&self, frame: &mut Frame, area: Rect, view: &StampDrillView) {
@@ -752,11 +741,15 @@ impl Stamps {
         // Fill-distribution histogram.
         lines.push(Line::from(Span::styled(
             "  FILL %       COUNT   DISTRIBUTION",
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
         )));
-        let max_bin = view.fill_distribution.iter().copied().max().unwrap_or(1).max(1);
+        let max_bin = view
+            .fill_distribution
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(1)
+            .max(1);
         for (idx, count) in view.fill_distribution.iter().enumerate() {
             let label = FILL_BIN_LABELS[idx];
             let bar_width = ((u64::from(*count) * 30) / u64::from(max_bin)) as usize;
@@ -785,9 +778,7 @@ impl Stamps {
         if !view.worst_buckets.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  WORST BUCKETS",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
             )));
             for w in &view.worst_buckets {
                 if w.collisions == 0 {
@@ -798,10 +789,7 @@ impl Stamps {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::raw(format!("#{:<8}", w.bucket_id)),
-                    Span::raw(format!(
-                        "{:>4} / {}    ",
-                        w.collisions, view.upper_bound
-                    )),
+                    Span::raw(format!("{:>4} / {}    ", w.collisions, view.upper_bound)),
                     Span::styled(
                         format!("{}%", w.pct),
                         Style::default()

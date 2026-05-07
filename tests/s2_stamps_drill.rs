@@ -33,19 +33,19 @@ fn drill_view_realistic_skewed_batch() {
     // where average usage is low but a single bucket is the upload
     // ceiling.
     let mut entries: Vec<(u32, u32)> = vec![
-        (3, 64),  // 100 %
-        (17, 63), // 98 %
-        (101, 60),// 93 %
-        (200, 59),// 92 %
-        (455, 50),// 78 %
-        (456, 48),// 75 %
-        (457, 32),// 50 %
-        (612, 30),// 46 %
-        (700, 5), // 7 %
-        (701, 4), // 6 %
-        (702, 3), // 4 %
-        (703, 2), // 3 %
-        (704, 1), // 1 %
+        (3, 64),   // 100 %
+        (17, 63),  // 98 %
+        (101, 60), // 93 %
+        (200, 59), // 92 %
+        (455, 50), // 78 %
+        (456, 48), // 75 %
+        (457, 32), // 50 %
+        (612, 30), // 46 %
+        (700, 5),  // 7 %
+        (701, 4),  // 6 %
+        (702, 3),  // 4 %
+        (703, 2),  // 3 %
+        (704, 1),  // 1 %
     ];
     // Pad with 100 empty buckets so the 0 % bin dominates the
     // distribution — matches the real-world shape Bee returns.
@@ -59,11 +59,8 @@ fn drill_view_realistic_skewed_batch() {
 #[test]
 fn drill_view_full_batch() {
     // Pathological: one bucket has saturated, no other activity.
-    let view = Stamps::compute_drill_view(&buckets_with(
-        &[(7, 64), (8, 0), (9, 0), (10, 0)],
-        22,
-        16,
-    ));
+    let view =
+        Stamps::compute_drill_view(&buckets_with(&[(7, 64), (8, 0), (9, 0), (10, 0)], 22, 16));
     insta::assert_debug_snapshot!(view);
 }
 

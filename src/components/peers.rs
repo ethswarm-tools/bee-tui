@@ -192,13 +192,8 @@ pub struct PeerDrillFetch {
 #[derive(Debug, Clone)]
 pub enum DrillState {
     Idle,
-    Loading {
-        peer: String,
-        bin: Option<u8>,
-    },
-    Loaded {
-        view: PeerDrillView,
-    },
+    Loading { peer: String, bin: Option<u8> },
+    Loaded { view: PeerDrillView },
 }
 
 type DrillFetchResult = (String, PeerDrillFetch);
@@ -311,20 +306,22 @@ impl Peers {
                 DrillField::Ok(format_opt_plur(s.received.as_ref())),
                 DrillField::Ok(format_opt_plur(s.sent.as_ref())),
             ),
-            Err(e) => (
-                DrillField::Err(e.clone()),
-                DrillField::Err(e.clone()),
-            ),
+            Err(e) => (DrillField::Err(e.clone()), DrillField::Err(e.clone())),
         };
         let (last_received_cheque, last_sent_cheque) = match &fetch.cheques {
             Ok(c) => (
-                DrillField::Ok(c.last_received.as_ref().map(|q| format_opt_plur(q.payout.as_ref()))),
-                DrillField::Ok(c.last_sent.as_ref().map(|q| format_opt_plur(q.payout.as_ref()))),
+                DrillField::Ok(
+                    c.last_received
+                        .as_ref()
+                        .map(|q| format_opt_plur(q.payout.as_ref())),
+                ),
+                DrillField::Ok(
+                    c.last_sent
+                        .as_ref()
+                        .map(|q| format_opt_plur(q.payout.as_ref())),
+                ),
             ),
-            Err(e) => (
-                DrillField::Err(e.clone()),
-                DrillField::Err(e.clone()),
-            ),
+            Err(e) => (DrillField::Err(e.clone()), DrillField::Err(e.clone())),
         };
         PeerDrillView {
             peer_overlay: peer.to_string(),
@@ -511,8 +508,10 @@ impl Component for Peers {
         // Drill mode: Esc dismisses; everything else is ignored
         // (drill is read-only). Selection keys still work in Idle so
         // the user can navigate before hitting Enter.
-        if matches!(self.drill, DrillState::Loaded { .. } | DrillState::Loading { .. })
-            && matches!(key.code, KeyCode::Esc)
+        if matches!(
+            self.drill,
+            DrillState::Loaded { .. } | DrillState::Loading { .. }
+        ) && matches!(key.code, KeyCode::Esc)
         {
             self.drill = DrillState::Idle;
             return Ok(None);
@@ -537,10 +536,10 @@ impl Component for Peers {
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let chunks = Layout::vertical([
-            Constraint::Length(3), // header
+            Constraint::Length(3),  // header
             Constraint::Length(20), // bin strip (32 lines + header)
-            Constraint::Min(0),    // peer table OR drill
-            Constraint::Length(1), // footer
+            Constraint::Min(0),     // peer table OR drill
+            Constraint::Length(1),  // footer
         ])
         .split(area);
 
@@ -550,9 +549,15 @@ impl Component for Peers {
             Style::default().add_modifier(Modifier::BOLD),
         )];
         if let DrillState::Loaded { view } = &self.drill {
-            header_l1.push(Span::raw(format!("   · drill {}", short_overlay(&view.peer_overlay))));
+            header_l1.push(Span::raw(format!(
+                "   · drill {}",
+                short_overlay(&view.peer_overlay)
+            )));
         } else if let DrillState::Loading { peer, .. } = &self.drill {
-            header_l1.push(Span::raw(format!("   · drill {} (loading)", short_overlay(peer))));
+            header_l1.push(Span::raw(format!(
+                "   · drill {} (loading)",
+                short_overlay(peer)
+            )));
         }
         let header_l1 = Line::from(header_l1);
         let mut header_l2 = Vec::new();
@@ -561,10 +566,7 @@ impl Component for Peers {
             let (color, msg) = theme::classify_header_error(err);
             header_l2.push(Span::styled(msg, Style::default().fg(color)));
         } else if !self.snapshot.is_loaded() {
-            header_l2.push(Span::styled(
-                "loading…",
-                Style::default().fg(t.dim),
-            ));
+            header_l2.push(Span::styled("loading…", Style::default().fg(t.dim)));
         }
         frame.render_widget(
             Paragraph::new(vec![header_l1, Line::from(header_l2)])
@@ -578,9 +580,7 @@ impl Component for Peers {
                 frame.render_widget(
                     Paragraph::new(Span::styled(
                         "  topology not loaded yet",
-                        Style::default()
-                            .fg(t.dim)
-                            .add_modifier(Modifier::ITALIC),
+                        Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
                     )),
                     chunks[1],
                 );
@@ -590,32 +590,28 @@ impl Component for Peers {
 
         // Bin strip
         let mut strip_lines: Vec<Line> = vec![
-            Line::from(vec![
-                Span::styled(
-                    format!(
-                        "  depth {} · connected {} / known {} · reachability {} · net {}",
-                        view.depth,
-                        view.connected,
-                        view.population,
-                        if view.reachability.is_empty() {
-                            "?".to_string()
-                        } else {
-                            view.reachability.clone()
-                        },
-                        if view.network_availability.is_empty() {
-                            "?".to_string()
-                        } else {
-                            view.network_availability.clone()
-                        },
-                    ),
-                    Style::default().fg(t.dim),
+            Line::from(vec![Span::styled(
+                format!(
+                    "  depth {} · connected {} / known {} · reachability {} · net {}",
+                    view.depth,
+                    view.connected,
+                    view.population,
+                    if view.reachability.is_empty() {
+                        "?".to_string()
+                    } else {
+                        view.reachability.clone()
+                    },
+                    if view.network_availability.is_empty() {
+                        "?".to_string()
+                    } else {
+                        view.network_availability.clone()
+                    },
                 ),
-            ]),
+                Style::default().fg(t.dim),
+            )]),
             Line::from(Span::styled(
                 "  BIN  POP  CONN  BAR              STATUS",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
             )),
         ];
         for r in &view.bins {
@@ -647,7 +643,10 @@ impl Component for Peers {
             strip_lines.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
-                    format!(" light  —  {}    (separate from main bins)", view.light_connected),
+                    format!(
+                        " light  —  {}    (separate from main bins)",
+                        view.light_connected
+                    ),
                     Style::default().fg(t.dim),
                 ),
             ]));
@@ -681,14 +680,19 @@ impl Component for Peers {
             DrillState::Idle => Line::from(vec![
                 Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" switch screen  "),
-                Span::styled(" ↑↓/jk ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::styled(
+                    " ↑↓/jk ",
+                    Style::default().fg(Color::Black).bg(Color::White),
+                ),
                 Span::raw(" select  "),
                 Span::styled(" ↵ ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" drill  "),
                 Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" quit  "),
                 Span::styled(
-                    format!("thresholds: {SATURATION_PEERS} saturate · {OVER_SATURATION_PEERS} over"),
+                    format!(
+                        "thresholds: {SATURATION_PEERS} saturate · {OVER_SATURATION_PEERS} over"
+                    ),
                     Style::default().fg(t.dim),
                 ),
             ]),
@@ -716,18 +720,13 @@ impl Peers {
         // Two-row split: pinned column header + scrollable body. The
         // header doesn't scroll out from under the cursor, which is
         // what operators expect after using k9s / lazygit.
-        let table_chunks = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .split(area);
+        let table_chunks =
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
 
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "   BIN  PEER          DIR  LATENCY   HEALTHY  REACHABILITY",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
             ))),
             table_chunks[0],
         );
@@ -736,9 +735,7 @@ impl Peers {
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     "   (no connected peers reported)",
-                    Style::default()
-                        .fg(t.dim)
-                        .add_modifier(Modifier::ITALIC),
+                    Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
                 ))),
                 table_chunks[1],
             );
@@ -838,9 +835,7 @@ impl Peers {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  (Esc to dismiss · figures are point-in-time, not live-updating)",
-            Style::default()
-                .fg(t.dim)
-                .add_modifier(Modifier::ITALIC),
+            Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
         )));
         frame.render_widget(Paragraph::new(lines), area);
     }
@@ -881,9 +876,7 @@ fn drill_field_optional_line(
             Span::raw("  "),
             Span::styled(
                 "(no cheque yet)",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             ),
         ]),
         DrillField::Err(e) => Line::from(vec![
@@ -925,19 +918,13 @@ mod tests {
     #[test]
     fn classify_below_saturation_in_relevant_bin_is_starving() {
         // bin 4, depth 8 → bin <= depth + 4 = 12 → relevant → starving.
-        assert_eq!(
-            classify_bin(&bin(5, 3), 4, 8),
-            BinSaturation::Starving
-        );
+        assert_eq!(classify_bin(&bin(5, 3), 4, 8), BinSaturation::Starving);
     }
 
     #[test]
     fn classify_below_saturation_in_far_bin_is_empty() {
         // bin 20, depth 8 → bin > depth + 4 = 12 → far → empty.
-        assert_eq!(
-            classify_bin(&bin(0, 0), 20, 8),
-            BinSaturation::Empty
-        );
+        assert_eq!(classify_bin(&bin(0, 0), 20, 8), BinSaturation::Empty);
     }
 
     #[test]

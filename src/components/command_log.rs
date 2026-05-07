@@ -96,17 +96,13 @@ impl Component for CommandLog {
 
         let block = Block::default().borders(Borders::ALL).title(Span::styled(
             " bee::http ",
-            Style::default()
-                .fg(t.accent)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ));
 
         let widget = if lines.is_empty() {
             Paragraph::new(Line::from(Span::styled(
                 "  (waiting for first request…)",
-                Style::default()
-                    .fg(t.dim)
-                    .add_modifier(Modifier::ITALIC),
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )))
             .block(block)
         } else {
