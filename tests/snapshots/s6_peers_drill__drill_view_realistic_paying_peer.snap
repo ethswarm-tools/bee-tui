@@ -1,0 +1,30 @@
+---
+source: tests/s6_peers_drill.rs
+expression: view
+---
+PeerDrillView {
+    peer_overlay: "abc1234567890abc1234567890abc1234567890abc1234567890abc1234567890",
+    bin: Some(
+        7,
+    ),
+    balance: Ok(
+        "-BZZ 0.1200",
+    ),
+    ping: Ok(
+        "4.21ms",
+    ),
+    settlement_received: Ok(
+        "BZZ 8.0000",
+    ),
+    settlement_sent: Ok(
+        "BZZ 1.5000",
+    ),
+    last_received_cheque: Ok(
+        Some(
+            "BZZ 1.5000",
+        ),
+    ),
+    last_sent_cheque: Ok(
+        None,
+    ),
+}

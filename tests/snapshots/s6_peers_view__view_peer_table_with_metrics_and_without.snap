@@ -1,6 +1,5 @@
 ---
 source: tests/s6_peers_view.rs
-assertion_line: 165
 expression: view
 ---
 PeersView {
@@ -234,6 +233,7 @@ PeersView {
         PeerRow {
             bin: 4,
             peer_short: "aaaaaa…aaaa",
+            peer_full: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             direction: "out",
             latency: "8ms",
             healthy: true,
@@ -242,6 +242,7 @@ PeersView {
         PeerRow {
             bin: 4,
             peer_short: "bbbbbb…bbbb",
+            peer_full: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             direction: "in",
             latency: "240ms",
             healthy: false,
@@ -250,6 +251,7 @@ PeersView {
         PeerRow {
             bin: 4,
             peer_short: "cccccc…cccc",
+            peer_full: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
             direction: "?",
             latency: "—",
             healthy: false,

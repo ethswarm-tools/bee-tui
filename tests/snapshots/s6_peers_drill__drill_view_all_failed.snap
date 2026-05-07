@@ -1,0 +1,28 @@
+---
+source: tests/s6_peers_drill.rs
+expression: view
+---
+PeerDrillView {
+    peer_overlay: "zzz",
+    bin: Some(
+        0,
+    ),
+    balance: Err(
+        "Response { status: 503, body: \"Node is syncing\" }",
+    ),
+    ping: Err(
+        "Response { status: 503, body: \"Node is syncing\" }",
+    ),
+    settlement_received: Err(
+        "Response { status: 503, body: \"Node is syncing\" }",
+    ),
+    settlement_sent: Err(
+        "Response { status: 503, body: \"Node is syncing\" }",
+    ),
+    last_received_cheque: Err(
+        "Response { status: 503, body: \"Node is syncing\" }",
+    ),
+    last_sent_cheque: Err(
+        "Response { status: 503, body: \"Node is syncing\" }",
+    ),
+}

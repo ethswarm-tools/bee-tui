@@ -824,7 +824,7 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
     let stamps = Stamps::new(api.clone(), watch.stamps());
     let swap = Swap::new(watch.swap());
     let lottery = Lottery::new(api.clone(), watch.health(), watch.lottery());
-    let peers = Peers::new(watch.topology());
+    let peers = Peers::new(api.clone(), watch.topology());
     let network = Network::new(watch.network(), watch.topology());
     let warmup = Warmup::new(watch.health(), watch.stamps(), watch.topology());
     let api_health = ApiHealth::new(
