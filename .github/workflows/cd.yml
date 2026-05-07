@@ -7,10 +7,8 @@ on:
 
 jobs:
   publish:
-{% raw %}
     name: Publishing for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-{% endraw %}
     strategy:
       matrix:
         include:
@@ -64,9 +62,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-{% raw %}
           target: ${{ matrix.target }}
-{% endraw %}
           profile: minimal
           override: true
       - uses: Swatinem/rust-cache@v2
@@ -74,35 +70,25 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-{% raw %}
           use-cross: ${{ matrix.use-cross }}
-{% endraw %}
           toolchain: stable
-{% raw %}
           args: --release --target ${{ matrix.target }}
-{% endraw %}
 
       - name: install strip command
         shell: bash
         run: |
-{% raw %}
           if [[ ${{ matrix.target }} == aarch64-unknown-linux-gnu ]]; then
-{% endraw %}
               sudo apt update
               sudo apt-get install -y binutils-aarch64-linux-gnu
           fi
       - name: Packaging final binary
         shell: bash
         run: |
-{% raw %}
           cd target/${{ matrix.target }}/release
-{% endraw %}
 
           ####### reduce binary size by removing debug symbols #######
-{% raw %}
           BINARY_NAME=${{ matrix.binary-name }}${{ matrix.binary-postfix }}
           if [[ ${{ matrix.target }} == aarch64-unknown-linux-gnu ]]; then
-{% endraw %}
             GCC_PREFIX="aarch64-linux-gnu-"
           else
             GCC_PREFIX=""
@@ -110,15 +96,11 @@ jobs:
           "$GCC_PREFIX"strip $BINARY_NAME
 
           ########## create tar.gz ##########
-{% raw %}
           RELEASE_NAME=${{ matrix.binary-name }}-${GITHUB_REF/refs\/tags\//}-${{ matrix.os-name }}-${{ matrix.architecture }}
-{% endraw %}
           tar czvf $RELEASE_NAME.tar.gz $BINARY_NAME
 
           ########## create sha256 ##########
-{% raw %}
           if [[ ${{ runner.os }} == 'Windows' ]]; then
-{% endraw %}
             certutil -hashfile $RELEASE_NAME.tar.gz sha256 | grep -E [A-Fa-f0-9]{64} > $RELEASE_NAME.sha256
           else
             shasum -a 256 $RELEASE_NAME.tar.gz > $RELEASE_NAME.sha256
@@ -127,14 +109,10 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-{% raw %}
             target/${{ matrix.target }}/release/${{ matrix.binary-name }}-*.tar.gz
             target/${{ matrix.target }}/release/${{ matrix.binary-name }}-*.sha256
-{% endraw %}
         env:
-{% raw %}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-{% endraw %}
 
   publish-cargo:
     name: Publishing to Cargo
@@ -147,6 +125,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo publish
         env:
-{% raw %}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-{% endraw %}
