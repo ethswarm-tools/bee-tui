@@ -713,6 +713,10 @@ impl App {
             match action {
                 Action::Tick => {
                     self.last_tick_key_events.drain(..);
+                    // Advance the cold-start spinner once per tick
+                    // so every screen's "loading…" line shows
+                    // motion at a consistent cadence.
+                    theme::advance_spinner();
                 }
                 Action::Quit => self.should_quit = true,
                 Action::Suspend => self.should_suspend = true,

@@ -19,6 +19,39 @@ use ratatui::style::Color;
 
 use crate::config::UiConfig;
 
+/// Spinner frame count for the cold-start "loading…" indicator.
+/// Picked so a tick-driven counter cycles on a roughly 1 s
+/// cadence at the default `tick_rate=4`.
+const SPINNER_FRAMES_UNICODE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_FRAMES_ASCII: &[&str] = &["|", "/", "-", "\\"];
+
+/// Process-wide spinner tick counter. Incremented once per
+/// [`Action::Tick`] from `App::handle_actions`; read by every
+/// screen's loading-line render.
+static SPINNER_TICK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Bump the spinner counter — called from the central Tick
+/// handler so every screen sees the same frame at the same time.
+pub fn advance_spinner() {
+    SPINNER_TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Current spinner glyph. Resolves against the active glyph set
+/// (Unicode or ASCII) so cold-start polish honours `--ascii`.
+/// Detection is by content equality against the canonical pass
+/// glyph (`✓` vs `OK`) — pointer comparison is unreliable across
+/// builds because the compiler may or may not dedup the string
+/// literal.
+pub fn spinner_glyph() -> &'static str {
+    let frames = if active().glyphs.pass == Glyphs::unicode().pass {
+        SPINNER_FRAMES_UNICODE
+    } else {
+        SPINNER_FRAMES_ASCII
+    };
+    let i = SPINNER_TICK.load(std::sync::atomic::Ordering::Relaxed) % frames.len();
+    frames[i]
+}
+
 /// Slot-based glyph set, sibling of [`Theme`]. Components ask
 /// `theme::active().glyphs.pass` for the "Pass" glyph rather than
 /// hardcoding `"✓"` — that's what makes `--ascii` work without
@@ -319,5 +352,27 @@ mod tests {
         let t = Theme::default_palette().with_glyphs(Glyphs::ascii());
         assert_eq!(t.pass, Color::Green); // palette unchanged
         assert_eq!(t.glyphs.pass, "OK"); // glyphs swapped
+    }
+
+    #[test]
+    fn spinner_advances_through_frames() {
+        // The counter is process-global, so capture the current
+        // value first and only assert that we observe at least one
+        // distinct frame after a few advances. This avoids racing
+        // with whatever else has already incremented it under
+        // `cargo test`.
+        let initial = spinner_glyph();
+        let mut saw_different = false;
+        for _ in 0..20 {
+            advance_spinner();
+            if spinner_glyph() != initial {
+                saw_different = true;
+                break;
+            }
+        }
+        assert!(
+            saw_different,
+            "spinner_glyph should change as advance_spinner is called"
+        );
     }
 }

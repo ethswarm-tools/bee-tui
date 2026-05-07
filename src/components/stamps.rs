@@ -523,7 +523,10 @@ impl Component for Stamps {
             let (color, msg) = theme::classify_header_error(err);
             header_l2.push(Span::styled(msg, Style::default().fg(color)));
         } else if !self.snapshot.is_loaded() {
-            header_l2.push(Span::styled("loading…", Style::default().fg(t.dim)));
+            header_l2.push(Span::styled(
+                format!("{} loading…", theme::spinner_glyph()),
+                Style::default().fg(t.dim),
+            ));
         }
         frame.render_widget(
             Paragraph::new(vec![header_l1, Line::from(header_l2)])
@@ -564,6 +567,8 @@ impl Component for Stamps {
                 Span::raw(" select  "),
                 Span::styled(" ↵ ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" drill  "),
+                Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" help  "),
                 Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" quit  "),
                 Span::styled(" I/M ", Style::default().fg(t.dim)),
@@ -574,6 +579,8 @@ impl Component for Stamps {
                 Span::raw(" close drill  "),
                 Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" switch screen  "),
+                Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" help  "),
                 Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" quit "),
             ]),

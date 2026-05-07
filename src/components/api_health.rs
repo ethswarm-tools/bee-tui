@@ -405,6 +405,8 @@ impl Component for ApiHealth {
             Paragraph::new(Line::from(vec![
                 Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" switch screen  "),
+                Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" help  "),
                 Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" quit  "),
                 Span::styled(

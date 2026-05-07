@@ -285,7 +285,10 @@ impl Component for Tags {
             let (color, msg) = theme::classify_header_error(err);
             header_l2.push(Span::styled(msg, Style::default().fg(color)));
         } else if !self.snapshot.is_loaded() {
-            header_l2.push(Span::styled("loading…", Style::default().fg(t.dim)));
+            header_l2.push(Span::styled(
+                format!("{} loading…", theme::spinner_glyph()),
+                Style::default().fg(t.dim),
+            ));
         }
         frame.render_widget(
             Paragraph::new(vec![header_l1, Line::from(header_l2)])
@@ -377,6 +380,8 @@ impl Component for Tags {
                     Style::default().fg(Color::Black).bg(Color::White),
                 ),
                 Span::raw(" scroll  "),
+                Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" help  "),
                 Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" quit  "),
                 Span::styled("stages: split → sent → synced", Style::default().fg(t.dim)),

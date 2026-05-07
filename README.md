@@ -150,6 +150,11 @@ opens the drill, `Esc` closes it.
 `?` is the source of truth for screen-specific keymaps — every screen advertises
 its keys in the overlay.
 
+**Copying values out of the cockpit:** mouse mode is off by default, so your
+terminal's native selection works. Click-drag a peer overlay or batch ID,
+then paste it into a block explorer / Discord / etc. — bee-tui doesn't
+intercept it.
+
 ### Command bar
 
 | | |

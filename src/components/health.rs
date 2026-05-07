@@ -506,12 +506,11 @@ impl Component for Health {
         // ---- Footer (keymap) -----------------------------------------
         frame.render_widget(
             Paragraph::new(Line::from(vec![
+                Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" switch screen  "),
+                Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" help  "),
                 Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
-                Span::raw(" quit  "),
-                Span::styled(
-                    " Ctrl+C ",
-                    Style::default().fg(Color::Black).bg(Color::White),
-                ),
                 Span::raw(" quit  "),
             ])),
             chunks[2],
