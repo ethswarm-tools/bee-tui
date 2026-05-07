@@ -259,6 +259,7 @@ dependencies = [
  "signal-hook 0.3.18",
  "strip-ansi-escapes",
  "strum 0.26.3",
+ "time",
  "tokio",
  "tokio-util",
  "toml 0.8.23",

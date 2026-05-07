@@ -1,6 +1,5 @@
 ---
 source: tests/s8_api_health_view.rs
-assertion_line: 121
 expression: view
 ---
 ApiHealthView {
@@ -35,6 +34,9 @@ ApiHealthView {
             to_short: "cdcdcd…cdcd",
             created: "2024-05-07T12:34:56Z",
             description: "stake deposit",
+            age_seconds: Some(
+                63101127,
+            ),
         },
         PendingTxRow {
             nonce: 143,
@@ -42,6 +44,9 @@ ApiHealthView {
             to_short: "121212…1212",
             created: "2024-05-07T12:34:56Z",
             description: "postage topup",
+            age_seconds: Some(
+                63101127,
+            ),
         },
         PendingTxRow {
             nonce: 144,
@@ -49,6 +54,9 @@ ApiHealthView {
             to_short: "565656…5656",
             created: "2024-05-07T12:34:56Z",
             description: "",
+            age_seconds: Some(
+                63101127,
+            ),
         },
     ],
 }

@@ -84,13 +84,30 @@ pub struct PendingTxRow {
     pub nonce: u64,
     pub hash_short: String,
     pub to_short: String,
-    /// RFC 3339 creation timestamp, rendered verbatim (no parser is
-    /// in scope yet). Empty if Bee didn't supply one.
+    /// RFC 3339 creation timestamp, rendered verbatim. Empty if Bee
+    /// didn't supply one (very early Bee builds).
     pub created: String,
     /// Operator-supplied description from the `description` field.
     /// Empty for system-issued txs.
     pub description: String,
+    /// Seconds elapsed since `created`. `None` when the timestamp
+    /// failed to parse (or was empty). The renderer humanises this
+    /// into `5s` / `2m 30s` / `8h 15m` and colour-codes by threshold:
+    /// stuck transactions are the most operator-relevant signal in
+    /// this whole pane (a 10-minute-old pending topup is almost
+    /// always under-priced gas, not Bee being slow).
+    pub age_seconds: Option<i64>,
 }
+
+/// Pending-tx age threshold above which the row colours warn-yellow.
+/// 5 minutes — short enough that operators still see colour during a
+/// normal Gnosis confirmation cycle (~10s/block, 6+ blocks for
+/// finality), long enough that the threshold doesn't fire on every
+/// healthy submission.
+pub const PENDING_TX_WARN_AGE_SECS: i64 = 300;
+/// Above this the row colours fail-red — at this point the operator
+/// almost certainly needs to bump gas / cancel.
+pub const PENDING_TX_FAIL_AGE_SECS: i64 = 1800;
 
 /// Aggregated view fed to renderer and snapshot tests.
 #[derive(Debug, Clone, PartialEq)]
@@ -217,17 +234,60 @@ fn chain_state_view(health: &HealthSnapshot) -> ChainStateView {
 }
 
 fn pending_rows(transactions: &TransactionsSnapshot) -> Vec<PendingTxRow> {
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     transactions
         .pending
         .iter()
-        .map(|t| PendingTxRow {
-            nonce: t.nonce,
-            hash_short: short_hex(&t.transaction_hash),
-            to_short: short_hex(&t.to),
-            created: t.created.clone(),
-            description: t.description.clone(),
+        .map(|t| {
+            let age_seconds = parse_rfc3339_to_unix(&t.created).map(|ts| now_unix - ts);
+            PendingTxRow {
+                nonce: t.nonce,
+                hash_short: short_hex(&t.transaction_hash),
+                to_short: short_hex(&t.to),
+                created: t.created.clone(),
+                description: t.description.clone(),
+                age_seconds,
+            }
         })
         .collect()
+}
+
+/// Parse Bee's RFC 3339 timestamp (`"2026-05-07T08:12:03Z"` or
+/// `"2026-05-07T08:12:03+00:00"`) into seconds-since-Unix-epoch.
+/// Returns `None` for malformed / empty input — the caller falls
+/// back to a `—` in the age column rather than guessing.
+pub fn parse_rfc3339_to_unix(s: &str) -> Option<i64> {
+    if s.is_empty() {
+        return None;
+    }
+    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(|odt| odt.unix_timestamp())
+}
+
+/// Humanise `age_seconds` into `5s` / `2m 30s` / `8h 15m`. Negative
+/// values (clock skew on the host) collapse to `now`. Returns `—`
+/// for `None` so the renderer doesn't have to special-case the
+/// missing-timestamp path.
+pub fn format_age_humanised(age_seconds: Option<i64>) -> String {
+    match age_seconds {
+        None => "—".into(),
+        Some(s) if s < 0 => "now".into(),
+        Some(s) if s < 60 => format!("{s}s"),
+        Some(s) if s < 3_600 => {
+            let m = s / 60;
+            let r = s % 60;
+            format!("{m}m {r:>2}s")
+        }
+        Some(s) => {
+            let h = s / 3_600;
+            let m = (s % 3_600) / 60;
+            format!("{h}h {m:>2}m")
+        }
+    }
 }
 
 fn short_hex(s: &str) -> String {
@@ -381,10 +441,18 @@ impl Component for ApiHealth {
             )));
         } else {
             pending_lines.push(Line::from(Span::styled(
-                "  NONCE  HASH           TO              CREATED                DESCRIPTION",
+                "  NONCE  HASH           TO              AGE        DESCRIPTION",
                 Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
             )));
             for r in &view.pending {
+                let age_str = format_age_humanised(r.age_seconds);
+                let age_style = match r.age_seconds {
+                    Some(s) if s >= PENDING_TX_FAIL_AGE_SECS => {
+                        Style::default().fg(t.fail).add_modifier(Modifier::BOLD)
+                    }
+                    Some(s) if s >= PENDING_TX_WARN_AGE_SECS => Style::default().fg(t.warn),
+                    _ => Style::default(),
+                };
                 pending_lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::raw(format!("{:<6} ", r.nonce)),
@@ -393,10 +461,20 @@ impl Component for ApiHealth {
                         Style::default().fg(t.info),
                     ),
                     Span::raw(format!("{:<15} ", r.to_short)),
-                    Span::raw(format!("{:<22} ", truncate(&r.created, 22))),
+                    Span::styled(format!("{age_str:<10} "), age_style),
                     Span::styled(truncate(&r.description, 30), Style::default().fg(t.dim)),
                 ]));
             }
+            // Tooltip line — operators new to the screen don't know
+            // what the colour means or where the threshold sits.
+            pending_lines.push(Line::from(Span::styled(
+                format!(
+                    "  └─ age >= {}m colours warn; >= {}m colours fail (likely under-priced gas)",
+                    PENDING_TX_WARN_AGE_SECS / 60,
+                    PENDING_TX_FAIL_AGE_SECS / 60
+                ),
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
+            )));
         }
         frame.render_widget(Paragraph::new(pending_lines), chunks[3]);
 
@@ -444,6 +522,54 @@ mod tests {
             elapsed_ms,
             message: String::new(),
         }
+    }
+
+    #[test]
+    fn parse_rfc3339_z_form() {
+        // Bee's most common format — Z suffix, second precision.
+        let ts = parse_rfc3339_to_unix("2026-05-07T08:12:03Z").expect("must parse");
+        assert!(ts > 1_700_000_000); // sanity: way past 2023
+    }
+
+    #[test]
+    fn parse_rfc3339_offset_form() {
+        let ts = parse_rfc3339_to_unix("2026-05-07T08:12:03+00:00").expect("must parse");
+        assert!(ts > 1_700_000_000);
+    }
+
+    #[test]
+    fn parse_rfc3339_returns_none_on_garbage() {
+        assert_eq!(parse_rfc3339_to_unix(""), None);
+        assert_eq!(parse_rfc3339_to_unix("not a date"), None);
+        assert_eq!(parse_rfc3339_to_unix("2026"), None);
+    }
+
+    #[test]
+    fn format_age_humanised_seconds() {
+        assert_eq!(format_age_humanised(Some(0)), "0s");
+        assert_eq!(format_age_humanised(Some(45)), "45s");
+        assert_eq!(format_age_humanised(Some(59)), "59s");
+    }
+
+    #[test]
+    fn format_age_humanised_minutes() {
+        assert_eq!(format_age_humanised(Some(60)), "1m  0s");
+        assert_eq!(format_age_humanised(Some(125)), "2m  5s");
+        assert_eq!(format_age_humanised(Some(3_599)), "59m 59s");
+    }
+
+    #[test]
+    fn format_age_humanised_hours() {
+        assert_eq!(format_age_humanised(Some(3_600)), "1h  0m");
+        assert_eq!(format_age_humanised(Some(8 * 3_600 + 15 * 60)), "8h 15m");
+    }
+
+    #[test]
+    fn format_age_humanised_special_cases() {
+        assert_eq!(format_age_humanised(None), "—");
+        // Negative = clock skew (host's clock is ahead of Bee's).
+        // Treat as "now" rather than render "-3s".
+        assert_eq!(format_age_humanised(Some(-3)), "now");
     }
 
     #[test]
