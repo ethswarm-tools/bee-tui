@@ -1,0 +1,54 @@
+---
+source: tests/s8_api_health_view.rs
+assertion_line: 121
+expression: view
+---
+ApiHealthView {
+    bee_endpoint: "http://10.0.1.5:1633",
+    call_stats: CallStats {
+        sample_size: 0,
+        p50_ms: None,
+        p99_ms: None,
+        error_rate_pct: 0.0,
+    },
+    chain: ChainStateView {
+        block: Some(
+            777,
+        ),
+        chain_tip: Some(
+            777,
+        ),
+        delta: Some(
+            0,
+        ),
+        total_amount: Some(
+            "5000",
+        ),
+        current_price: Some(
+            "100",
+        ),
+    },
+    pending: [
+        PendingTxRow {
+            nonce: 142,
+            hash_short: "ababab…abab",
+            to_short: "cdcdcd…cdcd",
+            created: "2024-05-07T12:34:56Z",
+            description: "stake deposit",
+        },
+        PendingTxRow {
+            nonce: 143,
+            hash_short: "efefef…efef",
+            to_short: "121212…1212",
+            created: "2024-05-07T12:34:56Z",
+            description: "postage topup",
+        },
+        PendingTxRow {
+            nonce: 144,
+            hash_short: "343434…3434",
+            to_short: "565656…5656",
+            created: "2024-05-07T12:34:56Z",
+            description: "",
+        },
+    ],
+}

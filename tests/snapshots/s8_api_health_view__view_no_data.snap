@@ -1,0 +1,22 @@
+---
+source: tests/s8_api_health_view.rs
+assertion_line: 72
+expression: view
+---
+ApiHealthView {
+    bee_endpoint: "http://localhost:1633",
+    call_stats: CallStats {
+        sample_size: 0,
+        p50_ms: None,
+        p99_ms: None,
+        error_rate_pct: 0.0,
+    },
+    chain: ChainStateView {
+        block: None,
+        chain_tip: None,
+        delta: None,
+        total_amount: None,
+        current_price: None,
+    },
+    pending: [],
+}
