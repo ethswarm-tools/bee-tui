@@ -249,6 +249,7 @@ dependencies = [
  "json5",
  "lazy_static",
  "libc",
+ "num-bigint",
  "pretty_assertions",
  "ratatui",
  "serde",

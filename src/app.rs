@@ -1,14 +1,20 @@
+use std::sync::Arc;
+
+use color_eyre::eyre::eyre;
 use crossterm::event::KeyEvent;
 use ratatui::prelude::Rect;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use crate::{
     action::Action,
-    components::{Component, fps::FpsCounter, home::Home},
+    api::ApiClient,
+    components::{Component, health::Health},
     config::Config,
     tui::{Event, Tui},
+    watch::BeeWatch,
 };
 
 pub struct App {
@@ -22,6 +28,15 @@ pub struct App {
     last_tick_key_events: Vec<KeyEvent>,
     action_tx: mpsc::UnboundedSender<Action>,
     action_rx: mpsc::UnboundedReceiver<Action>,
+    /// Root cancellation token. Children: BeeWatch hub → per-resource
+    /// pollers. Cancelling this on quit unwinds every spawned task.
+    root_cancel: CancellationToken,
+    /// Active Bee node connection; cheap to clone (`Arc<Inner>` under
+    /// the hood). Read by future header bar + multi-node switcher.
+    #[allow(dead_code)]
+    api: Arc<ApiClient>,
+    /// Watch / informer hub feeding screens.
+    watch: BeeWatch,
 }
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -33,17 +48,36 @@ pub enum Mode {
 impl App {
     pub fn new(tick_rate: f64, frame_rate: f64) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
+        let config = Config::new()?;
+
+        // Pick the active node profile and build an ApiClient for it.
+        let node = config
+            .active_node()
+            .ok_or_else(|| eyre!("no Bee node configured (config.nodes is empty)"))?;
+        let api = Arc::new(ApiClient::from_node(node)?);
+
+        // Spawn the watch / informer hub. Pollers attach to children
+        // of `root_cancel`, so quitting cancels everything in one go.
+        let root_cancel = CancellationToken::new();
+        let watch = BeeWatch::start(api.clone(), &root_cancel);
+
+        // S1 Health is the default screen for v0.1.
+        let health = Health::new(api.clone(), watch.health());
+
         Ok(Self {
             tick_rate,
             frame_rate,
-            components: vec![Box::new(Home::new()), Box::new(FpsCounter::default())],
+            components: vec![Box::new(health)],
             should_quit: false,
             should_suspend: false,
-            config: Config::new()?,
+            config,
             mode: Mode::Home,
             last_tick_key_events: Vec::new(),
             action_tx,
             action_rx,
+            root_cancel,
+            api,
+            watch,
         })
     }
 
@@ -79,6 +113,9 @@ impl App {
                 break;
             }
         }
+        // Unwind every spawned task before tearing down the terminal.
+        self.watch.shutdown();
+        self.root_cancel.cancel();
         tui.exit()?;
         Ok(())
     }
