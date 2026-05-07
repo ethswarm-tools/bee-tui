@@ -1,10 +1,11 @@
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::eyre;
 use crossterm::event::KeyEvent;
 use ratatui::prelude::Rect;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
@@ -19,7 +20,7 @@ use crate::{
     config::Config,
     log_capture,
     tui::{Event, Tui},
-    watch::BeeWatch,
+    watch::{BeeWatch, HealthSnapshot},
 };
 
 pub struct App {
@@ -50,6 +51,9 @@ pub struct App {
     api: Arc<ApiClient>,
     /// Watch / informer hub feeding screens.
     watch: BeeWatch,
+    /// Top-bar reuses the health snapshot for the live ping
+    /// indicator. Cheap clone of the watch receiver.
+    health_rx: watch::Receiver<HealthSnapshot>,
     /// `Some(buf)` while the user is typing a `:command`. The
     /// buffer holds the characters typed *after* the leading colon.
     command_buffer: Option<String>,
@@ -94,6 +98,7 @@ impl App {
         // of `root_cancel`, so quitting cancels everything in one go.
         let root_cancel = CancellationToken::new();
         let watch = BeeWatch::start(api.clone(), &root_cancel);
+        let health_rx = watch.health();
 
         // S1 Health is the default screen for v0.1. v0.3 onwards it
         // also subscribes to the topology stream so the
@@ -168,6 +173,7 @@ impl App {
             root_cancel,
             api,
             watch,
+            health_rx,
             command_buffer: None,
             command_status: None,
         })
@@ -404,6 +410,10 @@ impl App {
         let command_log = &mut self.command_log;
         let command_buffer = self.command_buffer.clone();
         let command_status = self.command_status.clone();
+        let profile = self.api.name.clone();
+        let endpoint = self.api.url.clone();
+        let last_ping = self.health_rx.borrow().last_ping;
+        let now_utc = format_utc_now();
         tui.draw(|frame| {
             use ratatui::layout::{Constraint, Layout};
             use ratatui::style::{Color, Modifier, Style};
@@ -411,14 +421,53 @@ impl App {
             use ratatui::widgets::Paragraph;
 
             let chunks = Layout::vertical([
-                Constraint::Length(1), // top-bar tabs
+                Constraint::Length(2), // top-bar (metadata + tabs)
                 Constraint::Min(0),    // active screen
                 Constraint::Length(1), // command bar / status line
                 Constraint::Length(8), // command-log strip
             ])
             .split(frame.area());
 
-            // Top-bar: tab strip with the active screen highlighted.
+            let top_chunks =
+                Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
+                    .split(chunks[0]);
+
+            // Metadata line: profile · endpoint · ping · clock.
+            let ping_str = match last_ping {
+                Some(d) => format!("{}ms", d.as_millis()),
+                None => "—".into(),
+            };
+            let metadata_line = Line::from(vec![
+                Span::styled(
+                    " bee-tui ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(
+                    profile,
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" @ {endpoint}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::raw("   "),
+                Span::styled("ping ", Style::default().fg(Color::DarkGray)),
+                Span::styled(ping_str, Style::default().fg(Color::Cyan)),
+                Span::raw("   "),
+                Span::styled(
+                    format!("UTC {now_utc}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(metadata_line), top_chunks[0]);
+
+            // Tab strip with the active screen highlighted.
             let mut tabs = Vec::with_capacity(SCREEN_NAMES.len() * 2);
             for (i, name) in SCREEN_NAMES.iter().enumerate() {
                 let style = if i == active {
@@ -436,7 +485,7 @@ impl App {
                 ":cmd · Tab to cycle",
                 Style::default().fg(Color::DarkGray),
             ));
-            frame.render_widget(Paragraph::new(Line::from(tabs)), chunks[0]);
+            frame.render_widget(Paragraph::new(Line::from(tabs)), top_chunks[1]);
 
             // Active screen
             if let Some(screen) = screens.get_mut(active) {
@@ -483,5 +532,33 @@ impl App {
             }
         })?;
         Ok(())
+    }
+}
+
+/// Format the current wall-clock UTC time as `HH:MM:SS`. We compute
+/// from `SystemTime::now()` directly so the binary stays free of a
+/// chrono / time dep just for this one display string.
+fn format_utc_now() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let secs_in_day = secs % 86_400;
+    let h = secs_in_day / 3_600;
+    let m = (secs_in_day % 3_600) / 60;
+    let s = secs_in_day % 60;
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_utc_now_returns_eight_chars() {
+        let s = format_utc_now();
+        assert_eq!(s.len(), 8);
+        assert_eq!(s.chars().nth(2), Some(':'));
+        assert_eq!(s.chars().nth(5), Some(':'));
     }
 }
