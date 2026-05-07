@@ -43,6 +43,7 @@ use super::Component;
 use super::swap::format_plur;
 use crate::action::Action;
 use crate::api::ApiClient;
+use crate::theme;
 use crate::watch::{HealthSnapshot, LotterySnapshot};
 
 use bee::debug::{RCHashResponse, RedistributionState};
@@ -156,12 +157,12 @@ pub enum StakeStatus {
 impl StakeStatus {
     fn color(self) -> Color {
         match self {
-            Self::Unstaked => Color::Red,
-            Self::InsufficientGas => Color::Yellow,
-            Self::Frozen => Color::Red,
-            Self::Unhealthy => Color::Yellow,
-            Self::Healthy => Color::Green,
-            Self::Unknown => Color::DarkGray,
+            Self::Unstaked => theme::active().fail,
+            Self::InsufficientGas => theme::active().warn,
+            Self::Frozen => theme::active().fail,
+            Self::Unhealthy => theme::active().warn,
+            Self::Healthy => theme::active().pass,
+            Self::Unknown => theme::active().dim,
         }
     }
     fn label(self) -> &'static str {
@@ -561,15 +562,16 @@ impl Component for Lottery {
             Style::default().add_modifier(Modifier::BOLD),
         )]);
         let mut header_l2 = Vec::new();
+        let t = theme::active();
         if let Some(err) = &self.lottery.last_error {
             header_l2.push(Span::styled(
                 format!("partial: {err}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(t.fail),
             ));
         } else if !self.lottery.is_loaded() {
             header_l2.push(Span::styled(
                 "loading…",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             ));
         }
         frame.render_widget(
@@ -591,7 +593,7 @@ impl Component for Lottery {
                 Span::styled(
                     format!("· phase {} · block-of-round {}/{BLOCKS_PER_ROUND}",
                         rc.phase_label, rc.block_of_round),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ]));
             round_lines.push(Line::from(segment_spans(&rc.segments)));
@@ -600,7 +602,7 @@ impl Component for Lottery {
             round_lines.push(Line::from(Span::styled(
                 "  (redistribution state not loaded yet)",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
         }
@@ -613,14 +615,14 @@ impl Component for Lottery {
         let mut anchor_lines: Vec<Line> = vec![Line::from(Span::styled(
             "  ANCHORS         ROUND       WHEN",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(t.dim)
                 .add_modifier(Modifier::BOLD),
         ))];
         if view.anchors.is_empty() {
             anchor_lines.push(Line::from(Span::styled(
                 "  (no anchor data)",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
         } else {
@@ -637,7 +639,7 @@ impl Component for Lottery {
                         Style::default().add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(format!("{round_str:<11} ")),
-                    Span::styled(a.when.clone(), Style::default().fg(Color::DarkGray)),
+                    Span::styled(a.when.clone(), Style::default().fg(t.dim)),
                 ]));
             }
         }
@@ -675,10 +677,10 @@ impl Component for Lottery {
         if let Some(sample) = &stake.last_sample {
             stake_lines.push(Line::from(vec![
                 Span::raw("    last sample "),
-                Span::styled(sample.clone(), Style::default().fg(Color::Cyan)),
+                Span::styled(sample.clone(), Style::default().fg(t.info)),
                 Span::styled(
                     "   (deadline ≈ 95s for the 38-block commit window)",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ]));
         }
@@ -688,7 +690,7 @@ impl Component for Lottery {
                 Span::styled(
                     why.clone(),
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(t.dim)
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -704,7 +706,7 @@ impl Component for Lottery {
             ),
             Span::styled(
                 format!("(depth {depth}, deterministic anchors)"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             ),
         ]));
         match &self.bench {
@@ -713,7 +715,7 @@ impl Component for Lottery {
                     Span::raw("    "),
                     Span::styled(
                         "press 'r' to run a sample",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(t.dim),
                     ),
                 ]));
             }
@@ -722,7 +724,7 @@ impl Component for Lottery {
                     Span::raw("    "),
                     Span::styled(
                         "running… (this can take seconds-to-minutes on a busy reserve)",
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(t.info),
                     ),
                 ]));
             }
@@ -733,9 +735,9 @@ impl Component for Lottery {
                 let prefix: String = hash.chars().take(8).collect();
                 let safe = *duration_seconds < 95.0;
                 let style = if safe {
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(t.pass)
                 } else {
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                    Style::default().fg(t.fail).add_modifier(Modifier::BOLD)
                 };
                 let verdict = if safe {
                     "safe — fits inside the 95 s commit window"
@@ -746,7 +748,7 @@ impl Component for Lottery {
                     Span::raw("    "),
                     Span::styled(format!("{duration_seconds:.1}s"), style),
                     Span::raw(format!("   hash {prefix}…   ")),
-                    Span::styled(verdict, Style::default().fg(Color::DarkGray)),
+                    Span::styled(verdict, Style::default().fg(t.dim)),
                 ]));
             }
             BenchState::Failed { error } => {
@@ -754,7 +756,7 @@ impl Component for Lottery {
                     Span::raw("    "),
                     Span::styled(
                         format!("error: {error}"),
-                        Style::default().fg(Color::Red),
+                        Style::default().fg(t.fail),
                     ),
                 ]));
             }
@@ -779,11 +781,12 @@ impl Component for Lottery {
 }
 
 fn segment_spans(segs: &[PhaseSegment]) -> Vec<Span<'static>> {
+    let t = theme::active();
     let mut out = vec![Span::raw("  ")];
     for (i, s) in segs.iter().enumerate() {
         let color = match s.state {
-            PhaseState::Done => Color::DarkGray,
-            PhaseState::Active => Color::Yellow,
+            PhaseState::Done => t.dim,
+            PhaseState::Active => t.warn,
             PhaseState::Pending => Color::White,
         };
         let modifier = if matches!(s.state, PhaseState::Active) {
@@ -801,7 +804,7 @@ fn segment_spans(segs: &[PhaseSegment]) -> Vec<Span<'static>> {
             Style::default().fg(color).add_modifier(modifier),
         ));
         if i + 1 < segs.len() {
-            out.push(Span::styled("│", Style::default().fg(Color::DarkGray)));
+            out.push(Span::styled("│", Style::default().fg(t.dim)));
         }
     }
     out
@@ -820,7 +823,7 @@ fn progress_bar_spans(rc: &RoundCard) -> Vec<Span<'static>> {
     }
     vec![
         Span::raw("  "),
-        Span::styled(bar, Style::default().fg(Color::Yellow)),
+        Span::styled(bar, Style::default().fg(theme::active().warn)),
         Span::raw(format!(
             "   {}/{BLOCKS_PER_ROUND}",
             rc.block_of_round

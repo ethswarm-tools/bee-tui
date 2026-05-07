@@ -23,6 +23,7 @@ use tokio::sync::watch;
 
 use super::Component;
 use crate::action::Action;
+use crate::theme;
 use crate::watch::StampsSnapshot;
 
 use bee::postage::PostageBatch;
@@ -45,12 +46,13 @@ pub enum StampStatus {
 
 impl StampStatus {
     fn color(self) -> Color {
+        let t = theme::active();
         match self {
-            Self::Pending => Color::Cyan,
-            Self::Expired => Color::Red,
-            Self::Critical => Color::Red,
-            Self::Skewed => Color::Yellow,
-            Self::Healthy => Color::Green,
+            Self::Pending => t.info,
+            Self::Expired => t.fail,
+            Self::Critical => t.fail,
+            Self::Skewed => t.warn,
+            Self::Healthy => t.pass,
         }
     }
     fn label(self) -> &'static str {
@@ -253,15 +255,16 @@ impl Component for Stamps {
             Span::raw(format!("  {count} batch(es)")),
         ]);
         let mut header_l2 = Vec::new();
+        let t = theme::active();
         if let Some(err) = &self.snapshot.last_error {
             header_l2.push(Span::styled(
                 format!("error: {err}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(t.fail),
             ));
         } else if !self.snapshot.is_loaded() {
             header_l2.push(Span::styled(
                 "loading…",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             ));
         }
         frame.render_widget(
@@ -276,14 +279,14 @@ impl Component for Stamps {
         lines.push(Line::from(vec![Span::styled(
             "  LABEL                BATCH        VOLUME      WORST BUCKET                TTL         STATUS",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(t.dim)
                 .add_modifier(Modifier::BOLD),
         )]));
         if self.snapshot.batches.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  (no batches yet — buy one with swarm-cli or `bee stamps buy`)",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
         } else {
@@ -304,7 +307,7 @@ impl Component for Stamps {
                     ),
                     Span::raw("    "),
                     Span::raw(format!("{:<10} ", r.ttl)),
-                    Span::styled(immut_glyph, Style::default().fg(Color::DarkGray)),
+                    Span::styled(immut_glyph, Style::default().fg(t.dim)),
                     Span::raw(" "),
                     Span::styled(
                         r.status.label(),
@@ -319,7 +322,7 @@ impl Component for Stamps {
                         Span::styled(
                             why,
                             Style::default()
-                                .fg(Color::DarkGray)
+                                .fg(t.dim)
                                 .add_modifier(Modifier::ITALIC),
                         ),
                     ]));
@@ -335,7 +338,7 @@ impl Component for Stamps {
                 Span::raw(" switch screen  "),
                 Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" quit  "),
-                Span::styled(" I/M ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" I/M ", Style::default().fg(t.dim)),
                 Span::raw(" immutable / mutable "),
             ])),
             chunks[2],
@@ -356,12 +359,13 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 fn bucket_color(pct: u32) -> Color {
+    let t = theme::active();
     if pct >= 95 {
-        Color::Red
+        t.fail
     } else if pct >= 80 {
-        Color::Yellow
+        t.warn
     } else {
-        Color::Green
+        t.pass
     }
 }
 

@@ -31,6 +31,7 @@ use tokio::sync::watch;
 
 use super::Component;
 use crate::action::Action;
+use crate::theme;
 use crate::watch::SwapSnapshot;
 
 use bee::debug::{ChequebookBalance, LastCheque, Settlement, Settlements};
@@ -52,10 +53,10 @@ pub enum SwapStatus {
 impl SwapStatus {
     fn color(self) -> Color {
         match self {
-            Self::Empty => Color::Yellow,
-            Self::Healthy => Color::Green,
-            Self::Tight => Color::Yellow,
-            Self::Unknown => Color::DarkGray,
+            Self::Empty => theme::active().warn,
+            Self::Healthy => theme::active().pass,
+            Self::Tight => theme::active().warn,
+            Self::Unknown => theme::active().dim,
         }
     }
     fn label(self) -> &'static str {
@@ -342,15 +343,16 @@ impl Component for Swap {
             Style::default().add_modifier(Modifier::BOLD),
         )]);
         let mut header_l2 = Vec::new();
+        let t = theme::active();
         if let Some(err) = &self.snapshot.last_error {
             header_l2.push(Span::styled(
                 format!("partial: {err}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(t.fail),
             ));
         } else if !self.snapshot.is_loaded() {
             header_l2.push(Span::styled(
                 "loading…",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             ));
         }
         frame.render_widget(
@@ -383,7 +385,7 @@ impl Component for Swap {
                 Span::raw("   "),
                 Span::styled(
                     format!("({}% available)", card.available_pct),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
             ]),
         ];
@@ -393,7 +395,7 @@ impl Component for Swap {
                 Span::styled(
                     why.clone(),
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(t.dim)
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -412,22 +414,22 @@ impl Component for Swap {
         let mut cheque_lines: Vec<Line> = vec![Line::from(Span::styled(
             "  PEER          LAST RECEIVED",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(t.dim)
                 .add_modifier(Modifier::BOLD),
         ))];
         if view.cheques.is_empty() {
             cheque_lines.push(Line::from(Span::styled(
                 "  (no peer cheques known yet)",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
         } else {
             for r in &view.cheques {
                 let payout_style = if r.never {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(t.dim)
                 } else {
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(t.pass)
                 };
                 cheque_lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -452,30 +454,30 @@ impl Component for Swap {
         let mut settle_lines: Vec<Line> = vec![Line::from(Span::styled(
             "  PEER          RECEIVED              SENT                 NET",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(t.dim)
                 .add_modifier(Modifier::BOLD),
         ))];
         if let (Some(tr), Some(ts)) = (&view.time_total_received, &view.time_total_sent) {
             settle_lines.push(Line::from(vec![Span::styled(
                 format!("  time-based totals — received {tr} · sent {ts}"),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(t.dim),
             )]));
         }
         if view.settlements.is_empty() {
             settle_lines.push(Line::from(Span::styled(
                 "  (no peer settlements yet)",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )));
         } else {
             for r in &view.settlements {
                 let net_style = if r.net_flagged {
                     Style::default()
-                        .fg(Color::Red)
+                        .fg(t.fail)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(t.dim)
                 };
                 settle_lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -501,7 +503,7 @@ impl Component for Swap {
                 Span::raw(" switch screen  "),
                 Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" quit  "),
-                Span::styled(" net ", Style::default().fg(Color::Red)),
+                Span::styled(" net ", Style::default().fg(t.fail)),
                 Span::raw(" out-of-balance peer (>0.5 BZZ) "),
             ])),
             chunks[3],
