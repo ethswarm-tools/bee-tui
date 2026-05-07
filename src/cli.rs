@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Parser;
 
 use crate::config::{get_config_dir, get_data_dir};
@@ -26,6 +28,20 @@ pub struct Cli {
     /// automatically per <https://no-color.org>).
     #[arg(long)]
     pub no_color: bool,
+
+    /// Path to a `bee` binary to spawn before opening the cockpit.
+    /// When set together with `--bee-config`, bee-tui starts Bee as
+    /// a child process, captures its log into a temp file, waits for
+    /// the API to come up, then opens the cockpit. Overrides
+    /// `[bee].bin` from `config.toml`.
+    #[arg(long, value_name = "PATH")]
+    pub bee_bin: Option<PathBuf>,
+
+    /// Path to the Bee YAML config the spawned binary should use.
+    /// Required when `--bee-bin` is set unless `[bee].config` is
+    /// already in `config.toml`. Overrides `[bee].config`.
+    #[arg(long, value_name = "PATH")]
+    pub bee_config: Option<PathBuf>,
 }
 
 const VERSION_MESSAGE: &str = concat!(

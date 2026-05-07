@@ -11,6 +11,18 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **Spawn Bee from bee-tui (increment 1 of 4).** When `[bee].bin`
+  + `[bee].config` are set in `config.toml` (or via `--bee-bin` /
+  `--bee-config` CLI flags), bee-tui now launches Bee as a child
+  process before opening the cockpit. Bee's stdout + stderr are
+  captured to a temp file (`$TMPDIR/bee-tui-spawned-<ts>.log`)
+  ready for the bottom-pane log tail (next increment); /health
+  is polled until 200 OK before the TUI opens; SIGTERM-pgroup +
+  5s grace + SIGKILL fallback on quit. If Bee crashes
+  mid-session, a red "bee exited (code N)" chip appears in the
+  top bar — no auto-restart, the operator decides what to do.
+  Legacy "connect to a running Bee" mode unchanged when `[bee]`
+  is unset.
 - **Shift+Tab cycles screens backward.** The README and in-app
   `?` overlay had advertised this for a while; only `Tab` was
   actually wired. crossterm surfaces Shift+Tab as

@@ -70,6 +70,39 @@ ascii_fallback  = false
 Unknown values for `theme` fall back to `"default"` with a
 single tracing warning so a typo doesn't break startup.
 
+### `[bee]` — spawn Bee from bee-tui (optional)
+
+When set, bee-tui launches Bee itself before opening the
+cockpit, captures its stdout + stderr to `$TMPDIR/bee-tui-spawned-<ts>.log`,
+waits for `/health` to respond, then enters the TUI. Quit
+sends SIGTERM to Bee's process group; a 5-second grace window
+is followed by SIGKILL if needed.
+
+```toml
+[bee]
+bin    = "/home/operator/bee/dist/bee"
+config = "/home/operator/bee/testnet.yaml"
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `bin` | path | yes | Path to a `bee` binary. Bee is invoked as `<bin> start --config <config>`. Relative paths resolve against the working directory. |
+| `config` | path | yes | Path to the Bee YAML config the binary should be started with. |
+
+If `[bee]` is **omitted**, bee-tui falls back to its legacy
+mode: connect to whatever's already running on the URL of the
+default `[[nodes]]` entry. Use this when Bee runs under
+systemd / docker / k8s — bee-tui shouldn't spawn it then.
+
+If Bee crashes mid-session, a red `bee exited (code N)` chip
+appears in the top bar. There is no auto-restart — the
+operator decides whether to investigate (the captured log is
+the place to start) or quit and relaunch.
+
+CLI flags `--bee-bin` and `--bee-config` override the
+`[bee]` block. Both must be set together; setting only one
+errors at startup.
+
 ### CLI overrides
 
 Three command-line flags override the config file:

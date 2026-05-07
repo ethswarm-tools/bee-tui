@@ -13,6 +13,7 @@ use tracing::{debug, info};
 use crate::{
     action::Action,
     api::ApiClient,
+    bee_supervisor::{BeeStatus, BeeSupervisor},
     components::{
         Component,
         api_health::ApiHealth,
@@ -79,6 +80,15 @@ pub struct App {
     /// stray keystroke from killing a session the operator is
     /// actively monitoring.
     quit_pending: Option<Instant>,
+    /// `Some` when the `[bee]` block (or `--bee-bin` / `--bee-config`)
+    /// is configured and we're acting as Bee's parent process. `None`
+    /// for the legacy "connect to a running Bee" flow.
+    supervisor: Option<BeeSupervisor>,
+    /// Last-observed status of the supervised Bee child. Refreshed
+    /// each Tick from `supervisor.status()`. Surfaced in the top bar
+    /// so a mid-session crash is visible to the operator (variant B
+    /// of the crash-handling spec — show, don't auto-restart).
+    bee_status: BeeStatus,
 }
 
 /// Window during which a second `q` press is interpreted as confirming
@@ -105,33 +115,85 @@ pub enum Mode {
     Home,
 }
 
+/// Configuration knobs the binary passes into [`App::with_overrides`].
+/// Bundled in a struct so future flags don't churn the call site.
+#[derive(Debug, Default)]
+pub struct AppOverrides {
+    /// Force ASCII glyphs.
+    pub ascii: bool,
+    /// Force the mono palette.
+    pub no_color: bool,
+    /// `--bee-bin` CLI override.
+    pub bee_bin: Option<PathBuf>,
+    /// `--bee-config` CLI override.
+    pub bee_config: Option<PathBuf>,
+}
+
+/// Default timeout for waiting on `/health` after spawning Bee.
+/// Bee's first start can include chain-state catch-up; a generous
+/// budget here saves the operator from one false "didn't come up"
+/// alarm. Override later via config if needed.
+const BEE_API_READY_TIMEOUT: Duration = Duration::from_secs(60);
+
 impl App {
-    pub fn new(tick_rate: f64, frame_rate: f64) -> color_eyre::Result<Self> {
-        Self::with_overrides(tick_rate, frame_rate, false, false)
+    pub async fn new(tick_rate: f64, frame_rate: f64) -> color_eyre::Result<Self> {
+        Self::with_overrides(tick_rate, frame_rate, AppOverrides::default()).await
     }
 
-    /// Build an App with explicit `--ascii` / `--no-color` overrides.
-    /// `ascii` and `no_color` are OR'd with the equivalent config /
-    /// env signals (see [`theme::install_with_overrides`] +
-    /// [`theme::no_color_env`]).
-    pub fn with_overrides(
+    /// Build an App with explicit `--ascii` / `--no-color` /
+    /// `--bee-bin` / `--bee-config` overrides. Async because, when
+    /// the bee paths are set, we spawn Bee and wait for its `/health`
+    /// before opening the TUI.
+    pub async fn with_overrides(
         tick_rate: f64,
         frame_rate: f64,
-        ascii: bool,
-        no_color: bool,
+        overrides: AppOverrides,
     ) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         let config = Config::new()?;
         // Install the theme first so any tracing emitted during the
         // rest of `new` already reflects the operator's choice.
-        let force_no_color = no_color || theme::no_color_env();
-        theme::install_with_overrides(&config.ui, force_no_color, ascii);
+        let force_no_color = overrides.no_color || theme::no_color_env();
+        theme::install_with_overrides(&config.ui, force_no_color, overrides.ascii);
 
-        // Pick the active node profile and build an ApiClient for it.
+        // Pick the active node profile (and its URL) before spawning
+        // Bee — the supervisor's /health probe needs the URL.
         let node = config
             .active_node()
             .ok_or_else(|| eyre!("no Bee node configured (config.nodes is empty)"))?;
         let api = Arc::new(ApiClient::from_node(node)?);
+
+        // Resolve the bee paths: CLI flags > [bee] config block > unset.
+        let bee_bin = overrides
+            .bee_bin
+            .or_else(|| config.bee.as_ref().map(|b| b.bin.clone()));
+        let bee_config = overrides
+            .bee_config
+            .or_else(|| config.bee.as_ref().map(|b| b.config.clone()));
+        let supervisor = match (bee_bin, bee_config) {
+            (Some(bin), Some(cfg)) => {
+                eprintln!("bee-tui: spawning bee {bin:?} --config {cfg:?}");
+                let mut sup = BeeSupervisor::spawn(&bin, &cfg)?;
+                eprintln!(
+                    "bee-tui: log → {} (will appear in the cockpit's bottom pane)",
+                    sup.log_path().display()
+                );
+                eprintln!(
+                    "bee-tui: waiting for {} to respond on /health (up to {:?})...",
+                    api.url, BEE_API_READY_TIMEOUT
+                );
+                sup.wait_for_api(&api.url, BEE_API_READY_TIMEOUT).await?;
+                eprintln!("bee-tui: bee ready, opening cockpit");
+                Some(sup)
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(eyre!(
+                    "[bee].bin and [bee].config must both be set (or both unset). \
+                     Use --bee-bin AND --bee-config, or both fields in config.toml."
+                ));
+            }
+            (None, None) => None,
+        };
 
         // Spawn the watch / informer hub. Pollers attach to children
         // of `root_cancel`, so quitting cancels everything in one go.
@@ -167,6 +229,8 @@ impl App {
             command_status: None,
             help_visible: false,
             quit_pending: None,
+            supervisor,
+            bee_status: BeeStatus::Running,
         })
     }
 
@@ -204,6 +268,13 @@ impl App {
         // Unwind every spawned task before tearing down the terminal.
         self.watch.shutdown();
         self.root_cancel.cancel();
+        // SIGTERM Bee (pgroup) and wait for clean exit. Done before
+        // tui.exit() so any "bee shutting down" messages still land
+        // in the supervisor's log file (no race with terminal teardown).
+        if let Some(sup) = self.supervisor.take() {
+            let final_status = sup.shutdown_default().await;
+            tracing::info!("bee child exited: {}", final_status.label());
+        }
         tui.exit()?;
         Ok(())
     }
@@ -769,6 +840,12 @@ impl App {
                     // so every screen's "loading…" line shows
                     // motion at a consistent cadence.
                     theme::advance_spinner();
+                    // Refresh the supervised Bee's status (cheap
+                    // non-blocking try_wait). Surfaced in the top
+                    // bar so a mid-session crash is visible.
+                    if let Some(sup) = self.supervisor.as_mut() {
+                        self.bee_status = sup.status();
+                    }
                 }
                 Action::Quit => self.should_quit = true,
                 Action::Suspend => self.should_suspend = true,
@@ -806,6 +883,14 @@ impl App {
         let endpoint = self.api.url.clone();
         let last_ping = self.health_rx.borrow().last_ping;
         let now_utc = format_utc_now();
+        let bee_status_label = if self.supervisor.is_some() && !self.bee_status.is_running() {
+            // Only show the status when (a) we're acting as the
+            // supervisor and (b) something is wrong. Hiding the
+            // happy-path label keeps the metadata line uncluttered.
+            Some(self.bee_status.label())
+        } else {
+            None
+        };
         tui.draw(|frame| {
             use ratatui::layout::{Constraint, Layout};
             use ratatui::style::{Color, Modifier, Style};
@@ -829,7 +914,7 @@ impl App {
                 None => "—".into(),
             };
             let t = theme::active();
-            let metadata_line = Line::from(vec![
+            let mut metadata_spans = vec![
                 Span::styled(
                     " bee-tui ",
                     Style::default()
@@ -848,7 +933,21 @@ impl App {
                 Span::styled(ping_str, Style::default().fg(t.info)),
                 Span::raw("   "),
                 Span::styled(format!("UTC {now_utc}"), Style::default().fg(t.dim)),
-            ]);
+            ];
+            // Append a Bee-process status chip iff the supervisor is
+            // active AND something is wrong. Renders red so a crash
+            // mid-session is impossible to miss in the top bar.
+            if let Some(label) = bee_status_label.as_ref() {
+                metadata_spans.push(Span::raw("   "));
+                metadata_spans.push(Span::styled(
+                    format!(" {label} "),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(t.fail)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            let metadata_line = Line::from(metadata_spans);
             frame.render_widget(Paragraph::new(metadata_line), top_chunks[0]);
 
             // Tab strip with the active screen highlighted.

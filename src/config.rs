@@ -65,6 +65,26 @@ pub struct Config {
     /// `[ui]` section — theme + ascii-fallback knobs.
     #[serde(default)]
     pub ui: UiConfig,
+    /// `[bee]` section — when present, bee-tui spawns the Bee node
+    /// itself before opening the cockpit. Absence keeps the legacy
+    /// behavior of connecting to an already-running Bee.
+    #[serde(default)]
+    pub bee: Option<BeeConfig>,
+}
+
+/// `[bee]` table from `config.toml`. Both fields are required so a
+/// malformed `[bee]` block fails parse rather than silently spawning
+/// nothing.
+#[derive(Clone, Debug, Deserialize)]
+pub struct BeeConfig {
+    /// Path to the `bee` binary. Resolved relative to the working
+    /// directory if not absolute — operators usually run bee-tui from
+    /// the same shell they used to test the binary, so this is the
+    /// least surprising behavior.
+    pub bin: PathBuf,
+    /// Path to the Bee YAML config file the binary should be started
+    /// with. Same relative-to-cwd resolution as `bin`.
+    pub config: PathBuf,
 }
 
 /// `[ui]` table from `config.toml`. Every field has a sensible
