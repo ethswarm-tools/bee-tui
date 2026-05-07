@@ -11,6 +11,19 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **Bee log file-tail + parser + severity routing (increment 3 of 4).**
+  When bee-tui spawns Bee (`[bee]` configured), a background tailer
+  follows the supervisor's captured log file at 200 ms cadence.
+  Each new line is parsed via the new `bee_log::parse_line` (a
+  hand-rolled scanner for Bee's quoted-key logfmt format —
+  `"time"="..." "level"="debug" "logger"="node/..." "msg"="..." extras...`)
+  and routed by `level` to the matching tab (`error`/`err`/`fatal` →
+  Errors, `warning`/`warn` → Warning, `info` → Info, `debug`/`trace`
+  → Debug). Unrecognised levels are dropped so a future Bee build
+  with a new severity doesn't get silently misfiled. Parser is pure
+  + extensively tested against verbatim live-log samples (pseudosettle
+  payment lines, batchservice block-height updates, libp2p stream-reset
+  errors). The tailer respects `root_cancel` so quit unwinds it.
 - **Tabbed bottom log pane (increment 2 of 4).** Replaces the
   single `bee::http` strip with a six-tab pane: Errors / Warn /
   Info / Debug (filled by Bee's log in increment 3), Bee HTTP

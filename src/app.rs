@@ -18,7 +18,7 @@ use crate::{
         Component,
         api_health::ApiHealth,
         health::{Gate, GateStatus, Health},
-        log_pane::{LogPane, LogTab},
+        log_pane::{BeeLogLine, LogPane, LogTab},
         lottery::Lottery,
         network::Network,
         peers::Peers,
@@ -95,6 +95,10 @@ pub struct App {
     /// so a mid-session crash is visible to the operator (variant B
     /// of the crash-handling spec — show, don't auto-restart).
     bee_status: BeeStatus,
+    /// Receiver paired with the bee-log tailer task. `None` when
+    /// the cockpit isn't acting as the supervisor (no log file to
+    /// tail). Drained on each Tick into the LogPane.
+    bee_log_rx: Option<mpsc::UnboundedReceiver<(LogTab, BeeLogLine)>>,
 }
 
 /// Window during which a second `q` press is interpreted as confirming
@@ -221,6 +225,21 @@ impl App {
         );
         log_pane.set_spawn_active(supervisor.is_some());
 
+        // Spawn the bee-log tailer if we own the supervisor. The
+        // tailer parses each new line of the captured Bee log and
+        // forwards `(LogTab, BeeLogLine)` pairs down an mpsc the
+        // App drains every Tick. Inherits root_cancel so quit
+        // unwinds it the same way as every other spawned task.
+        let bee_log_rx = supervisor.as_ref().map(|sup| {
+            let (tx, rx) = mpsc::unbounded_channel();
+            crate::bee_log_tailer::spawn(
+                sup.log_path().to_path_buf(),
+                tx,
+                root_cancel.child_token(),
+            );
+            rx
+        });
+
         Ok(Self {
             tick_rate,
             frame_rate,
@@ -245,6 +264,7 @@ impl App {
             quit_pending: None,
             supervisor,
             bee_status: BeeStatus::Running,
+            bee_log_rx,
         })
     }
 
@@ -898,6 +918,15 @@ impl App {
                     // bar so a mid-session crash is visible.
                     if let Some(sup) = self.supervisor.as_mut() {
                         self.bee_status = sup.status();
+                    }
+                    // Drain any newly-tailed Bee log lines into the
+                    // log pane. Bounded loop — the channel is
+                    // unbounded but try_recv stops at the first
+                    // empty so we don't block the tick.
+                    if let Some(rx) = self.bee_log_rx.as_mut() {
+                        while let Ok((tab, line)) = rx.try_recv() {
+                            self.log_pane.push_bee(tab, line);
+                        }
                     }
                 }
                 Action::Quit => self.should_quit = true,
