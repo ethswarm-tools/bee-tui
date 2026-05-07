@@ -19,6 +19,7 @@ fn bzz(n: u64) -> BigInt {
     BigInt::from(n) * BigInt::from(10u64).pow(16)
 }
 
+#[allow(clippy::too_many_arguments)] // test fixture helper, not API
 fn rs(
     round: u64,
     block: u64,

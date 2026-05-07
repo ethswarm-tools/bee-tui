@@ -25,7 +25,10 @@
 //! (phase math, skip-reason reconstruction, stake-status ladder)
 //! without a TUI.
 
+use std::sync::Arc;
+
 use color_eyre::Result;
+use crossterm::event::{KeyCode, KeyEvent};
 use num_bigint::BigInt;
 use ratatui::{
     Frame,
@@ -34,14 +37,15 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use super::Component;
 use super::swap::format_plur;
 use crate::action::Action;
+use crate::api::ApiClient;
 use crate::watch::{HealthSnapshot, LotterySnapshot};
 
-use bee::debug::RedistributionState;
+use bee::debug::{RCHashResponse, RedistributionState};
 
 /// `pkg/storageincentives/agent.go:36` — round length in blocks.
 pub const BLOCKS_PER_ROUND: u64 = 152;
@@ -196,31 +200,125 @@ pub struct LotteryView {
     pub stake: StakeCard,
 }
 
+/// Lifecycle of the on-demand rchash benchmark. Operator hits `r` to
+/// run; the component owns the request lifecycle via an internal mpsc
+/// channel so the App's action pipeline doesn't grow a one-off
+/// rchash-result variant.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BenchState {
+    Idle,
+    Running,
+    Done {
+        duration_seconds: f64,
+        /// Reserve commitment hash (8-char prefix is what the screen
+        /// shows; full hash is kept here for the sake of completeness).
+        hash: String,
+    },
+    Failed {
+        error: String,
+    },
+}
+
+/// Fixed anchor pair used for the benchmark. Real-round anchors come
+/// off-chain; for a deterministic local sample we use 0x00…00 vs
+/// 0xff…ff so repeat measurements compare cleanly.
+const BENCH_ANCHOR_LO: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+const BENCH_ANCHOR_HI: &str =
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+/// Fallback depth when `/status` hasn't reported a `storage_radius`
+/// yet. 8 is a typical mainnet radius, so the sample size is
+/// representative.
+const BENCH_DEFAULT_DEPTH: u8 = 8;
+
+/// Pick a depth for the benchmark that mirrors what the agent would
+/// actually sample at: the node's current `storage_radius`. Falls back
+/// to [`BENCH_DEFAULT_DEPTH`] if `/status` hasn't loaded yet. Status's
+/// `storage_radius` is `i64` because the API can return a sentinel
+/// `-1`; we clamp to `0..=255` for the rchash path.
+pub fn bench_depth(health: &HealthSnapshot) -> u8 {
+    let raw = health
+        .status
+        .as_ref()
+        .map(|s| s.storage_radius)
+        .unwrap_or(-1);
+    if raw <= 0 {
+        BENCH_DEFAULT_DEPTH
+    } else {
+        raw.min(255) as u8
+    }
+}
+
 pub struct Lottery {
+    client: Arc<ApiClient>,
     health_rx: watch::Receiver<HealthSnapshot>,
     lottery_rx: watch::Receiver<LotterySnapshot>,
     health: HealthSnapshot,
     lottery: LotterySnapshot,
+    bench: BenchState,
+    bench_tx: mpsc::UnboundedSender<Result<RCHashResponse, String>>,
+    bench_rx: mpsc::UnboundedReceiver<Result<RCHashResponse, String>>,
 }
 
 impl Lottery {
     pub fn new(
+        client: Arc<ApiClient>,
         health_rx: watch::Receiver<HealthSnapshot>,
         lottery_rx: watch::Receiver<LotterySnapshot>,
     ) -> Self {
         let health = health_rx.borrow().clone();
         let lottery = lottery_rx.borrow().clone();
+        let (bench_tx, bench_rx) = mpsc::unbounded_channel();
         Self {
+            client,
             health_rx,
             lottery_rx,
             health,
             lottery,
+            bench: BenchState::Idle,
+            bench_tx,
+            bench_rx,
         }
     }
 
     fn pull_latest(&mut self) {
         self.health = self.health_rx.borrow().clone();
         self.lottery = self.lottery_rx.borrow().clone();
+    }
+
+    /// Drain any benchmark results that arrived since the last tick.
+    fn drain_bench_results(&mut self) {
+        while let Ok(result) = self.bench_rx.try_recv() {
+            self.bench = match result {
+                Ok(resp) => BenchState::Done {
+                    duration_seconds: resp.duration_seconds,
+                    hash: resp.hash,
+                },
+                Err(e) => BenchState::Failed { error: e },
+            };
+        }
+    }
+
+    /// Kick off a benchmark unless one is already in flight. Returns
+    /// `true` if a new request was spawned.
+    fn maybe_start_bench(&mut self) -> bool {
+        if matches!(self.bench, BenchState::Running) {
+            return false;
+        }
+        let depth = bench_depth(&self.health);
+        let client = self.client.clone();
+        let tx = self.bench_tx.clone();
+        tokio::spawn(async move {
+            let res = client
+                .bee()
+                .debug()
+                .r_chash(depth, BENCH_ANCHOR_LO, BENCH_ANCHOR_HI)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        });
+        self.bench = BenchState::Running;
+        true
     }
 
     /// Pure, snapshot-driven view computation. Exposed for snapshot
@@ -435,6 +533,14 @@ impl Component for Lottery {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if matches!(action, Action::Tick) {
             self.pull_latest();
+            self.drain_bench_results();
+        }
+        Ok(None)
+    }
+
+    fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        if matches!(key.code, KeyCode::Char('r')) {
+            self.maybe_start_bench();
         }
         Ok(None)
     }
@@ -587,6 +693,72 @@ impl Component for Lottery {
                 ),
             ]));
         }
+        // Bench card: rchash benchmark line. Always rendered so the
+        // operator knows the keybinding exists.
+        let depth = bench_depth(&self.health);
+        stake_lines.push(Line::from(""));
+        stake_lines.push(Line::from(vec![
+            Span::styled(
+                "  rchash bench  ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("(depth {depth}, deterministic anchors)"),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        match &self.bench {
+            BenchState::Idle => {
+                stake_lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(
+                        "press 'r' to run a sample",
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            }
+            BenchState::Running => {
+                stake_lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(
+                        "running… (this can take seconds-to-minutes on a busy reserve)",
+                        Style::default().fg(Color::Cyan),
+                    ),
+                ]));
+            }
+            BenchState::Done {
+                duration_seconds,
+                hash,
+            } => {
+                let prefix: String = hash.chars().take(8).collect();
+                let safe = *duration_seconds < 95.0;
+                let style = if safe {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                };
+                let verdict = if safe {
+                    "safe — fits inside the 95 s commit window"
+                } else {
+                    "OVER 95 s commit window — sampler will time out!"
+                };
+                stake_lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(format!("{duration_seconds:.1}s"), style),
+                    Span::raw(format!("   hash {prefix}…   ")),
+                    Span::styled(verdict, Style::default().fg(Color::DarkGray)),
+                ]));
+            }
+            BenchState::Failed { error } => {
+                stake_lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(
+                        format!("error: {error}"),
+                        Style::default().fg(Color::Red),
+                    ),
+                ]));
+            }
+        }
         frame.render_widget(Paragraph::new(stake_lines), chunks[3]);
 
         // Footer
@@ -594,9 +766,10 @@ impl Component for Lottery {
             Paragraph::new(Line::from(vec![
                 Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" switch screen  "),
+                Span::styled(" r ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" run rchash benchmark  "),
                 Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" quit  "),
-                Span::styled("rchash on demand: not yet wired", Style::default().fg(Color::DarkGray)),
             ])),
             chunks[4],
         );
@@ -719,5 +892,35 @@ mod tests {
     #[test]
     fn format_when_handles_n_ago() {
         assert_eq!(format_when(100, 95), "5 rounds ago");
+    }
+
+    #[test]
+    fn bench_depth_falls_back_when_status_missing() {
+        assert_eq!(bench_depth(&HealthSnapshot::default()), BENCH_DEFAULT_DEPTH);
+    }
+
+    #[test]
+    fn bench_depth_falls_back_on_sentinel() {
+        // Bee returns storage_radius = -1 before warmup completes.
+        let snap = HealthSnapshot {
+            status: Some(bee::debug::Status {
+                storage_radius: -1,
+                ..bee::debug::Status::default()
+            }),
+            ..HealthSnapshot::default()
+        };
+        assert_eq!(bench_depth(&snap), BENCH_DEFAULT_DEPTH);
+    }
+
+    #[test]
+    fn bench_depth_uses_storage_radius_when_present() {
+        let snap = HealthSnapshot {
+            status: Some(bee::debug::Status {
+                storage_radius: 12,
+                ..bee::debug::Status::default()
+            }),
+            ..HealthSnapshot::default()
+        };
+        assert_eq!(bench_depth(&snap), 12);
     }
 }

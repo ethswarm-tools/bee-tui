@@ -85,8 +85,10 @@ impl App {
         let swap = Swap::new(watch.swap());
         // S4 Lottery — fourth tab. Subscribes to both the 2 s
         // redistribution-state stream (off the health hub) and the
-        // 30 s /stake stream.
-        let lottery = Lottery::new(watch.health(), watch.lottery());
+        // 30 s /stake stream. Owns its own ApiClient handle so the
+        // on-demand rchash benchmark ('r' key) doesn't have to round-
+        // trip through the App-level action pipeline.
+        let lottery = Lottery::new(api.clone(), watch.health(), watch.lottery());
         // S10 Command-log subscribes to the bee::http capture set up
         // by logging::init. If logging hasn't initialised the capture
         // (e.g. running in a test harness), the pane just shows
