@@ -9,6 +9,12 @@ format follows [Keep a Changelog]; the project adheres to
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-07
+
+A massive jump from v0.1.0's three-screen reservation: nine operator
+screens, a k9s-style command bar, multi-node profile switching, and
+the theme system foundation. The full breakdown:
+
 ### Added
 
 - **S9 Tags / uploads** — ninth operator screen, the answer to
