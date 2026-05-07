@@ -26,9 +26,9 @@ pub struct App {
     config: Config,
     tick_rate: f64,
     frame_rate: f64,
-    /// Top-level screens, in display order. Tab cycles among them
-    /// (v0.4 will replace this with a k9s-style `:command` resource
-    /// switcher).
+    /// Top-level screens, in display order. Tab cycles among them.
+    /// v0.4 also wires the k9s-style `:command` switcher so users
+    /// can jump directly with `:peers`, `:stamps`, etc.
     screens: Vec<Box<dyn Component>>,
     /// Index into [`Self::screens`] for the currently visible screen.
     current_screen: usize,
@@ -50,6 +50,21 @@ pub struct App {
     api: Arc<ApiClient>,
     /// Watch / informer hub feeding screens.
     watch: BeeWatch,
+    /// `Some(buf)` while the user is typing a `:command`. The
+    /// buffer holds the characters typed *after* the leading colon.
+    command_buffer: Option<String>,
+    /// Status / error from the most recent `:command`, persisted on
+    /// the command-bar line until the user enters command mode again.
+    /// Cleared when `command_buffer` transitions to `Some`.
+    command_status: Option<CommandStatus>,
+}
+
+/// Outcome from the most recently executed `:command`. Drives the
+/// colour of the command-bar line in normal mode.
+#[derive(Debug, Clone)]
+pub enum CommandStatus {
+    Info(String),
+    Err(String),
 }
 
 /// Names the top-level screens. Index matches position in
@@ -153,6 +168,8 @@ impl App {
             root_cancel,
             api,
             watch,
+            command_buffer: None,
+            command_status: None,
         })
     }
 
@@ -199,6 +216,7 @@ impl App {
             return Ok(());
         };
         let action_tx = self.action_tx.clone();
+        let in_command_mode = self.command_buffer.is_some();
         match event {
             Event::Quit => action_tx.send(Action::Quit)?,
             Event::Tick => action_tx.send(Action::Tick)?,
@@ -207,9 +225,16 @@ impl App {
             Event::Key(key) => self.handle_key_event(key)?,
             _ => {}
         }
-        for component in self.iter_components_mut() {
-            if let Some(action) = component.handle_events(Some(event.clone()))? {
-                action_tx.send(action)?;
+        // While the command bar is open we swallow key events at the
+        // App level — components shouldn't react to typed letters.
+        // Non-key events (Tick / Resize / Render) still propagate so
+        // the screens keep refreshing under the prompt.
+        let propagate = !(in_command_mode && matches!(event, Event::Key(_)));
+        if propagate {
+            for component in self.iter_components_mut() {
+                if let Some(action) = component.handle_events(Some(event.clone()))? {
+                    action_tx.send(action)?;
+                }
             }
         }
         Ok(())
@@ -225,10 +250,25 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<()> {
+        // While a `:command` is being typed every key edits the
+        // buffer or commits / cancels the line. No other keymap
+        // applies.
+        if self.command_buffer.is_some() {
+            self.handle_command_mode_key(key)?;
+            return Ok(());
+        }
         let action_tx = self.action_tx.clone();
-        // Hard-coded screen-switch hotkey for v0.1; v0.2 routes this
-        // through the regular keybinding table once the `:command`
-        // bar lands.
+        // ':' opens the command bar.
+        if matches!(
+            key.code,
+            crossterm::event::KeyCode::Char(':')
+        ) {
+            self.command_buffer = Some(String::new());
+            self.command_status = None;
+            return Ok(());
+        }
+        // Tab keeps working as a quick screen-cycle shortcut even
+        // after the `:command` bar lands.
         if matches!(key.code, crossterm::event::KeyCode::Tab) {
             if !self.screens.is_empty() {
                 self.current_screen = (self.current_screen + 1) % self.screens.len();
@@ -257,6 +297,68 @@ impl App {
                     info!("Got action: {action:?}");
                     action_tx.send(action.clone())?;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_command_mode_key(&mut self, key: KeyEvent) -> color_eyre::Result<()> {
+        use crossterm::event::KeyCode;
+        let buf = match self.command_buffer.as_mut() {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        match key.code {
+            KeyCode::Esc => {
+                // Cancel without dispatching.
+                self.command_buffer = None;
+            }
+            KeyCode::Enter => {
+                let line = std::mem::take(buf);
+                self.command_buffer = None;
+                self.execute_command(&line)?;
+            }
+            KeyCode::Backspace => {
+                buf.pop();
+            }
+            KeyCode::Char(c) => {
+                buf.push(c);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Resolve a `:command` token to the action it represents.
+    /// Empty input is a silent no-op (operator typed `:` then Enter).
+    fn execute_command(&mut self, line: &str) -> color_eyre::Result<()> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let head = trimmed.split_whitespace().next().unwrap_or("");
+        match head {
+            "q" | "quit" => {
+                self.action_tx.send(Action::Quit)?;
+                self.command_status = Some(CommandStatus::Info("quitting".into()));
+            }
+            screen if SCREEN_NAMES
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(screen)) =>
+            {
+                if let Some(idx) = SCREEN_NAMES
+                    .iter()
+                    .position(|name| name.eq_ignore_ascii_case(screen))
+                {
+                    self.current_screen = idx;
+                    self.command_status =
+                        Some(CommandStatus::Info(format!("→ {}", SCREEN_NAMES[idx])));
+                }
+            }
+            other => {
+                self.command_status = Some(CommandStatus::Err(format!(
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :quit)"
+                )));
             }
         }
         Ok(())
@@ -300,6 +402,8 @@ impl App {
         let tx = self.action_tx.clone();
         let screens = &mut self.screens;
         let command_log = &mut self.command_log;
+        let command_buffer = self.command_buffer.clone();
+        let command_status = self.command_status.clone();
         tui.draw(|frame| {
             use ratatui::layout::{Constraint, Layout};
             use ratatui::style::{Color, Modifier, Style};
@@ -309,6 +413,7 @@ impl App {
             let chunks = Layout::vertical([
                 Constraint::Length(1), // top-bar tabs
                 Constraint::Min(0),    // active screen
+                Constraint::Length(1), // command bar / status line
                 Constraint::Length(8), // command-log strip
             ])
             .split(frame.area());
@@ -328,7 +433,7 @@ impl App {
                 tabs.push(Span::raw(" "));
             }
             tabs.push(Span::styled(
-                "Tab to switch",
+                ":cmd · Tab to cycle",
                 Style::default().fg(Color::DarkGray),
             ));
             frame.render_widget(Paragraph::new(Line::from(tabs)), chunks[0]);
@@ -339,8 +444,41 @@ impl App {
                     let _ = tx.send(Action::Error(format!("Failed to draw screen: {err:?}")));
                 }
             }
+            // Command bar / status line
+            let prompt = if let Some(buf) = &command_buffer {
+                Line::from(vec![
+                    Span::styled(
+                        ":",
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        buf.clone(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        "█",
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ])
+            } else {
+                match &command_status {
+                    Some(CommandStatus::Info(msg)) => Line::from(Span::styled(
+                        msg.clone(),
+                        Style::default().fg(Color::Green),
+                    )),
+                    Some(CommandStatus::Err(msg)) => Line::from(Span::styled(
+                        msg.clone(),
+                        Style::default().fg(Color::Red),
+                    )),
+                    None => Line::from(""),
+                }
+            };
+            frame.render_widget(Paragraph::new(prompt), chunks[2]);
+
             // Command-log strip
-            if let Err(err) = command_log.draw(frame, chunks[2]) {
+            if let Err(err) = command_log.draw(frame, chunks[3]) {
                 let _ = tx.send(Action::Error(format!("Failed to draw log: {err:?}")));
             }
         })?;
