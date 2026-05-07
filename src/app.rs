@@ -12,8 +12,9 @@ use crate::{
     action::Action,
     api::ApiClient,
     components::{
-        Component, command_log::CommandLog, health::Health, lottery::Lottery, network::Network,
-        peers::Peers, stamps::Stamps, swap::Swap, warmup::Warmup,
+        Component, api_health::ApiHealth, command_log::CommandLog, health::Health,
+        lottery::Lottery, network::Network, peers::Peers, stamps::Stamps, swap::Swap,
+        warmup::Warmup,
     },
     config::Config,
     log_capture,
@@ -54,7 +55,7 @@ pub struct App {
 /// Names the top-level screens. Index matches position in
 /// [`App::screens`].
 const SCREEN_NAMES: &[&str] = &[
-    "Health", "Stamps", "Swap", "Lottery", "Peers", "Network", "Warmup",
+    "Health", "Stamps", "Swap", "Lottery", "Peers", "Network", "Warmup", "API",
 ];
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -107,6 +108,16 @@ impl App {
         // and topology streams (no new poller); state is derived from
         // is_warming_up + the same fields the other screens read.
         let warmup = Warmup::new(watch.health(), watch.stamps(), watch.topology());
+        // S8 API health — eighth tab. Subscribes to /chainstate (off
+        // the health hub), /transactions (its own poller), and the
+        // shared LogCapture handle so the latency stats live-update
+        // from the same data S10's command-log pane shows.
+        let api_health = ApiHealth::new(
+            api.clone(),
+            watch.health(),
+            watch.transactions(),
+            log_capture::handle(),
+        );
         // S10 Command-log subscribes to the bee::http capture set up
         // by logging::init. If logging hasn't initialised the capture
         // (e.g. running in a test harness), the pane just shows
@@ -119,7 +130,7 @@ impl App {
             // Order matters — the SCREEN_NAMES table assumes index 0
             // is Health, index 1 is Stamps, index 2 is Swap, index 3
             // is Lottery, index 4 is Peers, index 5 is Network,
-            // index 6 is Warmup.
+            // index 6 is Warmup, index 7 is API.
             screens: vec![
                 Box::new(health),
                 Box::new(stamps),
@@ -128,6 +139,7 @@ impl App {
                 Box::new(peers),
                 Box::new(network),
                 Box::new(warmup),
+                Box::new(api_health),
             ],
             current_screen: 0,
             command_log,

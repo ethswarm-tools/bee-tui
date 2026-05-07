@@ -7,6 +7,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{action::Action, config::Config, tui::Event};
 
+pub mod api_health;
 pub mod command_log;
 pub mod health;
 pub mod lottery;
