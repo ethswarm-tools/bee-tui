@@ -23,6 +23,7 @@ use tokio::sync::watch;
 use super::Component;
 use crate::action::Action;
 use crate::api::ApiClient;
+use crate::theme;
 use crate::watch::{HealthSnapshot, TopologySnapshot};
 
 /// Tri-state outcome with an `Unknown` for "data not yet loaded".
@@ -44,11 +45,12 @@ impl GateStatus {
         }
     }
     fn color(self) -> Color {
+        let t = theme::active();
         match self {
-            Self::Pass => Color::Green,
-            Self::Warn => Color::Yellow,
-            Self::Fail => Color::Red,
-            Self::Unknown => Color::DarkGray,
+            Self::Pass => t.pass,
+            Self::Warn => t.warn,
+            Self::Fail => t.fail,
+            Self::Unknown => t.dim,
         }
     }
 }
@@ -444,23 +446,24 @@ impl Component for Health {
             Span::raw("  "),
             Span::styled(
                 format!("{} · {}", self.api.name, self.api.url),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme::active().info),
             ),
             Span::raw(if self.api.authenticated { "  🔒" } else { "" }),
         ]);
         let mut header_line2 = vec![Span::raw("ping: ")];
+        let t = theme::active();
         match self.snapshot.last_ping {
             Some(d) => header_line2.push(Span::styled(
                 format!("{}ms", d.as_millis()),
-                Style::default().fg(Color::Green),
+                Style::default().fg(t.pass),
             )),
-            None => header_line2.push(Span::styled("—", Style::default().fg(Color::DarkGray))),
+            None => header_line2.push(Span::styled("—", Style::default().fg(t.dim))),
         };
         if let Some(err) = &self.snapshot.last_error {
             header_line2.push(Span::raw("  "));
             header_line2.push(Span::styled(
                 format!("error: {err}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(t.fail),
             ));
         }
         frame.render_widget(
@@ -493,7 +496,7 @@ impl Component for Health {
                     Span::styled(
                         why,
                         Style::default()
-                            .fg(Color::DarkGray)
+                            .fg(theme::active().dim)
                             .add_modifier(Modifier::ITALIC),
                     ),
                 ]));

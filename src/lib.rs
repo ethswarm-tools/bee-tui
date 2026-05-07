@@ -16,5 +16,6 @@ pub mod config;
 pub mod errors;
 pub mod log_capture;
 pub mod logging;
+pub mod theme;
 pub mod tui;
 pub mod watch;

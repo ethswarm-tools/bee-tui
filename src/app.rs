@@ -21,6 +21,7 @@ use crate::{
     },
     config::Config,
     log_capture,
+    theme,
     tui::{Event, Tui},
     watch::{BeeWatch, HealthSnapshot},
 };
@@ -89,6 +90,9 @@ impl App {
     pub fn new(tick_rate: f64, frame_rate: f64) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         let config = Config::new()?;
+        // Install the theme first so any tracing emitted during the
+        // rest of `new` already reflects the operator's choice.
+        theme::install(&config.ui);
 
         // Pick the active node profile and build an ApiClient for it.
         let node = config
@@ -517,53 +521,50 @@ impl App {
                 Some(d) => format!("{}ms", d.as_millis()),
                 None => "—".into(),
             };
+            let t = theme::active();
             let metadata_line = Line::from(vec![
                 Span::styled(
                     " bee-tui ",
                     Style::default()
                         .fg(Color::Black)
-                        .bg(Color::Cyan)
+                        .bg(t.info)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw("  "),
                 Span::styled(
                     profile,
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!(" @ {endpoint}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(t.dim),
                 ),
                 Span::raw("   "),
-                Span::styled("ping ", Style::default().fg(Color::DarkGray)),
-                Span::styled(ping_str, Style::default().fg(Color::Cyan)),
+                Span::styled("ping ", Style::default().fg(t.dim)),
+                Span::styled(ping_str, Style::default().fg(t.info)),
                 Span::raw("   "),
-                Span::styled(
-                    format!("UTC {now_utc}"),
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(format!("UTC {now_utc}"), Style::default().fg(t.dim)),
             ]);
             frame.render_widget(Paragraph::new(metadata_line), top_chunks[0]);
 
             // Tab strip with the active screen highlighted.
+            let theme = *theme::active();
             let mut tabs = Vec::with_capacity(SCREEN_NAMES.len() * 2);
             for (i, name) in SCREEN_NAMES.iter().enumerate() {
                 let style = if i == active {
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Yellow)
+                        .fg(theme.tab_active_fg)
+                        .bg(theme.tab_active_bg)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(theme.dim)
                 };
                 tabs.push(Span::styled(format!(" {name} "), style));
                 tabs.push(Span::raw(" "));
             }
             tabs.push(Span::styled(
                 ":cmd · Tab to cycle",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.dim),
             ));
             frame.render_widget(Paragraph::new(Line::from(tabs)), top_chunks[1]);
 
@@ -579,28 +580,20 @@ impl App {
                     Span::styled(
                         ":",
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(t.accent)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        buf.clone(),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        "█",
-                        Style::default().fg(Color::Yellow),
-                    ),
+                    Span::styled(buf.clone(), Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled("█", Style::default().fg(t.accent)),
                 ])
             } else {
                 match &command_status {
-                    Some(CommandStatus::Info(msg)) => Line::from(Span::styled(
-                        msg.clone(),
-                        Style::default().fg(Color::Green),
-                    )),
-                    Some(CommandStatus::Err(msg)) => Line::from(Span::styled(
-                        msg.clone(),
-                        Style::default().fg(Color::Red),
-                    )),
+                    Some(CommandStatus::Info(msg)) => {
+                        Line::from(Span::styled(msg.clone(), Style::default().fg(t.pass)))
+                    }
+                    Some(CommandStatus::Err(msg)) => {
+                        Line::from(Span::styled(msg.clone(), Style::default().fg(t.fail)))
+                    }
                     None => Line::from(""),
                 }
             };

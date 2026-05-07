@@ -62,6 +62,29 @@ pub struct Config {
     pub keybindings: KeyBindings,
     #[serde(default)]
     pub styles: Styles,
+    /// `[ui]` section — theme + ascii-fallback knobs.
+    #[serde(default)]
+    pub ui: UiConfig,
+}
+
+/// `[ui]` table from `config.toml`. Every field has a sensible
+/// default so the entire section can be omitted without breaking
+/// startup.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct UiConfig {
+    /// Theme name. Recognised values: `"default"`, `"mono"`. Anything
+    /// else falls back to the default theme with a warning logged.
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// When set, screens fall back to ASCII-only glyphs (✓ → `[X]`)
+    /// for terminals that don't render Unicode reliably. Not yet
+    /// wired through every component; reserved for follow-up.
+    #[serde(default)]
+    pub ascii_fallback: bool,
+}
+
+fn default_theme() -> String {
+    "default".into()
 }
 
 impl Config {
