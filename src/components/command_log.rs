@@ -18,6 +18,7 @@ use ratatui::{
 use super::Component;
 use crate::action::Action;
 use crate::log_capture::{LogCapture, LogEntry};
+use crate::theme;
 
 /// S10 component. Cheap to construct — the actual buffer is the
 /// shared [`LogCapture`] handle.
@@ -56,15 +57,16 @@ impl Component for CommandLog {
         let inner_h = area.height.saturating_sub(2) as usize;
         let total = self.entries.len();
         let start = total.saturating_sub(inner_h);
+        let t = theme::active();
         let lines: Vec<Line> = self.entries[start..]
             .iter()
             .map(|e| {
                 let status_style = match e.status {
-                    Some(s) if (200..300).contains(&s) => Style::default().fg(Color::Green),
-                    Some(s) if (300..400).contains(&s) => Style::default().fg(Color::Cyan),
-                    Some(s) if (400..500).contains(&s) => Style::default().fg(Color::Yellow),
-                    Some(_) => Style::default().fg(Color::Red),
-                    None => Style::default().fg(Color::DarkGray),
+                    Some(s) if (200..300).contains(&s) => Style::default().fg(t.pass),
+                    Some(s) if (300..400).contains(&s) => Style::default().fg(t.info),
+                    Some(s) if (400..500).contains(&s) => Style::default().fg(t.warn),
+                    Some(_) => Style::default().fg(t.fail),
+                    None => Style::default().fg(t.dim),
                 };
                 let method_style = Style::default()
                     .fg(method_color(&e.method))
@@ -75,7 +77,7 @@ impl Component for CommandLog {
                     .unwrap_or_else(|| "    —".into());
                 let path = path_only(&e.url);
                 Line::from(vec![
-                    Span::styled(format!("{} ", e.ts), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{} ", e.ts), Style::default().fg(t.dim)),
                     Span::styled(format!("{:<5}", e.method), method_style),
                     Span::raw(" "),
                     Span::raw(path),
@@ -87,7 +89,7 @@ impl Component for CommandLog {
                         status_style,
                     ),
                     Span::raw("  "),
-                    Span::styled(elapsed, Style::default().fg(Color::DarkGray)),
+                    Span::styled(elapsed, Style::default().fg(t.dim)),
                 ])
             })
             .collect();
@@ -95,7 +97,7 @@ impl Component for CommandLog {
         let block = Block::default().borders(Borders::ALL).title(Span::styled(
             " bee::http ",
             Style::default()
-                .fg(Color::Yellow)
+                .fg(t.accent)
                 .add_modifier(Modifier::BOLD),
         ));
 
@@ -103,7 +105,7 @@ impl Component for CommandLog {
             Paragraph::new(Line::from(Span::styled(
                 "  (waiting for first request…)",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(t.dim)
                     .add_modifier(Modifier::ITALIC),
             )))
             .block(block)
