@@ -9,6 +9,25 @@ format follows [Keep a Changelog]; the project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **S3 SWAP / cheques** — third operator screen. Three stacked panes
+  driven by a new 30 s `SwapSnapshot` poller (`/chequebook/balance`,
+  `/chequebook/cheque`, `/settlements`, `/timesettlements`):
+  - **Chequebook card** with `available / total` headroom — flagged
+    Tight when uncashed debt eats >80 % of total BZZ.
+  - **Last received cheques** per peer, sorted by payout descending;
+    peers that have never sent us a cheque sink to the bottom but
+    stay visible because absence is itself useful signal.
+  - **Per-peer settlements** sorted by `|received - sent|` descending
+    so the most out-of-balance peer floats to the top, with `|net|
+    > 0.5 BZZ` rows highlighted red — that's where cashout pressure
+    builds up first.
+  - PLUR amounts render as `BZZ x.xxxx` (4 decimals) with explicit
+    `+/-` signs on net so positive / negative read at a glance.
+- **Tab now cycles three screens** Health → Stamps → Swap → Health.
+- 7 insta snapshot tests pin every Swap view variant.
+
 ## [0.1.0] - 2026-05-07
 
 ### Added
