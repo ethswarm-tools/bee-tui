@@ -1,0 +1,6 @@
+---
+source: tests/s6_peers_view.rs
+assertion_line: 91
+expression: view
+---
+None
