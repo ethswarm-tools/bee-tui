@@ -11,6 +11,30 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **S7 Network / NAT** — sixth operator screen and the
+  highest-leverage answer to bee#4194 ("I have peers but I'm
+  unreachable"). Driven by a new 60 s `/addresses` poller plus the
+  existing 5 s topology stream. Three panes:
+  - **Identity** — short overlay + ethereum address.
+  - **Connections + reachability** — inbound vs outbound counts
+    derived from `MetricSnapshotView::session_connection_direction`,
+    plus the AutoNAT `reachability` and `networkAvailability` strings
+    with a *stability window* ("stable for 9m") computed in the
+    component. Symmetric NAT makes `isReachable` flicker; the window
+    converts the flap into observable signal.
+  - **Public addresses** — every underlay multiaddr classified
+    Public / Private / Unknown by parsing the `/ip4` or `/ip6`
+    segment. RFC 1918, loopback, link-local, ULA, and `fe80::/10`
+    count as Private; DNS multiaddrs surface as Unknown so the
+    screen doesn't pretend to know without resolving.
+  - PLAN's external port-check + relay candidate enumeration require
+    services Bee doesn't expose; the screen documents that gap inline
+    and points to `nmap` from a separate machine instead of faking it.
+- **Tab now cycles six screens** Health → Stamps → Swap → Lottery →
+  Peers → Network.
+- 6 insta snapshot tests pin the reachability ladder and underlay
+  classification.
+
 - **S6 Peers + bin saturation** — fifth operator screen and the
   headline answer to the bin-starvation visibility gap (no other tool
   in the ecosystem derives this). Driven by a new 5 s `/topology`
