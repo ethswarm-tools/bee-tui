@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use bee::debug::{
     Addresses, ChainState, ChequebookBalance, LastCheque, RedistributionState, Settlements, Status,
-    Topology, Wallet,
+    Topology, TransactionInfo, Wallet,
 };
 use bee::postage::PostageBatch;
 use num_bigint::BigInt;
@@ -97,6 +97,24 @@ impl SwapSnapshot {
     }
 }
 
+/// Snapshot fed to the S8 RPC / API health screen. `/transactions`
+/// only changes when the operator submits something (postage topup,
+/// stake deposit, withdrawal, etc.); 30 s cadence is the same tier
+/// as SWAP and Lottery — slow enough to be cheap, quick enough that
+/// a stuck pending TX shows up within a tick of submission.
+#[derive(Clone, Debug, Default)]
+pub struct TransactionsSnapshot {
+    pub pending: Vec<TransactionInfo>,
+    pub last_error: Option<String>,
+    pub last_update: Option<Instant>,
+}
+
+impl TransactionsSnapshot {
+    pub fn is_loaded(&self) -> bool {
+        self.last_update.is_some() && self.last_error.is_none()
+    }
+}
+
 /// Snapshot fed to the S7 Network/NAT screen. `/addresses` doesn't
 /// change unless the node restarts, so the cadence is 60 s — slow
 /// enough to be invisible in the command-log pane but quick enough
@@ -161,6 +179,7 @@ pub struct BeeWatch {
     lottery_rx: watch::Receiver<LotterySnapshot>,
     topology_rx: watch::Receiver<TopologySnapshot>,
     network_rx: watch::Receiver<NetworkSnapshot>,
+    transactions_rx: watch::Receiver<TransactionsSnapshot>,
     cancel: CancellationToken,
 }
 
@@ -206,7 +225,20 @@ impl BeeWatch {
             Duration::from_secs(5),
         );
         let (network_tx, network_rx) = watch::channel(NetworkSnapshot::default());
-        spawn_network_poller(client, network_tx, cancel.clone(), Duration::from_secs(60));
+        spawn_network_poller(
+            client.clone(),
+            network_tx,
+            cancel.clone(),
+            Duration::from_secs(60),
+        );
+        let (transactions_tx, transactions_rx) =
+            watch::channel(TransactionsSnapshot::default());
+        spawn_transactions_poller(
+            client,
+            transactions_tx,
+            cancel.clone(),
+            Duration::from_secs(30),
+        );
         Self {
             health_rx,
             stamps_rx,
@@ -214,6 +246,7 @@ impl BeeWatch {
             lottery_rx,
             topology_rx,
             network_rx,
+            transactions_rx,
             cancel,
         }
     }
@@ -247,6 +280,12 @@ impl BeeWatch {
     /// Subscribe to the network snapshot stream (`/addresses`).
     pub fn network(&self) -> watch::Receiver<NetworkSnapshot> {
         self.network_rx.clone()
+    }
+
+    /// Subscribe to the pending-transactions snapshot stream
+    /// (`/transactions`).
+    pub fn transactions(&self) -> watch::Receiver<TransactionsSnapshot> {
+        self.transactions_rx.clone()
     }
 
     /// Cancel every polling task this hub owns. Idempotent.
@@ -494,6 +533,46 @@ async fn collect_network(client: &ApiClient) -> NetworkSnapshot {
         Err(e) => NetworkSnapshot {
             addresses: None,
             last_error: Some(format!("addresses: {e}")),
+            last_update: Some(Instant::now()),
+        },
+    }
+}
+
+/// Poll `/transactions` every `interval` and broadcast a fresh
+/// [`TransactionsSnapshot`].
+fn spawn_transactions_poller(
+    client: Arc<ApiClient>,
+    tx: watch::Sender<TransactionsSnapshot>,
+    cancel: CancellationToken,
+    interval: Duration,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = tick.tick() => {
+                    let snap = collect_transactions(&client).await;
+                    if tx.send(snap).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn collect_transactions(client: &ApiClient) -> TransactionsSnapshot {
+    match client.bee().debug().pending_transactions().await {
+        Ok(pending) => TransactionsSnapshot {
+            pending,
+            last_error: None,
+            last_update: Some(Instant::now()),
+        },
+        Err(e) => TransactionsSnapshot {
+            pending: Vec::new(),
+            last_error: Some(format!("transactions: {e}")),
             last_update: Some(Instant::now()),
         },
     }
