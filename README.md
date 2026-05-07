@@ -148,10 +148,11 @@ opens the drill, `Esc` closes it.
 
 | | |
 |---|---|
-| `Tab` | cycle screens |
+| `Tab` / `Shift+Tab` | cycle screens forward / backward |
 | `?` | toggle per-screen help overlay |
 | `:` | open command bar |
-| `q`, `Ctrl+C` | quit |
+| `qq` | quit (double-tap within ~1.5s; `:q` also works) |
+| `Ctrl+C` / `Ctrl+D` | quit immediately (escape hatch) |
 | `↑↓` / `j k` | move selection (S2, S6) or scroll (S9) |
 | `↵` | drill selected row (S2, S6) |
 | `Esc` | close drill / overlay |

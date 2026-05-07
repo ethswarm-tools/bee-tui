@@ -575,13 +575,17 @@ mod tests {
 
     #[test]
     fn test_config() -> color_eyre::Result<()> {
+        // Plain `q` is intercepted in App::handle_key_event for the
+        // double-tap quit guard, so it is intentionally NOT in the
+        // keybindings map. Ctrl+C remains as the immediate-quit
+        // escape hatch.
         let c = Config::new()?;
         assert_eq!(
             c.keybindings
                 .0
                 .get(&Mode::Home)
                 .unwrap()
-                .get(&parse_key_sequence("<q>").unwrap_or_default())
+                .get(&parse_key_sequence("<Ctrl-c>").unwrap_or_default())
                 .unwrap(),
             &Action::Quit
         );

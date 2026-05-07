@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::eyre;
 use crossterm::event::KeyEvent;
@@ -73,7 +73,17 @@ pub struct App {
     /// `true` while the `?` help overlay is up. Renders on top of
     /// the active screen; `?` toggles, `Esc` dismisses.
     help_visible: bool,
+    /// Tracks the moment the operator pressed `q` once. A second
+    /// `q` within [`QUIT_CONFIRM_WINDOW`] commits the quit; otherwise
+    /// it expires and the cockpit keeps running. Prevents a single
+    /// stray keystroke from killing a session the operator is
+    /// actively monitoring.
+    quit_pending: Option<Instant>,
 }
+
+/// Window during which a second `q` press is interpreted as confirming
+/// the quit. After this elapses the first press is forgotten.
+const QUIT_CONFIRM_WINDOW: Duration = Duration::from_millis(1500);
 
 /// Outcome from the most recently executed `:command`. Drives the
 /// colour of the command-bar line in normal mode.
@@ -156,6 +166,7 @@ impl App {
             command_buffer: None,
             command_status: None,
             help_visible: false,
+            quit_pending: None,
         })
     }
 
@@ -276,8 +287,10 @@ impl App {
             self.command_status = None;
             return Ok(());
         }
-        // Tab keeps working as a quick screen-cycle shortcut even
-        // after the `:command` bar lands.
+        // Tab / Shift+Tab keep working as a quick screen-cycle
+        // shortcut even after the `:command` bar lands. crossterm
+        // surfaces Shift+Tab as `BackTab` (a separate KeyCode rather
+        // than Tab + the Shift modifier), so both branches are needed.
         if matches!(key.code, crossterm::event::KeyCode::Tab) {
             if !self.screens.is_empty() {
                 self.current_screen = (self.current_screen + 1) % self.screens.len();
@@ -287,6 +300,45 @@ impl App {
                 );
             }
             return Ok(());
+        }
+        if matches!(key.code, crossterm::event::KeyCode::BackTab) {
+            if !self.screens.is_empty() {
+                let len = self.screens.len();
+                self.current_screen = (self.current_screen + len - 1) % len;
+                debug!(
+                    "switched to screen {}",
+                    SCREEN_NAMES.get(self.current_screen).unwrap_or(&"?")
+                );
+            }
+            return Ok(());
+        }
+        // `q` is the easy-to-misclick exit. Require a double-tap
+        // within `QUIT_CONFIRM_WINDOW` so a stray keystroke doesn't
+        // kill an active monitoring session. `Ctrl+C` / `Ctrl+D`
+        // remain wired through the keybindings system as immediate
+        // quit — escape hatches if the cockpit ever stops responding.
+        if matches!(key.code, crossterm::event::KeyCode::Char('q'))
+            && key.modifiers == crossterm::event::KeyModifiers::NONE
+        {
+            match resolve_quit_press(self.quit_pending, Instant::now(), QUIT_CONFIRM_WINDOW) {
+                QuitResolution::Confirm => {
+                    self.quit_pending = None;
+                    self.action_tx.send(Action::Quit)?;
+                }
+                QuitResolution::Pending => {
+                    self.quit_pending = Some(Instant::now());
+                    self.command_status = Some(CommandStatus::Info(
+                        "press q again to quit (Esc cancels)".into(),
+                    ));
+                }
+            }
+            return Ok(());
+        }
+        // Any other key resets the pending-quit window so the operator
+        // doesn't accidentally confirm later from a forgotten first
+        // tap.
+        if self.quit_pending.is_some() {
+            self.quit_pending = None;
         }
         let Some(keymap) = self.config.keybindings.0.get(&self.mode) else {
             return Ok(());
@@ -885,9 +937,11 @@ fn draw_help_overlay(
     let screen_rows = screen_keymap(active_screen);
     let global_rows: &[(&str, &str)] = &[
         ("Tab", "next screen"),
+        ("Shift+Tab", "previous screen"),
         ("?", "toggle this help"),
         (":", "open command bar"),
-        ("q  /  Ctrl+C", "quit"),
+        ("qq", "quit (double-tap; or :q)"),
+        ("Ctrl+C / Ctrl+D", "quit immediately"),
     ];
 
     // Layout: pick the smaller of (screen size, 70x22) so we always
@@ -967,7 +1021,7 @@ fn format_help_row<'a>(
     Line::from(vec![
         Span::raw("  "),
         Span::styled(
-            format!("{key:<14}"),
+            format!("{key:<16}"),
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
@@ -1118,6 +1172,29 @@ fn sanitize_for_filename(s: &str) -> String {
         .collect()
 }
 
+/// Outcome of a `q` keystroke under the double-tap-to-quit guard.
+/// Pure data so [`resolve_quit_press`] can be unit-tested without
+/// any TUI / event-loop scaffolding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuitResolution {
+    /// Second `q` arrived inside the confirmation window — quit.
+    Confirm,
+    /// First `q`, or a second `q` after the window expired —
+    /// remember the timestamp and surface the hint.
+    Pending,
+}
+
+/// Decide what to do with a `q` press given the previous press
+/// timestamp (if any) and the current time. The window is supplied
+/// rather than read from a constant so tests can use short windows
+/// without sleeping.
+fn resolve_quit_press(prev: Option<Instant>, now: Instant, window: Duration) -> QuitResolution {
+    match prev {
+        Some(t) if now.duration_since(t) <= window => QuitResolution::Confirm,
+        _ => QuitResolution::Pending,
+    }
+}
+
 fn format_utc_now() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1171,6 +1248,53 @@ mod tests {
     fn sanitize_for_filename_replaces_unsafe_chars() {
         assert_eq!(sanitize_for_filename("a/b\\c d"), "a-b-c-d");
         assert_eq!(sanitize_for_filename("name:colon"), "name-colon");
+    }
+
+    #[test]
+    fn resolve_quit_press_first_press_is_pending() {
+        let now = Instant::now();
+        assert_eq!(
+            resolve_quit_press(None, now, Duration::from_millis(1500)),
+            QuitResolution::Pending
+        );
+    }
+
+    #[test]
+    fn resolve_quit_press_second_press_inside_window_confirms() {
+        let first = Instant::now();
+        let window = Duration::from_millis(1500);
+        let second = first + Duration::from_millis(500);
+        assert_eq!(
+            resolve_quit_press(Some(first), second, window),
+            QuitResolution::Confirm
+        );
+    }
+
+    #[test]
+    fn resolve_quit_press_second_press_after_window_resets_to_pending() {
+        // A `q` long after the previous press should restart the
+        // double-tap window — the operator hasn't really "meant it
+        // twice in a row".
+        let first = Instant::now();
+        let window = Duration::from_millis(1500);
+        let second = first + Duration::from_millis(2_000);
+        assert_eq!(
+            resolve_quit_press(Some(first), second, window),
+            QuitResolution::Pending
+        );
+    }
+
+    #[test]
+    fn resolve_quit_press_at_window_boundary_confirms() {
+        // Exactly at the boundary the press counts as confirm —
+        // operators tapping in rhythm shouldn't be punished by jitter.
+        let first = Instant::now();
+        let window = Duration::from_millis(1500);
+        let second = first + window;
+        assert_eq!(
+            resolve_quit_press(Some(first), second, window),
+            QuitResolution::Confirm
+        );
     }
 
     #[test]

@@ -12,10 +12,12 @@
 
   "keybindings": {
     "Home": {
-      "<q>": "Quit", // Quit the application
-      "<Ctrl-d>": "Quit", // Another way to quit
-      "<Ctrl-c>": "Quit", // Yet another way to quit
-      "<Ctrl-z>": "Suspend" // Suspend the application
+      // Plain `q` is intercepted in src/app.rs and requires a
+      // double-tap within ~1.5s before quitting; only Ctrl+C and
+      // Ctrl+D are wired here as immediate-quit escape hatches.
+      "<Ctrl-d>": "Quit",
+      "<Ctrl-c>": "Quit",
+      "<Ctrl-z>": "Suspend"
     },
   }
 }

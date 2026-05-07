@@ -12,8 +12,9 @@ offline reference.
 | `Shift+Tab` | Previous screen |
 | `?` | Toggle help overlay |
 | `:` | Open command bar |
-| `q` | Quit |
-| `Esc` | Close help / drill / command bar / cancel current input |
+| `qq` | Quit — double-tap within ~1.5 s. First `q` shows a footer hint; second `q` confirms. `:q` also works for an unguarded quit. |
+| `Ctrl+C` / `Ctrl+D` | Quit immediately. Escape hatch if the cockpit ever stops responding to `qq`. |
+| `Esc` | Close help / drill / command bar / cancel current input. Also cancels a pending `q` (so you can back out without committing). |
 
 ## Screen-specific keys
 
@@ -79,6 +80,19 @@ command does.
   opened — drill / help / command bar — is what `Esc`
   closes. The hierarchy is: command bar > help overlay >
   drill > nothing.
+
+## Why `qq` instead of just `q`
+
+A bee-tui session is something operators leave running in the
+background while doing other work. A single `q` was found to
+be too easy to misclick — especially when navigating in from
+another shell. The double-tap guard means a stray keystroke
+costs you a footer hint, not a session.
+
+If you really want unguarded quit, use `:q` from the command
+bar. `Ctrl+C` and `Ctrl+D` are also unguarded — they remain
+the canonical "I want out *now*" escape hatches and bypass
+the double-tap entirely.
 
 ## Discovering keys
 

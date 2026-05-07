@@ -9,6 +9,25 @@ format follows [Keep a Changelog]; the project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Shift+Tab cycles screens backward.** The README and in-app
+  `?` overlay had advertised this for a while; only `Tab` was
+  actually wired. crossterm surfaces Shift+Tab as
+  `KeyCode::BackTab` (a separate variant rather than Tab + a
+  modifier) — both branches are now handled.
+
+### Changed
+
+- **`q` now requires a double-tap to quit.** First `q` shows a
+  footer hint ("press q again to quit (Esc cancels)"); a second
+  `q` within ~1.5 s commits. Any other key (or `Esc`) cancels
+  the pending quit. Operators routinely leave the cockpit
+  running in a background pane and an accidental `q` cost them
+  the session — this guards against that without changing the
+  shape of the action. `Ctrl+C` / `Ctrl+D` and `:q` remain
+  unguarded as immediate-quit escape hatches.
+
 ## [1.0.0] - 2026-05-07
 
 First stable release. The full nine-screen operator cockpit
