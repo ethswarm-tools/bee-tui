@@ -11,6 +11,28 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **S8 RPC / API health** — eighth operator screen, closing out
+  v0.3 from `docs/PLAN.md` § 12. PLAN's framing was Gnosis-RPC
+  latency + remote block height; Bee doesn't expose either, so we
+  pivot to what we *can* measure:
+  - **Bee API call stats** (p50 / p99 latency + error rate) computed
+    over the last 100 captured tracing events from the same source
+    that drives S10's command-log. Bee API latency is the more
+    operator-relevant metric anyway — a slow API surface means a
+    sluggish local node regardless of the underlying RPC.
+  - **Chain state** — `block` / `chain_tip` / their delta from
+    `/chainstate`.
+  - **Pending operator transactions** from `/transactions` with hash
+    short, nonce, creation timestamp, and operator description so a
+    stuck postage-topup or stake-deposit doesn't disappear.
+  - The "Bee doesn't expose its eth RPC URL or remote chain tip"
+    gap is acknowledged inline, with a pointer to external monitoring
+    tools instead of pretending we have full RPC visibility.
+- **Tab now cycles eight screens** Health → Stamps → Swap → Lottery →
+  Peers → Network → Warmup → API.
+- 5 insta snapshot tests pin the percentile math (empty / all-success
+  / mixed errors / pending tx rows / chain lagging).
+
 - **S5 Warmup** — seventh operator screen. Answers bee#4746 (the
   25–60 minute cold-start opacity where Bee bootstraps internally
   and the operator sees nothing actionable). Reuses the existing
