@@ -17,7 +17,7 @@ use crate::{
         Component, api_health::ApiHealth, command_log::CommandLog,
         health::{Gate, GateStatus, Health},
         lottery::Lottery, network::Network, peers::Peers, stamps::Stamps, swap::Swap,
-        warmup::Warmup,
+        tags::Tags, warmup::Warmup,
     },
     config::Config,
     log_capture,
@@ -76,7 +76,7 @@ pub enum CommandStatus {
 /// Names the top-level screens. Index matches position in
 /// [`App::screens`].
 const SCREEN_NAMES: &[&str] = &[
-    "Health", "Stamps", "Swap", "Lottery", "Peers", "Network", "Warmup", "API",
+    "Health", "Stamps", "Swap", "Lottery", "Peers", "Network", "Warmup", "API", "Tags",
 ];
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -622,7 +622,7 @@ impl App {
 ///
 /// Order matters — the [`SCREEN_NAMES`] table assumes index 0 is
 /// Health, 1 is Stamps, 2 is Swap, 3 is Lottery, 4 is Peers, 5 is
-/// Network, 6 is Warmup, 7 is API.
+/// Network, 6 is Warmup, 7 is API, 8 is Tags.
 fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Component>> {
     let health = Health::new(api.clone(), watch.health(), watch.topology());
     let stamps = Stamps::new(watch.stamps());
@@ -637,6 +637,7 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
         watch.transactions(),
         log_capture::handle(),
     );
+    let tags = Tags::new(watch.tags());
     vec![
         Box::new(health),
         Box::new(stamps),
@@ -646,6 +647,7 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
         Box::new(network),
         Box::new(warmup),
         Box::new(api_health),
+        Box::new(tags),
     ]
 }
 
