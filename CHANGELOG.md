@@ -11,6 +11,35 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **S6 Peers + bin saturation** — fifth operator screen and the
+  headline answer to the bin-starvation visibility gap (no other tool
+  in the ecosystem derives this). Driven by a new 5 s `/topology`
+  poller backed by the per-bin `BinInfo` data from bee-rs 1.4. Two
+  panes:
+  - **Bin saturation strip** with a four-state ladder
+    (Empty / Starving / Healthy / Over) anchored on the bee-go
+    `SaturationPeers=8` and `OverSaturationPeers=18` constants. Bins
+    more than four positions past the kademlia depth are expected to
+    be sparse and don't trigger Starving — operators only see alarms
+    for bins that should be saturated.
+  - **Peer table** flattening every bin's `connectedPeers` into a
+    stable list (sort by bin asc, overlay asc) with bin / overlay
+    short / direction / latency (EWMA ns → ms) / healthy / per-peer
+    reachability columns.
+- **S1 bin saturation gate** is no longer a placeholder. Reads the
+  same `/topology` stream and Pass/Warn/Unknown classifies based on
+  whether every bin at or below the kademlia depth has ≥ 8 connected
+  peers. The `value` line lists up to five starving bin numbers
+  inline so the operator can see exactly which bins to fill.
+- **Tab now cycles five screens** Health → Stamps → Swap → Lottery →
+  Peers.
+- 6 insta snapshot tests pin every Peers view variant; 2 new S1
+  snapshot tests pin the Pass and Warn bin-saturation cases.
+- **bee-rs dependency bumped to 1.4** (just published) for the
+  extended `Topology` parse — full per-bin `BinInfo` map,
+  `reachability` + `networkAvailability` strings, light-node bin,
+  and `MetricSnapshotView` per peer.
+
 - **S4 Lottery / redistribution** — fourth operator screen, the
   highest-leverage answer to "why am I not earning rewards?"
   (bee#4849). Three panes driven by the existing 2 s
