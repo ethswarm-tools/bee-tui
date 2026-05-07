@@ -322,6 +322,15 @@ impl App {
                     Err(e) => CommandStatus::Err(format!("pins-check failed to start: {e}")),
                 });
             }
+            "loggers" => {
+                self.command_status = Some(match self.start_loggers_dump() {
+                    Ok(path) => CommandStatus::Info(format!(
+                        "loggers snapshot writing → {} (open when ready)",
+                        path.display()
+                    )),
+                    Err(e) => CommandStatus::Err(format!("loggers failed to start: {e}")),
+                });
+            }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
@@ -360,7 +369,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :diagnose, :pins-check, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :diagnose, :pins-check, :loggers, :context, :quit)"
                 )));
             }
         }
@@ -453,6 +462,66 @@ impl App {
                         ));
                     }
                     body.push_str(&format!("# done. {} pins checked.\n", entries.len()));
+                    if let Err(e) = append(&dest, &body) {
+                        let _ = append(&dest, &format!("# write error: {e}\n"));
+                    }
+                }
+                Err(e) => {
+                    let _ = append(&dest, &format!("# error: {e}\n"));
+                }
+            }
+        });
+        Ok(path)
+    }
+
+    /// Snapshot Bee's logger configuration to a file. Same on-demand
+    /// pattern as `:pins-check`: capture the registered loggers + their
+    /// verbosity into a sortable text table so operators can answer
+    /// "is push-sync at debug right now?" without curling the API.
+    fn start_loggers_dump(&self) -> std::io::Result<PathBuf> {
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "bee-tui-loggers-{}-{secs}.txt",
+            sanitize_for_filename(&self.api.name),
+        ));
+        std::fs::write(
+            &path,
+            format!(
+                "# bee-tui :loggers\n# profile  {}\n# endpoint {}\n# started  {}\n",
+                self.api.name,
+                self.api.url,
+                format_utc_now(),
+            ),
+        )?;
+
+        let api = self.api.clone();
+        let dest = path.clone();
+        tokio::spawn(async move {
+            let bee = api.bee();
+            match bee.debug().loggers().await {
+                Ok(listing) => {
+                    let mut rows = listing.loggers.clone();
+                    // Stable sort: verbosity buckets first ("all"
+                    // before "1"/"info" etc. so the loud loggers
+                    // float to the top), then logger name.
+                    rows.sort_by(|a, b| {
+                        verbosity_rank(&b.verbosity)
+                            .cmp(&verbosity_rank(&a.verbosity))
+                            .then_with(|| a.logger.cmp(&b.logger))
+                    });
+                    let mut body = String::new();
+                    body.push_str(&format!("# {} loggers registered\n", rows.len()));
+                    body.push_str("# VERBOSITY  LOGGER\n");
+                    for r in &rows {
+                        body.push_str(&format!(
+                            "  {:<9}  {}\n",
+                            r.verbosity, r.logger,
+                        ));
+                    }
+                    body.push_str("# done.\n");
                     if let Err(e) = append(&dest, &body) {
                         let _ = append(&dest, &format!("# write error: {e}\n"));
                     }
@@ -754,6 +823,22 @@ fn append(path: &PathBuf, s: &str) -> std::io::Result<()> {
     f.write_all(s.as_bytes())
 }
 
+/// Bee returns logger verbosity as a free-form string — usually
+/// `"all"`, `"trace"`, `"debug"`, `"info"`, `"warning"`, `"error"`,
+/// `"none"`, plus the legacy numeric forms `"1"`/`"2"`/`"3"`. Map to
+/// a coarse rank so the noisier loggers sort to the top of the
+/// `:loggers` dump. Unknown strings get rank 0 (silent end).
+fn verbosity_rank(s: &str) -> u8 {
+    match s {
+        "all" | "trace" => 5,
+        "debug" => 4,
+        "info" | "1" => 3,
+        "warning" | "warn" | "2" => 2,
+        "error" | "3" => 1,
+        _ => 0,
+    }
+}
+
 /// Drop characters that are unsafe in a filename. Profile names come
 /// from the user's `config.toml`, so we accept what's in there but
 /// keep the path well-behaved on every shell.
@@ -822,5 +907,17 @@ mod tests {
     fn sanitize_for_filename_replaces_unsafe_chars() {
         assert_eq!(sanitize_for_filename("a/b\\c d"), "a-b-c-d");
         assert_eq!(sanitize_for_filename("name:colon"), "name-colon");
+    }
+
+    #[test]
+    fn verbosity_rank_orders_loud_to_silent() {
+        assert!(verbosity_rank("all") > verbosity_rank("debug"));
+        assert!(verbosity_rank("debug") > verbosity_rank("info"));
+        assert!(verbosity_rank("info") > verbosity_rank("warning"));
+        assert!(verbosity_rank("warning") > verbosity_rank("error"));
+        assert!(verbosity_rank("error") > verbosity_rank("unknown"));
+        // Numeric and named forms sort identically.
+        assert_eq!(verbosity_rank("info"), verbosity_rank("1"));
+        assert_eq!(verbosity_rank("warning"), verbosity_rank("2"));
     }
 }

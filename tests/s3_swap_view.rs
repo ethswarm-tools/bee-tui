@@ -72,6 +72,20 @@ fn view_empty_snapshot() {
 }
 
 #[test]
+fn view_propagates_chequebook_address() {
+    // The address field flows through the view straight from the
+    // snapshot — guards against accidentally dropping it during
+    // future view_for refactors.
+    let mut snap = snapshot_with(None, vec![], None, None);
+    snap.chequebook_address = Some("0xCE3EE0201A1A8296E8bC2BE9f912eC21708fd615".into());
+    let view = Swap::view_for(&snap);
+    assert_eq!(
+        view.chequebook_address.as_deref(),
+        Some("0xCE3EE0201A1A8296E8bC2BE9f912eC21708fd615"),
+    );
+}
+
+#[test]
 fn view_unfunded_chequebook() {
     let cb = ChequebookBalance {
         total_balance: BigInt::from(0),
