@@ -12,8 +12,8 @@ use crate::{
     action::Action,
     api::ApiClient,
     components::{
-        Component, command_log::CommandLog, health::Health, lottery::Lottery, peers::Peers,
-        stamps::Stamps, swap::Swap,
+        Component, command_log::CommandLog, health::Health, lottery::Lottery, network::Network,
+        peers::Peers, stamps::Stamps, swap::Swap,
     },
     config::Config,
     log_capture,
@@ -53,7 +53,7 @@ pub struct App {
 
 /// Names the top-level screens. Index matches position in
 /// [`App::screens`].
-const SCREEN_NAMES: &[&str] = &["Health", "Stamps", "Swap", "Lottery", "Peers"];
+const SCREEN_NAMES: &[&str] = &["Health", "Stamps", "Swap", "Lottery", "Peers", "Network"];
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
@@ -96,6 +96,11 @@ impl App {
         // at 5 s; the bin-saturation classification depends on the
         // full per-bin BinInfo populated by bee-rs 1.4.
         let peers = Peers::new(watch.topology());
+        // S7 Network/NAT — sixth tab. Combines the slow /addresses
+        // stream (60 s) with the 5 s topology stream so the
+        // reachability strings update in lockstep with the rest of
+        // the topology view.
+        let network = Network::new(watch.network(), watch.topology());
         // S10 Command-log subscribes to the bee::http capture set up
         // by logging::init. If logging hasn't initialised the capture
         // (e.g. running in a test harness), the pane just shows
@@ -107,13 +112,14 @@ impl App {
             frame_rate,
             // Order matters — the SCREEN_NAMES table assumes index 0
             // is Health, index 1 is Stamps, index 2 is Swap, index 3
-            // is Lottery, index 4 is Peers.
+            // is Lottery, index 4 is Peers, index 5 is Network.
             screens: vec![
                 Box::new(health),
                 Box::new(stamps),
                 Box::new(swap),
                 Box::new(lottery),
                 Box::new(peers),
+                Box::new(network),
             ],
             current_screen: 0,
             command_log,
