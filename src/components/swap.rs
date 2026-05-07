@@ -345,10 +345,8 @@ impl Component for Swap {
         let mut header_l2 = Vec::new();
         let t = theme::active();
         if let Some(err) = &self.snapshot.last_error {
-            header_l2.push(Span::styled(
-                format!("partial: {err}"),
-                Style::default().fg(t.fail),
-            ));
+            let (color, msg) = theme::classify_header_error(err);
+            header_l2.push(Span::styled(msg, Style::default().fg(color)));
         } else if !self.snapshot.is_loaded() {
             header_l2.push(Span::styled(
                 "loading…",

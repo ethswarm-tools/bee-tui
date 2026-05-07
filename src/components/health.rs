@@ -461,10 +461,8 @@ impl Component for Health {
         };
         if let Some(err) = &self.snapshot.last_error {
             header_line2.push(Span::raw("  "));
-            header_line2.push(Span::styled(
-                format!("error: {err}"),
-                Style::default().fg(t.fail),
-            ));
+            let (color, msg) = theme::classify_header_error(err);
+            header_line2.push(Span::styled(msg, Style::default().fg(color)));
         }
         frame.render_widget(
             Paragraph::new(vec![header_line1, Line::from(header_line2)])

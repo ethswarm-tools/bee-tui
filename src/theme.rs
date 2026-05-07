@@ -110,6 +110,27 @@ pub fn active() -> &'static Theme {
     ACTIVE.get().unwrap_or(&FALLBACK)
 }
 
+/// Classify a header-line error message into a render colour + a
+/// friendlier prefix. Bee returns
+/// `HTTP 503: Node is syncing. This endpoint is unavailable. Try
+/// again later.` for almost every endpoint during the first few
+/// minutes after startup; rendering that in red as a hard error
+/// gives a terrible first impression. We detect the syncing case
+/// and render it in `warn` colour with a one-sentence explanation.
+///
+/// Returned tuple: `(colour, formatted message ready to render)`.
+pub fn classify_header_error(err: &str) -> (Color, String) {
+    if err.to_lowercase().contains("syncing") {
+        (
+            active().warn,
+            "syncing — Bee is still bootstrapping; this view will populate once it catches up"
+                .into(),
+        )
+    } else {
+        (active().fail, format!("error: {err}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
