@@ -11,6 +11,27 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **S4 Lottery / redistribution** — fourth operator screen, the
+  highest-leverage answer to "why am I not earning rewards?"
+  (bee#4849). Three panes driven by the existing 2 s
+  redistribution-state stream and a new 30 s `/stake` poller:
+  - **Round timeline** with commit / reveal / claim segments (block
+    boundaries hard-coded from `pkg/storageincentives/agent.go` —
+    152 blocks/round, 38 per on-chain phase) and a 24-cell
+    block-of-round progress bar.
+  - **Anchor summary** — last won / played / selected / frozen
+    rounds, each with a human "Δ" string ("4 rounds ago", "never",
+    "this round") so operators read the cadence at a glance.
+  - **Stake card** with a six-state ladder reasoning tree (Healthy /
+    Unstaked / Frozen / InsufficientGas / Unhealthy / Unknown) that
+    reduces the four scattered RedistributionState booleans
+    (is_frozen, is_healthy, has_sufficient_funds, is_fully_synced)
+    plus staked amount to a single tooltip.
+  - PLAN's "last 20 rounds with skip reasons" view requires an
+    upstream `RoundData[]` port in bee-rs and is deferred; the
+    anchor summary covers the same question with today's API.
+- **Tab now cycles four screens** Health → Stamps → Swap → Lottery.
+- 10 insta snapshot tests pin every Lottery view variant.
 - **S3 SWAP / cheques** — third operator screen. Three stacked panes
   driven by a new 30 s `SwapSnapshot` poller (`/chequebook/balance`,
   `/chequebook/cheque`, `/settlements`, `/timesettlements`):
