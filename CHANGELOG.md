@@ -30,6 +30,13 @@ format follows [Keep a Changelog]; the project adheres to
   - PLAN's "last 20 rounds with skip reasons" view requires an
     upstream `RoundData[]` port in bee-rs and is deferred; the
     anchor summary covers the same question with today's API.
+  - **`r` runs an on-demand rchash benchmark.** Fires
+    `/rchash/{depth}/{anchor1}/{anchor2}` (depth = node's current
+    `storage_radius`, anchors deterministic so repeat measurements
+    compare cleanly) and renders the duration vs the 95 s
+    commit-window deadline — green when safe, red when over budget.
+    Lifecycle owned by an internal mpsc inside the Lottery component
+    rather than a global Action variant.
 - **Tab now cycles four screens** Health → Stamps → Swap → Lottery.
 - 10 insta snapshot tests pin every Lottery view variant.
 - **S3 SWAP / cheques** — third operator screen. Three stacked panes
