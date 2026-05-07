@@ -10,6 +10,7 @@ use crate::{action::Action, config::Config, tui::Event};
 pub mod command_log;
 pub mod health;
 pub mod lottery;
+pub mod peers;
 pub mod stamps;
 pub mod swap;
 

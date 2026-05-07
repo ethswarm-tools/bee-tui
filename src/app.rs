@@ -12,8 +12,8 @@ use crate::{
     action::Action,
     api::ApiClient,
     components::{
-        Component, command_log::CommandLog, health::Health, lottery::Lottery, stamps::Stamps,
-        swap::Swap,
+        Component, command_log::CommandLog, health::Health, lottery::Lottery, peers::Peers,
+        stamps::Stamps, swap::Swap,
     },
     config::Config,
     log_capture,
@@ -53,7 +53,7 @@ pub struct App {
 
 /// Names the top-level screens. Index matches position in
 /// [`App::screens`].
-const SCREEN_NAMES: &[&str] = &["Health", "Stamps", "Swap", "Lottery"];
+const SCREEN_NAMES: &[&str] = &["Health", "Stamps", "Swap", "Lottery", "Peers"];
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
@@ -89,6 +89,10 @@ impl App {
         // on-demand rchash benchmark ('r' key) doesn't have to round-
         // trip through the App-level action pipeline.
         let lottery = Lottery::new(api.clone(), watch.health(), watch.lottery());
+        // S6 Peers + bin saturation — fifth tab. Driven by /topology
+        // at 5 s; the bin-saturation classification depends on the
+        // full per-bin BinInfo populated by bee-rs 1.4.
+        let peers = Peers::new(watch.topology());
         // S10 Command-log subscribes to the bee::http capture set up
         // by logging::init. If logging hasn't initialised the capture
         // (e.g. running in a test harness), the pane just shows
@@ -100,12 +104,13 @@ impl App {
             frame_rate,
             // Order matters — the SCREEN_NAMES table assumes index 0
             // is Health, index 1 is Stamps, index 2 is Swap, index 3
-            // is Lottery.
+            // is Lottery, index 4 is Peers.
             screens: vec![
                 Box::new(health),
                 Box::new(stamps),
                 Box::new(swap),
                 Box::new(lottery),
+                Box::new(peers),
             ],
             current_screen: 0,
             command_log,
