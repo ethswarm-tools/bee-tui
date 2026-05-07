@@ -52,15 +52,17 @@ fn drill_view_realistic_skewed_batch() {
     for i in 0..100u32 {
         entries.push((10_000 + i, 0));
     }
-    let view = Stamps::compute_drill_view(&buckets_with(&entries, 22, 16));
+    let view = Stamps::compute_drill_view(&buckets_with(&entries, 22, 16), None);
     insta::assert_debug_snapshot!(view);
 }
 
 #[test]
 fn drill_view_full_batch() {
     // Pathological: one bucket has saturated, no other activity.
-    let view =
-        Stamps::compute_drill_view(&buckets_with(&[(7, 64), (8, 0), (9, 0), (10, 0)], 22, 16));
+    let view = Stamps::compute_drill_view(
+        &buckets_with(&[(7, 64), (8, 0), (9, 0), (10, 0)], 22, 16),
+        None,
+    );
     insta::assert_debug_snapshot!(view);
 }
 
@@ -68,6 +70,6 @@ fn drill_view_full_batch() {
 fn drill_view_empty_batch() {
     // Fresh buy — every bucket is at zero.
     let entries: Vec<(u32, u32)> = (0..16u32).map(|i| (i, 0)).collect();
-    let view = Stamps::compute_drill_view(&buckets_with(&entries, 22, 16));
+    let view = Stamps::compute_drill_view(&buckets_with(&entries, 22, 16), None);
     insta::assert_debug_snapshot!(view);
 }

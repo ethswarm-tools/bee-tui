@@ -122,7 +122,13 @@ fn view_pending_transactions() {
         ),
         &transactions_with(txs),
     );
-    insta::assert_debug_snapshot!(view);
+    // age_seconds derives from SystemTime::now() — redact so the
+    // snapshot stays deterministic across runs.
+    insta::with_settings!({filters => vec![
+        (r"age_seconds: Some\(\s*\d+,?\s*\)", "age_seconds: <redacted>"),
+    ]}, {
+        insta::assert_debug_snapshot!(view);
+    });
 }
 
 #[test]

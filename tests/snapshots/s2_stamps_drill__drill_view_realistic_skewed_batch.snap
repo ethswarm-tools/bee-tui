@@ -69,4 +69,5 @@ StampDrillView {
         },
     ],
     worst_pct: 100,
+    economics: None,
 }

@@ -95,6 +95,10 @@ pub struct StampRow {
     pub worst_bucket_raw: String,
     /// Pre-formatted `Xd Yh` countdown string. `"-"` if expired.
     pub ttl: String,
+    /// Raw seconds until expiry. Drives the TTL-threshold colour on
+    /// the row even when the formatted string already coalesces to
+    /// "-" / "expired".
+    pub ttl_seconds: i64,
     /// `true` if `immutable` — flagged in the `value` line because
     /// mutable + full silently overwrites prior chunks (bee#5334).
     pub immutable: bool,
@@ -102,6 +106,15 @@ pub struct StampRow {
     /// Inline tooltip rendered on the continuation line.
     pub why: Option<String>,
 }
+
+/// TTL-threshold constants. Below `TOPUP_SOON_SECS` we suggest
+/// topup in the row's `why` line; below `TOPUP_URGENT_SECS` we
+/// escalate to a critical / red row. Values chosen so a healthy
+/// batch never trips them: 7 days is well above the typical chain-
+/// confirmation lag, and 24 h is the operator's last reaction window
+/// before the batch expires.
+pub const TOPUP_SOON_SECS: i64 = 7 * 24 * 3600;
+pub const TOPUP_URGENT_SECS: i64 = 24 * 3600;
 
 /// Bucket fill distribution for [`StampDrillView`]. Six buckets keep
 /// the display compact while still distinguishing "nearly full" from
@@ -139,6 +152,30 @@ pub struct StampDrillView {
     /// Worst single bucket fill percentage (matches the row's
     /// `worst_bucket_pct`).
     pub worst_pct: u32,
+    /// Predicted economics — populated from the batch's `amount` and
+    /// `depth` per the canonical `bzz = amount × 2^depth / 1e16`
+    /// formula used by swarm-cli (`stamp/buy.ts:97-103`),
+    /// beekeeper-stamper (`pkg/stamper/node.go:33-43`), and
+    /// gateway-proxy (`stamps.ts:198-234`). `None` when Bee didn't
+    /// supply `amount` (very rare; usually for not-yet-confirmed
+    /// batches).
+    pub economics: Option<StampEconomics>,
+}
+
+/// Predictive economics computed for a batch, all rendered as
+/// formatted strings so the renderer doesn't hold BigInt / f64.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StampEconomics {
+    /// Total BZZ pre-paid for the batch — `amount × 2^depth / 1e16`.
+    /// Formatted with 4 decimal places.
+    pub bzz_paid: String,
+    /// Effective storage in bytes (theoretical, before bucket
+    /// skew). Same value as `theoretical_capacity` × 4096; included
+    /// here as a humanised string ("16.0 GiB") for the drill header.
+    pub volume_humanised: String,
+    /// Cost per GiB of theoretical capacity, in BZZ. Useful for
+    /// comparing batches with different depths at a glance.
+    pub bzz_per_gib: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,10 +259,17 @@ impl Stamps {
                 _ => continue, // user moved on; ignore
             }
             self.drill = match result {
-                Ok(buckets) => DrillState::Loaded {
-                    batch_id,
-                    view: Self::compute_drill_view(&buckets),
-                },
+                Ok(buckets) => {
+                    let batch = self
+                        .snapshot
+                        .batches
+                        .iter()
+                        .find(|b| b.batch_id == batch_id);
+                    DrillState::Loaded {
+                        batch_id,
+                        view: Self::compute_drill_view(&buckets, batch),
+                    }
+                }
                 Err(error) => DrillState::Failed { batch_id, error },
             };
         }
@@ -239,8 +283,15 @@ impl Stamps {
 
     /// Pure compute path for the drill pane. Buckets the per-bucket
     /// collisions into [`FILL_BIN_LABELS`] bins, picks the top-10
-    /// worst, totals the chunk count.
-    pub fn compute_drill_view(buckets: &PostageBatchBuckets) -> StampDrillView {
+    /// worst, totals the chunk count. `batch` is optional — when
+    /// supplied, predicted economics (`bzz_paid` etc.) are derived
+    /// from `batch.amount` × `2^depth` and rendered in the drill
+    /// header. Tests that only care about bucket shape can pass
+    /// `None`.
+    pub fn compute_drill_view(
+        buckets: &PostageBatchBuckets,
+        batch: Option<&PostageBatch>,
+    ) -> StampDrillView {
         let upper_bound = buckets.bucket_upper_bound.max(1);
         let mut fill_distribution = [0u32; 6];
         let mut total_chunks: u64 = 0;
@@ -268,6 +319,7 @@ impl Stamps {
             .collect();
         let worst_pct = worst_buckets.first().map(|w| w.pct).unwrap_or(0);
         let theoretical_capacity = (1u128 << buckets.bucket_depth) * u128::from(upper_bound);
+        let economics = batch.and_then(compute_stamp_economics);
         StampDrillView {
             depth: buckets.depth,
             bucket_depth: buckets.bucket_depth,
@@ -277,6 +329,7 @@ impl Stamps {
             fill_distribution,
             worst_buckets,
             worst_pct,
+            economics,
         }
     }
 
@@ -373,11 +426,36 @@ fn row_from_batch(b: &PostageBatch) -> StampRow {
                 "mutable batch will silently overwrite oldest chunks.".into()
             }),
         )
+    } else if b.batch_ttl <= TOPUP_URGENT_SECS {
+        // Bucket headroom OK, but TTL is dangerously low. This
+        // arm comes before the worst-bucket-skewed check because
+        // a near-expiry batch with a fine bucket is still going
+        // to fail — the bucket prediction is moot.
+        (
+            StampStatus::Critical,
+            Some(format!(
+                "topup URGENT — TTL {} (under {}h threshold).",
+                ttl,
+                TOPUP_URGENT_SECS / 3600
+            )),
+        )
     } else if worst_bucket_pct >= 80 {
         (
             StampStatus::Skewed,
             Some(format!(
                 "worst bucket {worst_bucket_pct}% > safe headroom — dilute or stop using."
+            )),
+        )
+    } else if b.batch_ttl <= TOPUP_SOON_SECS {
+        // Healthy buckets but TTL low enough to plan ahead. Don't
+        // escalate to Skewed (operator might mis-read it as bucket
+        // skew); use a milder Skewed-for-time framing.
+        (
+            StampStatus::Skewed,
+            Some(format!(
+                "topup soon — TTL {} (under {}d planning threshold).",
+                ttl,
+                TOPUP_SOON_SECS / 86_400
             )),
         )
     } else {
@@ -391,6 +469,7 @@ fn row_from_batch(b: &PostageBatch) -> StampRow {
         worst_bucket_pct,
         worst_bucket_raw,
         ttl,
+        ttl_seconds: b.batch_ttl,
         immutable: b.immutable,
         status,
         why,
@@ -407,6 +486,39 @@ fn worst_bucket_pct(b: &PostageBatch) -> u32 {
         let pct = (u64::from(b.utilization) * 100) / u64::from(upper_bound);
         pct.min(100) as u32
     }
+}
+
+/// Predicted economics for a batch. Replicates the canonical
+/// formula used across the ecosystem: `bzz_paid = amount × 2^depth
+/// / 1e16` (swarm-cli `stamp/buy.ts:97-103`, beekeeper-stamper
+/// `pkg/stamper/node.go:33-43`, gateway-proxy `stamps.ts:198-234`).
+///
+/// Returns `None` when Bee did not supply `amount` (rare; usually
+/// for not-yet-confirmed batches). f64 conversion is precise enough:
+/// realistic batches yield ≤ 10³ BZZ which leaves > 12 decimal
+/// digits of headroom in f64.
+fn compute_stamp_economics(b: &PostageBatch) -> Option<StampEconomics> {
+    let amount = b.amount.as_ref()?;
+    let two_pow_depth: num_bigint::BigInt = num_bigint::BigInt::from(1u32) << b.depth as usize;
+    let total_plur = amount * &two_pow_depth;
+    let bzz: f64 = total_plur.to_string().parse::<f64>().ok()? / 1e16;
+
+    let cap_bytes: u128 = (1u128 << b.depth) * 4096;
+    let volume_humanised = format_bytes(cap_bytes);
+
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let gib = cap_bytes as f64 / GIB;
+    let bzz_per_gib = if gib > 0.0 {
+        format!("{:.4} BZZ/GiB", bzz / gib)
+    } else {
+        "n/a".to_string()
+    };
+
+    Some(StampEconomics {
+        bzz_paid: format!("{bzz:.4} BZZ"),
+        volume_humanised,
+        bzz_per_gib,
+    })
 }
 
 /// Bytes → IEC binary (KiB / MiB / GiB / TiB).
@@ -746,6 +858,26 @@ impl Stamps {
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
+        if let Some(e) = &view.economics {
+            // Predictive economics line — same `amount × 2^depth /
+            // 1e16` formula as swarm-cli/beekeeper-stamper. Lets
+            // operators sanity-check what they paid for this batch
+            // alongside the bucket telemetry.
+            lines.push(Line::from(vec![
+                Span::raw("  paid "),
+                Span::styled(
+                    e.bzz_paid.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("   volume "),
+                Span::styled(
+                    e.volume_humanised.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("   "),
+                Span::styled(e.bzz_per_gib.clone(), Style::default().fg(t.dim)),
+            ]));
+        }
         lines.push(Line::from(""));
 
         // Fill-distribution histogram.
@@ -907,7 +1039,7 @@ mod tests {
             22,
             16,
         );
-        let view = Stamps::compute_drill_view(&buckets);
+        let view = Stamps::compute_drill_view(&buckets, None);
         assert_eq!(view.depth, 22);
         assert_eq!(view.bucket_depth, 16);
         assert_eq!(view.upper_bound, 64);
@@ -929,7 +1061,7 @@ mod tests {
     #[test]
     fn drill_view_handles_empty_buckets() {
         let buckets = buckets_with(&[], 22, 16);
-        let view = Stamps::compute_drill_view(&buckets);
+        let view = Stamps::compute_drill_view(&buckets, None);
         assert_eq!(view.total_chunks, 0);
         assert_eq!(view.fill_distribution, [0; 6]);
         assert_eq!(view.worst_pct, 0);
@@ -942,14 +1074,14 @@ mod tests {
         // truncate at 10 entries.
         let entries: Vec<(u32, u32)> = (0..12).map(|i| (i, 1)).collect();
         let buckets = buckets_with(&entries, 22, 16);
-        let view = Stamps::compute_drill_view(&buckets);
+        let view = Stamps::compute_drill_view(&buckets, None);
         assert_eq!(view.worst_buckets.len(), 10);
     }
 
     #[test]
     fn drill_view_breaks_ties_by_bucket_id() {
         let buckets = buckets_with(&[(7, 5), (3, 5), (10, 5)], 22, 16);
-        let view = Stamps::compute_drill_view(&buckets);
+        let view = Stamps::compute_drill_view(&buckets, None);
         // All three tie on collisions=5 → ascending by bucket_id.
         assert_eq!(
             view.worst_buckets
@@ -965,5 +1097,93 @@ mod tests {
         // Bee occasionally over-reports collisions vs upper_bound.
         // Treat it as the saturated 100 % bin rather than panicking.
         assert_eq!(bucket_fill_bin(70, 64), 5);
+    }
+
+    fn make_batch(amount: Option<num_bigint::BigInt>, depth: u8) -> PostageBatch {
+        PostageBatch {
+            batch_id: bee::swarm::BatchId::new(&[0u8; 32]).unwrap(),
+            amount,
+            start: 0,
+            owner: String::new(),
+            depth,
+            bucket_depth: depth.saturating_sub(6),
+            immutable: true,
+            batch_ttl: 30 * 86_400,
+            utilization: 0,
+            usable: true,
+            exists: true,
+            label: "test".into(),
+            block_number: 0,
+        }
+    }
+
+    #[test]
+    fn economics_returns_none_when_amount_missing() {
+        let b = make_batch(None, 22);
+        assert!(compute_stamp_economics(&b).is_none());
+    }
+
+    #[test]
+    fn economics_typical_batch_formats_strings() {
+        // amount=1e14 PLUR/chunk, depth=22 → 2^22 = 4_194_304 chunks
+        // total = 1e14 × 4_194_304 = 4.194304e20 PLUR
+        // bzz_paid = 4.194304e20 / 1e16 = 41943.04 BZZ
+        // capacity = 4_194_304 × 4096 = 16 GiB exactly
+        // bzz_per_gib = 41943.04 / 16 = 2621.44 BZZ/GiB
+        let amount = num_bigint::BigInt::from(100_000_000_000_000u64);
+        let b = make_batch(Some(amount), 22);
+        let e = compute_stamp_economics(&b).expect("amount present");
+        assert_eq!(e.bzz_paid, "41943.0400 BZZ");
+        assert_eq!(e.volume_humanised, "16.0 GiB");
+        assert_eq!(e.bzz_per_gib, "2621.4400 BZZ/GiB");
+    }
+
+    #[test]
+    fn economics_wired_through_compute_drill_view() {
+        let amount = num_bigint::BigInt::from(100_000_000_000_000u64);
+        let batch = make_batch(Some(amount), 22);
+        let buckets = buckets_with(&[(0, 1)], 22, 16);
+        let view = Stamps::compute_drill_view(&buckets, Some(&batch));
+        let e = view.economics.as_ref().expect("economics populated");
+        assert_eq!(e.volume_humanised, "16.0 GiB");
+    }
+
+    #[test]
+    fn row_topup_urgent_when_ttl_under_24h_with_healthy_buckets() {
+        // Bucket headroom is fine but TTL has dropped below 24h —
+        // the bucket-skewed arm shouldn't fire; the urgent arm wins.
+        let mut b = make_batch(None, 22);
+        b.batch_ttl = 12 * 3_600;
+        b.utilization = 14; // ~22 %, healthy
+        let row = row_from_batch(&b);
+        assert_eq!(row.status, StampStatus::Critical);
+        assert!(row.why.as_ref().unwrap().contains("topup URGENT"));
+    }
+
+    #[test]
+    fn row_topup_soon_when_ttl_under_7d_with_healthy_buckets() {
+        // 3 days left, buckets fine. Should be Skewed with the
+        // planning-threshold tooltip.
+        let mut b = make_batch(None, 22);
+        b.batch_ttl = 3 * 86_400;
+        b.utilization = 14;
+        let row = row_from_batch(&b);
+        assert_eq!(row.status, StampStatus::Skewed);
+        assert!(row.why.as_ref().unwrap().contains("topup soon"));
+    }
+
+    #[test]
+    fn row_critical_bucket_wins_over_urgent_ttl() {
+        // Worst bucket already at 95 %+ AND TTL is under 24h. The
+        // bucket-driven critical message takes precedence (operators
+        // usually act on bucket fill before TTL anyway).
+        let mut b = make_batch(None, 22);
+        b.batch_ttl = 12 * 3_600;
+        b.utilization = 63; // 98 %
+        let row = row_from_batch(&b);
+        assert_eq!(row.status, StampStatus::Critical);
+        let why = row.why.as_ref().unwrap();
+        assert!(!why.contains("topup URGENT"));
+        assert!(why.contains("REJECT") || why.contains("overwrite"));
     }
 }

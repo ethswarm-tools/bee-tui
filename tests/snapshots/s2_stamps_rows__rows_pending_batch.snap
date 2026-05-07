@@ -1,6 +1,5 @@
 ---
 source: tests/s2_stamps_rows.rs
-assertion_line: 72
 expression: rows
 ---
 [
@@ -11,6 +10,7 @@ expression: rows
         worst_bucket_pct: 0,
         worst_bucket_raw: "0/64",
         ttl: "1d  0h",
+        ttl_seconds: 86400,
         immutable: true,
         status: Pending,
         why: Some(
