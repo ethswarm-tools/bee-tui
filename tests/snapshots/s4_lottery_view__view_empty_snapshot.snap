@@ -1,0 +1,20 @@
+---
+source: tests/s4_lottery_view.rs
+assertion_line: 74
+expression: view
+---
+LotteryView {
+    round: None,
+    anchors: [],
+    stake: StakeCard {
+        status: Unknown,
+        staked: "—",
+        minimum_gas: "—",
+        reward: "—",
+        fees: "—",
+        last_sample: None,
+        why: Some(
+            "/stake not loaded yet",
+        ),
+    },
+}

@@ -1,0 +1,79 @@
+---
+source: tests/s4_lottery_view.rs
+assertion_line: 116
+expression: view
+---
+LotteryView {
+    round: Some(
+        RoundCard {
+            round: 14528,
+            block: 2208407,
+            block_of_round: 151,
+            phase: Sample,
+            phase_label: "sample",
+            segments: [
+                PhaseSegment {
+                    phase: Commit,
+                    state: Done,
+                    start_block: 0,
+                    end_block: 38,
+                },
+                PhaseSegment {
+                    phase: Reveal,
+                    state: Done,
+                    start_block: 38,
+                    end_block: 76,
+                },
+                PhaseSegment {
+                    phase: Claim,
+                    state: Done,
+                    start_block: 76,
+                    end_block: 152,
+                },
+            ],
+        },
+    ),
+    anchors: [
+        AnchorRow {
+            label: "last won",
+            round: 14524,
+            delta: Some(
+                4,
+            ),
+            when: "4 rounds ago",
+        },
+        AnchorRow {
+            label: "last played",
+            round: 14528,
+            delta: Some(
+                0,
+            ),
+            when: "this round",
+        },
+        AnchorRow {
+            label: "last selected",
+            round: 14528,
+            delta: Some(
+                0,
+            ),
+            when: "this round",
+        },
+        AnchorRow {
+            label: "last frozen",
+            round: 0,
+            delta: None,
+            when: "never",
+        },
+    ],
+    stake: StakeCard {
+        status: Healthy,
+        staked: "BZZ 10.0000",
+        minimum_gas: "BZZ 2.0000",
+        reward: "BZZ 142.0000",
+        fees: "BZZ 3.0000",
+        last_sample: Some(
+            "18.4s",
+        ),
+        why: None,
+    },
+}

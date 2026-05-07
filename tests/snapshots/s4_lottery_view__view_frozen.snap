@@ -1,0 +1,83 @@
+---
+source: tests/s4_lottery_view.rs
+assertion_line: 136
+expression: view
+---
+LotteryView {
+    round: Some(
+        RoundCard {
+            round: 14528,
+            block: 2208266,
+            block_of_round: 10,
+            phase: Commit,
+            phase_label: "commit",
+            segments: [
+                PhaseSegment {
+                    phase: Commit,
+                    state: Active,
+                    start_block: 0,
+                    end_block: 38,
+                },
+                PhaseSegment {
+                    phase: Reveal,
+                    state: Pending,
+                    start_block: 38,
+                    end_block: 76,
+                },
+                PhaseSegment {
+                    phase: Claim,
+                    state: Pending,
+                    start_block: 76,
+                    end_block: 152,
+                },
+            ],
+        },
+    ),
+    anchors: [
+        AnchorRow {
+            label: "last won",
+            round: 14510,
+            delta: Some(
+                18,
+            ),
+            when: "18 rounds ago",
+        },
+        AnchorRow {
+            label: "last played",
+            round: 14520,
+            delta: Some(
+                8,
+            ),
+            when: "8 rounds ago",
+        },
+        AnchorRow {
+            label: "last selected",
+            round: 14524,
+            delta: Some(
+                4,
+            ),
+            when: "4 rounds ago",
+        },
+        AnchorRow {
+            label: "last frozen",
+            round: 14523,
+            delta: Some(
+                5,
+            ),
+            when: "5 rounds ago",
+        },
+    ],
+    stake: StakeCard {
+        status: Frozen,
+        staked: "BZZ 10.0000",
+        minimum_gas: "BZZ 2.0000",
+        reward: "BZZ 142.0000",
+        fees: "BZZ 3.0000",
+        last_sample: Some(
+            "18.4s",
+        ),
+        why: Some(
+            "frozen out at round 14523; resumes after the freeze window.",
+        ),
+    },
+}
