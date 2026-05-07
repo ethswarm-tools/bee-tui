@@ -102,44 +102,7 @@ impl App {
         let watch = BeeWatch::start(api.clone(), &root_cancel);
         let health_rx = watch.health();
 
-        // S1 Health is the default screen for v0.1. v0.3 onwards it
-        // also subscribes to the topology stream so the
-        // bin-saturation gate can show real per-bin starvation
-        // status instead of a placeholder.
-        let health = Health::new(api.clone(), watch.health(), watch.topology());
-        // S2 Stamps is the second screen — Tab to switch.
-        let stamps = Stamps::new(watch.stamps());
-        // S3 SWAP / cheques — third tab.
-        let swap = Swap::new(watch.swap());
-        // S4 Lottery — fourth tab. Subscribes to both the 2 s
-        // redistribution-state stream (off the health hub) and the
-        // 30 s /stake stream. Owns its own ApiClient handle so the
-        // on-demand rchash benchmark ('r' key) doesn't have to round-
-        // trip through the App-level action pipeline.
-        let lottery = Lottery::new(api.clone(), watch.health(), watch.lottery());
-        // S6 Peers + bin saturation — fifth tab. Driven by /topology
-        // at 5 s; the bin-saturation classification depends on the
-        // full per-bin BinInfo populated by bee-rs 1.4.
-        let peers = Peers::new(watch.topology());
-        // S7 Network/NAT — sixth tab. Combines the slow /addresses
-        // stream (60 s) with the 5 s topology stream so the
-        // reachability strings update in lockstep with the rest of
-        // the topology view.
-        let network = Network::new(watch.network(), watch.topology());
-        // S5 Warmup — seventh tab. Reuses the existing health, stamps,
-        // and topology streams (no new poller); state is derived from
-        // is_warming_up + the same fields the other screens read.
-        let warmup = Warmup::new(watch.health(), watch.stamps(), watch.topology());
-        // S8 API health — eighth tab. Subscribes to /chainstate (off
-        // the health hub), /transactions (its own poller), and the
-        // shared LogCapture handle so the latency stats live-update
-        // from the same data S10's command-log pane shows.
-        let api_health = ApiHealth::new(
-            api.clone(),
-            watch.health(),
-            watch.transactions(),
-            log_capture::handle(),
-        );
+        let screens = build_screens(&api, &watch);
         // S10 Command-log subscribes to the bee::http capture set up
         // by logging::init. If logging hasn't initialised the capture
         // (e.g. running in a test harness), the pane just shows
@@ -149,20 +112,7 @@ impl App {
         Ok(Self {
             tick_rate,
             frame_rate,
-            // Order matters — the SCREEN_NAMES table assumes index 0
-            // is Health, index 1 is Stamps, index 2 is Swap, index 3
-            // is Lottery, index 4 is Peers, index 5 is Network,
-            // index 6 is Warmup, index 7 is API.
-            screens: vec![
-                Box::new(health),
-                Box::new(stamps),
-                Box::new(swap),
-                Box::new(lottery),
-                Box::new(peers),
-                Box::new(network),
-                Box::new(warmup),
-                Box::new(api_health),
-            ],
+            screens,
             current_screen: 0,
             command_log,
             should_quit: false,
@@ -359,6 +309,29 @@ impl App {
                     Err(e) => CommandStatus::Err(format!("diagnose failed: {e}")),
                 });
             }
+            "context" | "ctx" => {
+                let target = trimmed.split_whitespace().nth(1).unwrap_or("");
+                if target.is_empty() {
+                    let known: Vec<String> = self
+                        .config
+                        .nodes
+                        .iter()
+                        .map(|n| n.name.clone())
+                        .collect();
+                    self.command_status = Some(CommandStatus::Err(format!(
+                        "usage: :context <name>  (known: {})",
+                        known.join(", ")
+                    )));
+                    return Ok(());
+                }
+                self.command_status = Some(match self.switch_context(target) {
+                    Ok(()) => CommandStatus::Info(format!(
+                        "switched to context {target} ({})",
+                        self.api.url
+                    )),
+                    Err(e) => CommandStatus::Err(format!("context switch failed: {e}")),
+                });
+            }
             screen if SCREEN_NAMES
                 .iter()
                 .any(|name| name.eq_ignore_ascii_case(screen)) =>
@@ -378,6 +351,37 @@ impl App {
                 )));
             }
         }
+        Ok(())
+    }
+
+    /// Tear down the current watch hub and ApiClient, build a new
+    /// connection against the named NodeConfig, and rebuild the
+    /// screen list against fresh receivers. Component-internal state
+    /// (Lottery's bench history, Network's reachability stability
+    /// timer, etc.) is intentionally lost — a profile switch is a
+    /// fresh slate, the same way it would be on app restart.
+    fn switch_context(&mut self, target: &str) -> color_eyre::Result<()> {
+        let node = self
+            .config
+            .nodes
+            .iter()
+            .find(|n| n.name == target)
+            .ok_or_else(|| eyre!("no node configured with name {target:?}"))?
+            .clone();
+        let new_api = Arc::new(ApiClient::from_node(&node)?);
+        // Cancel the current hub's children and let it drop. The new
+        // hub spawns under the same root_cancel so quit-time teardown
+        // still walks the whole tree in one go.
+        self.watch.shutdown();
+        let new_watch = BeeWatch::start(new_api.clone(), &self.root_cancel);
+        let new_health_rx = new_watch.health();
+        let new_screens = build_screens(&new_api, &new_watch);
+        self.api = new_api;
+        self.watch = new_watch;
+        self.health_rx = new_health_rx;
+        self.screens = new_screens;
+        // Keep the same tab index so the operator stays on the
+        // screen they were looking at — same data shape, new node.
         Ok(())
     }
 
@@ -609,6 +613,40 @@ impl App {
         })?;
         Ok(())
     }
+}
+
+/// Construct the eight v0.3 screens with receivers from the supplied
+/// hub. Extracted so `App::new` and the `:context` profile-switcher
+/// can share the wiring — the screen list is the same on every
+/// connection, only the underlying watch hub changes.
+///
+/// Order matters — the [`SCREEN_NAMES`] table assumes index 0 is
+/// Health, 1 is Stamps, 2 is Swap, 3 is Lottery, 4 is Peers, 5 is
+/// Network, 6 is Warmup, 7 is API.
+fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Component>> {
+    let health = Health::new(api.clone(), watch.health(), watch.topology());
+    let stamps = Stamps::new(watch.stamps());
+    let swap = Swap::new(watch.swap());
+    let lottery = Lottery::new(api.clone(), watch.health(), watch.lottery());
+    let peers = Peers::new(watch.topology());
+    let network = Network::new(watch.network(), watch.topology());
+    let warmup = Warmup::new(watch.health(), watch.stamps(), watch.topology());
+    let api_health = ApiHealth::new(
+        api.clone(),
+        watch.health(),
+        watch.transactions(),
+        log_capture::handle(),
+    );
+    vec![
+        Box::new(health),
+        Box::new(stamps),
+        Box::new(swap),
+        Box::new(lottery),
+        Box::new(peers),
+        Box::new(network),
+        Box::new(warmup),
+        Box::new(api_health),
+    ]
 }
 
 fn format_gate_line(g: &Gate) -> String {
