@@ -11,6 +11,24 @@ format follows [Keep a Changelog]; the project adheres to
 
 ### Added
 
+- **S5 Warmup** — seventh operator screen. Answers bee#4746 (the
+  25–60 minute cold-start opacity where Bee bootstraps internally
+  and the operator sees nothing actionable). Reuses the existing
+  health / stamps / topology streams (no new poller) and renders an
+  elapsed counter plus a five-step checklist:
+  - Postage snapshot loaded
+  - Peer bootstrap (against a heuristic 50-peer target)
+  - Kademlia depth stable (5-tick observation window)
+  - Reserve fill (`reserve_size_within_radius / 65_536`)
+  - Stabilization (terminal step keyed on `is_warming_up=false`)
+  Elapsed timer captures the first `is_warming_up=true` observation
+  and freezes the moment Bee flips it back to false. Screen stays
+  useful post-warmup as a "definition of done" view.
+- **Tab now cycles seven screens** Health → Stamps → Swap → Lottery →
+  Peers → Network → Warmup.
+- 5 insta snapshot tests pin the StepState transitions across every
+  phase (no-data → fresh → mid → almost-done → complete).
+
 - **S7 Network / NAT** — sixth operator screen and the
   highest-leverage answer to bee#4194 ("I have peers but I'm
   unreachable"). Driven by a new 60 s `/addresses` poller plus the
