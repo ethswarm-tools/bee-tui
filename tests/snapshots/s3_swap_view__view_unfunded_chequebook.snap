@@ -1,0 +1,20 @@
+---
+source: tests/s3_swap_view.rs
+assertion_line: 80
+expression: view
+---
+SwapView {
+    card: ChequebookCard {
+        status: Empty,
+        total: "BZZ 0.0000",
+        available: "BZZ 0.0000",
+        available_pct: 0,
+        why: Some(
+            "chequebook holds 0 BZZ — fund it to send cheques.",
+        ),
+    },
+    cheques: [],
+    settlements: [],
+    time_total_received: None,
+    time_total_sent: None,
+}

@@ -1,0 +1,53 @@
+---
+source: tests/s3_swap_view.rs
+assertion_line: 194
+expression: view
+---
+SwapView {
+    card: ChequebookCard {
+        status: Healthy,
+        total: "BZZ 50.0000",
+        available: "BZZ 35.0000",
+        available_pct: 70,
+        why: None,
+    },
+    cheques: [
+        CheckRow {
+            peer_short: "aaaaaa…aaaa",
+            payout: "BZZ 1.2000",
+            never: false,
+        },
+        CheckRow {
+            peer_short: "bbbbbb…bbbb",
+            payout: "BZZ 0.4000",
+            never: false,
+        },
+        CheckRow {
+            peer_short: "cccccc…cccc",
+            payout: "—",
+            never: true,
+        },
+    ],
+    settlements: [
+        SettlementRow {
+            peer_short: "aaaaaa…aaaa",
+            received: "BZZ 2.5000",
+            sent: "BZZ 0.3000",
+            net: "+BZZ 2.2000",
+            net_flagged: true,
+        },
+        SettlementRow {
+            peer_short: "bbbbbb…bbbb",
+            received: "BZZ 1.5000",
+            sent: "BZZ 0.5000",
+            net: "+BZZ 1.0000",
+            net_flagged: true,
+        },
+    ],
+    time_total_received: Some(
+        "BZZ 0.7000",
+    ),
+    time_total_sent: Some(
+        "BZZ 0.2000",
+    ),
+}

@@ -1,0 +1,20 @@
+---
+source: tests/s3_swap_view.rs
+assertion_line: 70
+expression: view
+---
+SwapView {
+    card: ChequebookCard {
+        status: Unknown,
+        total: "—",
+        available: "—",
+        available_pct: 0,
+        why: Some(
+            "/chequebook/balance not available yet",
+        ),
+    },
+    cheques: [],
+    settlements: [],
+    time_total_received: None,
+    time_total_sent: None,
+}

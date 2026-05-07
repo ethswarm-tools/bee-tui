@@ -226,10 +226,20 @@ fn cheque_rows_for(last_received: &[LastCheque]) -> Vec<CheckRow> {
 
 fn settlement_rows_for(s: Option<&Settlements>) -> Vec<SettlementRow> {
     let Some(s) = s else { return Vec::new() };
-    let mut rows: Vec<SettlementRow> = s.settlements.iter().map(settlement_row).collect();
-    // Largest absolute net first — flagged peers float to the top.
-    rows.sort_by(|a, b| b.net_flagged.cmp(&a.net_flagged).then_with(|| b.net.cmp(&a.net)));
-    rows
+    // Sort the raw settlements by |received - sent| descending so the
+    // most out-of-balance peers float to the top — that's where cashout
+    // pressure shows up first.
+    let mut sorted: Vec<&Settlement> = s.settlements.iter().collect();
+    sorted.sort_by_key(|s| std::cmp::Reverse(abs_net(s)));
+    sorted.into_iter().map(settlement_row).collect()
+}
+
+fn abs_net(s: &Settlement) -> BigInt {
+    let zero = BigInt::from(0);
+    let recv = s.received.as_ref().unwrap_or(&zero);
+    let sent = s.sent.as_ref().unwrap_or(&zero);
+    let net = recv - sent;
+    if net < zero { -net } else { net }
 }
 
 fn settlement_row(s: &Settlement) -> SettlementRow {
@@ -240,12 +250,12 @@ fn settlement_row(s: &Settlement) -> SettlementRow {
     let net = format_plur_signed(&net_bi);
     // Flag peers >0.5 BZZ out of balance (5 * 10^15 PLUR).
     let half_bzz = BigInt::from(5_000_000_000_000_000u64);
-    let abs_net = if net_bi < BigInt::from(0) {
-        -net_bi.clone()
+    let abs = if net_bi < BigInt::from(0) {
+        -net_bi
     } else {
-        net_bi.clone()
+        net_bi
     };
-    let net_flagged = abs_net > half_bzz;
+    let net_flagged = abs > half_bzz;
     SettlementRow {
         peer_short: short_peer(&s.peer),
         received: format_plur(recv),

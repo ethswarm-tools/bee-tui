@@ -1,0 +1,20 @@
+---
+source: tests/s3_swap_view.rs
+assertion_line: 101
+expression: view
+---
+SwapView {
+    card: ChequebookCard {
+        status: Tight,
+        total: "BZZ 10.0000",
+        available: "BZZ 1.0000",
+        available_pct: 10,
+        why: Some(
+            "only 10% available — most BZZ is tied up in unsettled debt.",
+        ),
+    },
+    cheques: [],
+    settlements: [],
+    time_total_received: None,
+    time_total_sent: None,
+}
