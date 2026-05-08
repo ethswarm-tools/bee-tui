@@ -3,43 +3,41 @@ source: tests/s6_peers_drill.rs
 expression: view
 ---
 PeerDrillView {
-    peer_overlay: "abc1234567890abc1234567890abc1234567890abc1234567890abc1234567890",
+    peer_overlay: "out",
     bin: Some(
-        7,
+        6,
     ),
     balance: Ok(
-        "-BZZ 0.1200",
+        "+BZZ 0.0000",
     ),
     ping: Ok(
-        "4.21ms",
+        "8ms",
     ),
     settlement_received: Ok(
-        "BZZ 8.0000",
+        "—",
     ),
     settlement_sent: Ok(
-        "BZZ 1.5000",
+        "—",
     ),
     last_received_cheque: Ok(
-        Some(
-            "BZZ 1.5000",
-        ),
+        None,
     ),
     last_sent_cheque: Ok(
         None,
     ),
     storage_radius: Ok(
-        "8",
+        "6",
     ),
     reserve_size: Ok(
-        "420 000",
+        "80 000",
     ),
     pullsync_rate: Ok(
-        "12.50 chunks/s",
+        "1.20 chunks/s",
     ),
     batch_commitment: Ok(
         BatchCommitmentCell {
-            formatted: "99 715 645 440",
-            outlier: false,
+            formatted: "50 000 000 000",
+            outlier: true,
         },
     ),
 }

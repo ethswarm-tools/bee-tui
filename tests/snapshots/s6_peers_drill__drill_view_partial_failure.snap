@@ -23,4 +23,16 @@ PeerDrillView {
     last_sent_cheque: Err(
         "Response { status: 404, status_text: \"404 Not Found\" }",
     ),
+    storage_radius: Err(
+        "(no /status/peers row for this overlay)",
+    ),
+    reserve_size: Err(
+        "(no /status/peers row for this overlay)",
+    ),
+    pullsync_rate: Err(
+        "(no /status/peers row for this overlay)",
+    ),
+    batch_commitment: Err(
+        "(no /status/peers row for this overlay)",
+    ),
 }

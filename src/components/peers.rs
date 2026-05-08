@@ -45,7 +45,7 @@ use crate::api::ApiClient;
 use crate::theme;
 use crate::watch::TopologySnapshot;
 
-use bee::debug::{Balance, BinInfo, PeerCheques, PeerInfo, Settlement, Topology};
+use bee::debug::{Balance, BinInfo, PeerCheques, PeerInfo, PeerStatus, Settlement, Status, Topology};
 
 /// Kademlia bins per Bee build.
 pub const BIN_COUNT: usize = 32;
@@ -189,7 +189,7 @@ pub enum DrillField<T: Clone + PartialEq + Eq> {
 }
 
 /// Aggregated drill view for the per-peer pane. Pure — computed
-/// from the four endpoint results without any I/O.
+/// from the six endpoint results without any I/O.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerDrillView {
     pub peer_overlay: String,
@@ -208,27 +208,52 @@ pub struct PeerDrillView {
     pub last_received_cheque: DrillField<Option<String>>,
     /// Last sent cheque payout (BZZ) or `None` if no cheques.
     pub last_sent_cheque: DrillField<Option<String>>,
+    /// Reserve-state snapshot fields from `/status/peers/<overlay>`.
+    /// All four come from the same row so they share a fail outcome.
+    pub storage_radius: DrillField<String>,
+    pub reserve_size: DrillField<String>,
+    pub pullsync_rate: DrillField<String>,
+    /// `batch_commitment` rendered with the outlier flag attached. A
+    /// `>5%` deviation from the local node's value paints red, mirrors
+    /// `bee-scripts/bad-status.sh`. `None` means we haven't seen the
+    /// peer's status row at all (peer not in the bulk response).
+    pub batch_commitment: DrillField<BatchCommitmentCell>,
 }
 
-/// Bundle of the four endpoint results that feeds
+/// Per-cell payload for the batch-commitment row: the formatted value
+/// + the outlier flag we colour by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchCommitmentCell {
+    /// Pre-formatted (e.g. `"99 715 645 440"` with thousands grouping).
+    pub formatted: String,
+    /// True when |peer - local| / local > 5%.
+    pub outlier: bool,
+}
+
+/// Bundle of the six endpoint results that feeds
 /// [`Peers::compute_peer_drill_view`]. Each field can fail
-/// independently.
+/// independently. `peer_status` is `Ok(None)` when the peer was not
+/// present in the bulk `/status/peers` response (transient — a slow
+/// peer may not show up on every poll).
 #[derive(Debug, Clone)]
 pub struct PeerDrillFetch {
     pub balance: std::result::Result<Balance, String>,
     pub cheques: std::result::Result<PeerCheques, String>,
     pub settlement: std::result::Result<Settlement, String>,
     pub ping: std::result::Result<String, String>,
+    pub peer_status: std::result::Result<Option<PeerStatus>, String>,
+    pub local_status: std::result::Result<Status, String>,
 }
 
 /// Drill-pane state machine. `Idle` keeps the regular table
 /// rendered; the other variants replace the peer table with the
-/// drill view.
+/// drill view. `Loaded` boxes the view because PeerDrillView is
+/// substantially larger than the other variants.
 #[derive(Debug, Clone)]
 pub enum DrillState {
     Idle,
     Loading { peer: String, bin: Option<u8> },
-    Loaded { view: PeerDrillView },
+    Loaded { view: Box<PeerDrillView> },
 }
 
 type DrillFetchResult = (String, PeerDrillFetch);
@@ -298,7 +323,9 @@ impl Peers {
                 _ => None,
             };
             let view = Self::compute_peer_drill_view(&peer, bin, &fetch);
-            self.drill = DrillState::Loaded { view };
+            self.drill = DrillState::Loaded {
+                view: Box::new(view),
+            };
         }
     }
 
@@ -360,6 +387,9 @@ impl Peers {
             ),
             Err(e) => (DrillField::Err(e.clone()), DrillField::Err(e.clone())),
         };
+        let (storage_radius, reserve_size, pullsync_rate, batch_commitment) =
+            compute_reserve_state_fields(&fetch.peer_status, &fetch.local_status);
+
         PeerDrillView {
             peer_overlay: peer.to_string(),
             bin,
@@ -369,6 +399,10 @@ impl Peers {
             settlement_sent,
             last_received_cheque,
             last_sent_cheque,
+            storage_radius,
+            reserve_size,
+            pullsync_rate,
+            batch_commitment,
         }
     }
 
@@ -400,17 +434,32 @@ impl Peers {
             // future has resolved (even if some errored), so the
             // operator sees the full picture in one update rather
             // than four flickers.
-            let (balance, cheques, settlement, ping) = tokio::join!(
+            let (balance, cheques, settlement, ping, status_peers, local_status) = tokio::join!(
                 debug.peer_balance(&peer_for_task),
                 debug.peer_cheques(&peer_for_task),
                 debug.peer_settlement(&peer_for_task),
                 debug.ping_peer(&peer_for_task),
+                debug.status_peers(),
+                debug.status(),
             );
+            // Filter the bulk /status/peers response down to the row
+            // matching this peer's overlay. Bee returns the overlay
+            // un-prefixed in `Status::overlay`, so a substring match
+            // against the operator-supplied peer string is fine even
+            // if one carries `0x` and the other doesn't.
+            let peer_status = status_peers
+                .map(|rows| {
+                    rows.into_iter()
+                        .find(|r| peer_for_task.contains(&r.status.overlay))
+                })
+                .map_err(|e| e.to_string());
             let fetch = PeerDrillFetch {
                 balance: balance.map_err(|e| e.to_string()),
                 cheques: cheques.map_err(|e| e.to_string()),
                 settlement: settlement.map_err(|e| e.to_string()),
                 ping: ping.map_err(|e| e.to_string()),
+                peer_status,
+                local_status: local_status.map_err(|e| e.to_string()),
             };
             let _ = tx.send((peer_for_task, fetch));
         });
@@ -975,12 +1024,142 @@ impl Peers {
             t,
         ));
         lines.push(Line::from(""));
+        // Reserve-state rows from /status/peers — same row a peer
+        // would be flagged on by `bee-scripts/bad-status.sh`. These
+        // surface together because they all derive from one row of
+        // the bulk response.
+        lines.push(drill_field_line(
+            "storage radius ",
+            &view.storage_radius,
+            t,
+        ));
+        lines.push(drill_field_line("reserve size   ", &view.reserve_size, t));
+        lines.push(drill_field_line(
+            "pullsync rate  ",
+            &view.pullsync_rate,
+            t,
+        ));
+        lines.push(drill_batch_commitment_line(
+            "batch commit   ",
+            &view.batch_commitment,
+            t,
+        ));
+        lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "  (Esc to dismiss · figures are point-in-time, not live-updating)",
             Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
         )));
         frame.render_widget(Paragraph::new(lines), area);
     }
+}
+
+fn drill_batch_commitment_line(
+    label: &str,
+    field: &DrillField<BatchCommitmentCell>,
+    t: &theme::Theme,
+) -> Line<'static> {
+    match field {
+        DrillField::Ok(cell) => {
+            let value_style = if cell.outlier {
+                Style::default().fg(t.fail).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            };
+            let mut spans = vec![
+                Span::raw("  "),
+                Span::styled(label.to_string(), Style::default().fg(t.dim)),
+                Span::raw("  "),
+                Span::styled(cell.formatted.clone(), value_style),
+            ];
+            if cell.outlier {
+                spans.push(Span::styled(
+                    "  (>5% off local — outlier)",
+                    Style::default().fg(t.fail).add_modifier(Modifier::ITALIC),
+                ));
+            }
+            Line::from(spans)
+        }
+        DrillField::Err(e) => Line::from(vec![
+            Span::raw("  "),
+            Span::styled(label.to_string(), Style::default().fg(t.dim)),
+            Span::raw("  "),
+            Span::styled(format!("error: {e}"), Style::default().fg(t.fail)),
+        ]),
+    }
+}
+
+/// Compute the four reserve-state cells (`storage_radius`,
+/// `reserve_size`, `pullsync_rate`, `batch_commitment`) from the
+/// `/status/peers` row + the local node's `/status`. Pure — no I/O,
+/// no allocation beyond the formatted strings.
+///
+/// Outlier rule for `batch_commitment`: |peer - local| / local > 5%
+/// paints red. Mirrors the filter in `bee-scripts/bad-status.sh` so
+/// operators reading both tools see the same set of warnings.
+fn compute_reserve_state_fields(
+    peer: &std::result::Result<Option<PeerStatus>, String>,
+    local: &std::result::Result<Status, String>,
+) -> (
+    DrillField<String>,
+    DrillField<String>,
+    DrillField<String>,
+    DrillField<BatchCommitmentCell>,
+) {
+    let peer_status = match peer {
+        Ok(Some(p)) => &p.status,
+        Ok(None) => {
+            let msg = "(no /status/peers row for this overlay)".to_string();
+            return (
+                DrillField::Err(msg.clone()),
+                DrillField::Err(msg.clone()),
+                DrillField::Err(msg.clone()),
+                DrillField::Err(msg),
+            );
+        }
+        Err(e) => {
+            return (
+                DrillField::Err(e.clone()),
+                DrillField::Err(e.clone()),
+                DrillField::Err(e.clone()),
+                DrillField::Err(e.clone()),
+            );
+        }
+    };
+    let storage_radius = DrillField::Ok(peer_status.storage_radius.to_string());
+    let reserve_size = DrillField::Ok(format_thousands(peer_status.reserve_size));
+    let pullsync_rate = DrillField::Ok(format!("{:.2} chunks/s", peer_status.pullsync_rate));
+    let outlier = match local {
+        Ok(l) if l.batch_commitment > 0 => {
+            let delta = (peer_status.batch_commitment - l.batch_commitment).abs() as f64;
+            (delta / l.batch_commitment as f64) > 0.05
+        }
+        _ => false,
+    };
+    let batch_commitment = DrillField::Ok(BatchCommitmentCell {
+        formatted: format_thousands(peer_status.batch_commitment),
+        outlier,
+    });
+    (
+        storage_radius,
+        reserve_size,
+        pullsync_rate,
+        batch_commitment,
+    )
+}
+
+fn format_thousands(n: i64) -> String {
+    let s = n.abs().to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    if n < 0 {
+        out.push('-');
+    }
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(' ');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn drill_field_line(label: &str, field: &DrillField<String>, t: &theme::Theme) -> Line<'static> {
@@ -1205,6 +1384,8 @@ mod tests {
                 sent: Some(BigInt::from(100_000_000_000_000_000u64)),
             }),
             ping: Ok("4.21ms".into()),
+            peer_status: Ok(None),
+            local_status: Err("not under test here".into()),
         };
         let view = Peers::compute_peer_drill_view("abcd1234", Some(7), &fetch);
         assert_eq!(view.bin, Some(7));
@@ -1234,6 +1415,8 @@ mod tests {
             cheques: Err("404".into()),
             settlement: Err("503 Node is syncing".into()),
             ping: Ok("12ms".into()),
+            peer_status: Err("503".into()),
+            local_status: Err("503".into()),
         };
         let view = Peers::compute_peer_drill_view("xxxx", None, &fetch);
         assert!(matches!(view.balance, DrillField::Ok(_)));
@@ -1249,5 +1432,105 @@ mod tests {
             format_plur_signed(&BigInt::from(-5_000_000_000_000_000i64)),
             "-BZZ 0.5000"
         );
+    }
+
+    fn local_status_with_commitment(commitment: i64) -> Status {
+        Status {
+            batch_commitment: commitment,
+            ..Status::default()
+        }
+    }
+
+    fn peer_status_with(
+        overlay: &str,
+        storage_radius: i64,
+        reserve_size: i64,
+        pullsync_rate: f64,
+        batch_commitment: i64,
+    ) -> PeerStatus {
+        PeerStatus {
+            status: Status {
+                overlay: overlay.into(),
+                storage_radius,
+                reserve_size,
+                pullsync_rate,
+                batch_commitment,
+                ..Status::default()
+            },
+            request_failed: false,
+        }
+    }
+
+    #[test]
+    fn batch_commitment_within_5pct_is_not_outlier() {
+        let local = Ok(local_status_with_commitment(99_715_645_440));
+        let peer = Ok(Some(peer_status_with(
+            "abcd",
+            8,
+            420_000,
+            12.5,
+            99_700_000_000,
+        )));
+        let (radius, reserve, rate, commit) = compute_reserve_state_fields(&peer, &local);
+        assert!(matches!(radius, DrillField::Ok(ref s) if s == "8"));
+        assert!(matches!(reserve, DrillField::Ok(ref s) if s.contains("420")));
+        assert!(matches!(rate, DrillField::Ok(ref s) if s.starts_with("12.50")));
+        match commit {
+            DrillField::Ok(cell) => {
+                assert!(!cell.outlier, "0.015% delta should not flag outlier");
+                assert!(cell.formatted.contains("99 700"));
+            }
+            _ => panic!("expected ok commit"),
+        }
+    }
+
+    #[test]
+    fn batch_commitment_above_5pct_is_outlier() {
+        let local = Ok(local_status_with_commitment(99_715_645_440));
+        let peer = Ok(Some(peer_status_with(
+            "abcd",
+            8,
+            420_000,
+            12.5,
+            50_000_000_000, // ~50% off → outlier
+        )));
+        let (_, _, _, commit) = compute_reserve_state_fields(&peer, &local);
+        match commit {
+            DrillField::Ok(cell) => assert!(cell.outlier, "50% delta should flag outlier"),
+            _ => panic!("expected ok commit"),
+        }
+    }
+
+    #[test]
+    fn missing_peer_status_row_renders_as_err_consistently() {
+        let local = Ok(local_status_with_commitment(99_715_645_440));
+        let peer = Ok(None);
+        let (radius, reserve, rate, commit) = compute_reserve_state_fields(&peer, &local);
+        assert!(matches!(radius, DrillField::Err(_)));
+        assert!(matches!(reserve, DrillField::Err(_)));
+        assert!(matches!(rate, DrillField::Err(_)));
+        assert!(matches!(commit, DrillField::Err(_)));
+    }
+
+    #[test]
+    fn local_status_failure_does_not_flag_outlier() {
+        // When we can't read our own /status, we can't decide; treat
+        // as non-outlier (don't paint red without evidence).
+        let local: std::result::Result<Status, String> = Err("503".into());
+        let peer = Ok(Some(peer_status_with("abcd", 8, 420_000, 12.5, 1)));
+        let (_, _, _, commit) = compute_reserve_state_fields(&peer, &local);
+        match commit {
+            DrillField::Ok(cell) => assert!(!cell.outlier),
+            _ => panic!("expected ok commit"),
+        }
+    }
+
+    #[test]
+    fn format_thousands_handles_typical_values() {
+        assert_eq!(format_thousands(0), "0");
+        assert_eq!(format_thousands(123), "123");
+        assert_eq!(format_thousands(1_234), "1 234");
+        assert_eq!(format_thousands(99_715_645_440), "99 715 645 440");
+        assert_eq!(format_thousands(-1_234), "-1 234");
     }
 }

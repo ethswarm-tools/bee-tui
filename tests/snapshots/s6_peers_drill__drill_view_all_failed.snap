@@ -25,4 +25,16 @@ PeerDrillView {
     last_sent_cheque: Err(
         "Response { status: 503, body: \"Node is syncing\" }",
     ),
+    storage_radius: Err(
+        "Response { status: 503, body: \"Node is syncing\" }",
+    ),
+    reserve_size: Err(
+        "Response { status: 503, body: \"Node is syncing\" }",
+    ),
+    pullsync_rate: Err(
+        "Response { status: 503, body: \"Node is syncing\" }",
+    ),
+    batch_commitment: Err(
+        "Response { status: 503, body: \"Node is syncing\" }",
+    ),
 }

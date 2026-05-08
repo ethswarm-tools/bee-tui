@@ -8,7 +8,7 @@
 
 use num_bigint::BigInt;
 
-use bee::debug::{Balance, Cheque, PeerCheques, Settlement};
+use bee::debug::{Balance, Cheque, PeerCheques, PeerStatus, Settlement, Status};
 use bee_tui::components::peers::{PeerDrillFetch, Peers};
 
 fn plur(bzz_hundredths: i64) -> BigInt {
@@ -42,6 +42,21 @@ fn drill_view_realistic_paying_peer() {
             sent: Some(plur(150)),     // 1.50 BZZ
         }),
         ping: Ok("4.21ms".into()),
+        peer_status: Ok(Some(PeerStatus {
+            status: Status {
+                overlay: "abc".into(),
+                storage_radius: 8,
+                reserve_size: 420_000,
+                pullsync_rate: 12.5,
+                batch_commitment: 99_715_645_440,
+                ..Status::default()
+            },
+            request_failed: false,
+        })),
+        local_status: Ok(Status {
+            batch_commitment: 99_715_645_440,
+            ..Status::default()
+        }),
     };
     let view = Peers::compute_peer_drill_view(
         "abc1234567890abc1234567890abc1234567890abc1234567890abc1234567890",
@@ -69,6 +84,8 @@ fn drill_view_partial_failure() {
             sent: None,
         }),
         ping: Ok("12ms".into()),
+        peer_status: Ok(None),
+        local_status: Err("503".into()),
     };
     let view = Peers::compute_peer_drill_view("xxx", None, &fetch);
     insta::assert_debug_snapshot!(view);
@@ -84,8 +101,50 @@ fn drill_view_all_failed() {
         balance: Err(err.clone()),
         cheques: Err(err.clone()),
         settlement: Err(err.clone()),
-        ping: Err(err),
+        ping: Err(err.clone()),
+        peer_status: Err(err.clone()),
+        local_status: Err(err),
     };
     let view = Peers::compute_peer_drill_view("zzz", Some(0), &fetch);
+    insta::assert_debug_snapshot!(view);
+}
+
+#[test]
+fn drill_view_outlier_batch_commitment() {
+    // Peer reports batch_commitment ~50% off our local view → red,
+    // mirroring `bee-scripts/bad-status.sh`.
+    let fetch = PeerDrillFetch {
+        balance: Ok(Balance {
+            peer: "out".into(),
+            balance: BigInt::from(0),
+        }),
+        cheques: Ok(PeerCheques {
+            peer: "out".into(),
+            last_received: None,
+            last_sent: None,
+        }),
+        settlement: Ok(Settlement {
+            peer: "out".into(),
+            received: None,
+            sent: None,
+        }),
+        ping: Ok("8ms".into()),
+        peer_status: Ok(Some(PeerStatus {
+            status: Status {
+                overlay: "out".into(),
+                storage_radius: 6,
+                reserve_size: 80_000,
+                pullsync_rate: 1.2,
+                batch_commitment: 50_000_000_000,
+                ..Status::default()
+            },
+            request_failed: false,
+        })),
+        local_status: Ok(Status {
+            batch_commitment: 99_715_645_440,
+            ..Status::default()
+        }),
+    };
+    let view = Peers::compute_peer_drill_view("out", Some(6), &fetch);
     insta::assert_debug_snapshot!(view);
 }
