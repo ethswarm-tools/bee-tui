@@ -11,6 +11,71 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.5.0] - 2026-05-08
+
+The "publish + verify" release. Three features bundle into the
+"v1.4 unblocked these" theme: now that v1.4 shipped `:upload-file`
+and v1.2 shipped `:durability-check`, this release closes their
+natural gaps — recursive directory uploads, end-to-end BMT
+verification of every fetched chunk, and the receiver-side feed
+lookup that pairs with v1.3's `:gsoc-mine` / `:pss-target` writer
+verbs.
+
+Three commits since v1.4.0 (`e30b3f6`, `8c0f2a6`, `19711ac`).
+
+### Added — uploads
+
+- **`:upload-collection <dir> <batch>`** — recursive directory
+  upload via tar `POST /bzz`. Hidden entries (`.git`, `.env`, …)
+  and symlinks are skipped; an `index.html` at the collection
+  root auto-becomes the manifest's default index. Caps mirror
+  `:upload-file`: 256 MiB total, 10k entries. Deterministic
+  sort order, so identical inputs produce identical Swarm
+  references. Available as `--once upload-collection` for CI
+  snapshot-publish workflows; emits JSON with `reference`,
+  `entry_count`, `total_bytes`, `default_index`.
+- New `crate::uploads` module with the directory walker (7 unit
+  tests against tempfile fixtures pin the traversal rules).
+
+### Added — durability
+
+- **BMT verification** on every chunk fetched by
+  `:durability-check`. New `chunks_corrupt` bucket separate from
+  `chunks_lost` (404s) and `chunks_errors` (other failures), so
+  operators can tell bit-rot / hostile-peer behaviour from
+  network drops. Default on (one keccak per chunk; cost is
+  negligible vs the network round-trip). New
+  `durability::CheckOptions { bmt_verify }` exposes a way to
+  disable for very large walks; surfaced in `--once
+  durability-check` JSON as `chunks_corrupt` + `bmt_verified`,
+  and in S13 Watchlist row detail as `N corrupt · BMT`.
+
+### Added — feeds
+
+- **`:feed-probe <owner> <topic>`** — read-only lookup of the
+  latest update of a Swarm feed. Surfaces index, timestamp,
+  payload size, and (when the payload is reference-shaped) the
+  embedded Swarm reference. Topic input accepts 64-hex literal
+  or any other string (keccak256-hashed via
+  `Topic::from_string`, matching bee-js convention). The
+  receiver-side complement to v1.3's `:gsoc-mine` and
+  `:pss-target`. Available as `--once feed-probe` for CI gates
+  that assert a known feed advances.
+- New `crate::feed_probe` module with pure parse_args /
+  parse_update functions (7 unit tests).
+
+### `--once` CI mode
+
+Two new verbs (`upload-collection`, `feed-probe`) — total verbs
+across cockpit + `--once` is now 39 cockpit / 22 `--once`.
+
+### Internals
+
+- `bee::swarm::bmt::calculate_chunk_address` round-trip now
+  pinned in a unit test against a flipped-byte tampered chunk;
+  the durability walk's correctness depends on this contract.
+- 383 lib tests + integration suite passing.
+
 ## [1.4.0] - 2026-05-08
 
 The "operator-context" release. Six features bundle into a coherent
