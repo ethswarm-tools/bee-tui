@@ -11,6 +11,83 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.4.0] - 2026-05-08
+
+The "operator-context" release. Six features bundle into a coherent
+"the cockpit doesn't just show you Bee — it tells you when something
+breaks, what things cost, and lets you publish a file without
+shelling out" theme.
+
+Six commits since v1.3.0 (`d024c4d`, `80cfe56`, `0c216a5`, `fbcbbc0`,
+`042fe30`, `4456f96`).
+
+### Added — observability
+
+- **Webhook health-gate alerts** (`[alerts].webhook_url`). Every
+  health-gate transition (Pass↔Warn, Pass↔Fail, etc.) becomes one
+  Slack/Discord-compatible POST. Per-gate debounce (default 5 min)
+  prevents flapping; Unknown transitions are suppressed so cockpit
+  startup never spams. Off by default — fresh installs make no
+  outbound traffic.
+- **Stamp TTL gate** in `Health::gates_for_with_stamps` — aggregates
+  over usable batches and reports the worst-case TTL: Pass when all
+  batches have >7d, Warn under the planning threshold, Fail under
+  the 24h urgent threshold. Plumbed through the alerter, so silent
+  batch expiries trigger webhooks the same way reachability outages
+  do, and surfaced in `:diagnose` bundles.
+
+### Added — cost context
+
+- **`:price`** — fetches xBZZ → USD spot price from Swarm's public
+  token service. No configuration required.
+- **`:basefee`** — fetches Gnosis-chain basefee + tip via JSON-RPC.
+  Requires `[economics].gnosis_rpc_url` (typically the same URL as
+  Bee's `--blockchain-rpc-endpoint`). Surfaces a clear "configure"
+  hint when unset.
+- **Live Market tile on S3 SWAP** (`[economics].enable_market_tile
+  = true`). Always-on tile rendering `BZZ ≈ $X.XXXX` and `gas: B
+  base + T tip = N gwei`, refreshed every 60 s. Off by default;
+  fresh installs still make no outbound traffic without an explicit
+  opt-in.
+
+### Added — version drift + config drift
+
+- **`:check-version`** — compares the running Bee version against
+  the latest GitHub release; lenient SemVer parser handles `v`
+  prefixes, RC suffixes, and `dirty` builds.
+- **`:config-doctor`** — read-only audit of `bee.yaml` for
+  deprecated keys + recommended values. Ports the rule set from
+  swarm-desktop's `migration.ts`. Never modifies the file.
+
+### Added — uploads
+
+- **`:upload-file <path> <batch>`** — uploads a single local file
+  via `POST /bzz` and returns the Swarm reference. 256-MiB ceiling
+  protects the cockpit's event loop. Content type guessed from
+  ~15 common extensions; unknown falls back to
+  `application/octet-stream`. Available as `--once upload-file` for
+  CI snapshot-publish workflows; emits structured JSON with the
+  reference + size + batch_id.
+
+### `--once` CI mode
+
+`--once` now supports five new verbs (`check-version`,
+`config-doctor`, `price`, `basefee`, `upload-file`) — total verbs
+across cockpit + `--once` is now 37.
+
+### Internals
+
+- New `crate::alerts` module with `Alert`, `AlertState`, and a
+  Slack/Discord-compatible `fire(...)` async helper. Tested via
+  injectable `SystemTime` for deterministic debounce assertions.
+- New `crate::economics_oracle::spawn_poller` — long-running tokio
+  task that emits `EconomicsSnapshot` updates over a watch channel.
+- `Health::gates_for_with_stamps` (additive over `gates_for`) so
+  the existing visual S1 Health screen keeps the same gate count
+  it had before; only the alerter and `:diagnose` bundle pull the
+  stamp gate.
+- 365 lib tests + integration suite passing.
+
 ## [1.3.0] - 2026-05-08
 
 The "CI cockpit" release. `--once` CI mode + `:plan-batch` ship the
