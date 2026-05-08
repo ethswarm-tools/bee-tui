@@ -28,7 +28,7 @@ use crate::{
         warmup::Warmup,
     },
     config::Config,
-    log_capture,
+    log_capture, stamp_preview,
     state::State,
     theme,
     tui::{Event, Tui},
@@ -632,6 +632,18 @@ impl App {
                     "set-logger {expr:?} → {level:?} (PUT in-flight; check :loggers to verify)"
                 )));
             }
+            "topup-preview" => {
+                self.command_status = Some(self.run_topup_preview(trimmed));
+            }
+            "dilute-preview" => {
+                self.command_status = Some(self.run_dilute_preview(trimmed));
+            }
+            "extend-preview" => {
+                self.command_status = Some(self.run_extend_preview(trimmed));
+            }
+            "buy-preview" => {
+                self.command_status = Some(self.run_buy_preview(trimmed));
+            }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
@@ -667,11 +679,136 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :diagnose, :pins-check, :loggers, :set-logger, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :context, :quit)"
                 )));
             }
         }
         Ok(())
+    }
+
+    /// Read-only "what would happen if I topped up batch X with N
+    /// PLUR/chunk?". Pure math — no Bee calls, no writes. Args:
+    /// `:topup-preview <batch-prefix> <amount-plur>`.
+    fn run_topup_preview(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (prefix, amount_str) = match parts.as_slice() {
+            [_, prefix, amount, ..] => (*prefix, *amount),
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :topup-preview <batch-prefix> <amount-plur-per-chunk>".into(),
+                );
+            }
+        };
+        let chain = match self.health_rx.borrow().chain_state.clone() {
+            Some(c) => c,
+            None => return CommandStatus::Err("chain state not loaded yet".into()),
+        };
+        let stamps = self.watch.stamps().borrow().clone();
+        let batch = match stamp_preview::match_batch_prefix(&stamps.batches, prefix) {
+            Ok(b) => b.clone(),
+            Err(e) => return CommandStatus::Err(e),
+        };
+        let amount = match stamp_preview::parse_plur_amount(amount_str) {
+            Ok(a) => a,
+            Err(e) => return CommandStatus::Err(e),
+        };
+        match stamp_preview::topup_preview(&batch, amount, &chain) {
+            Ok(p) => CommandStatus::Info(p.summary()),
+            Err(e) => CommandStatus::Err(e),
+        }
+    }
+
+    /// `:dilute-preview <batch-prefix> <new-depth>` — pure math:
+    /// halves per-chunk amount and TTL for each +1 in depth, doubles
+    /// theoretical capacity.
+    fn run_dilute_preview(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (prefix, depth_str) = match parts.as_slice() {
+            [_, prefix, depth, ..] => (*prefix, *depth),
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :dilute-preview <batch-prefix> <new-depth>".into(),
+                );
+            }
+        };
+        let new_depth: u8 = match depth_str.parse() {
+            Ok(d) => d,
+            Err(_) => {
+                return CommandStatus::Err(format!("invalid depth {depth_str:?} (expected u8)"));
+            }
+        };
+        let stamps = self.watch.stamps().borrow().clone();
+        let batch = match stamp_preview::match_batch_prefix(&stamps.batches, prefix) {
+            Ok(b) => b.clone(),
+            Err(e) => return CommandStatus::Err(e),
+        };
+        match stamp_preview::dilute_preview(&batch, new_depth) {
+            Ok(p) => CommandStatus::Info(p.summary()),
+            Err(e) => CommandStatus::Err(e),
+        }
+    }
+
+    /// `:extend-preview <batch-prefix> <duration>` — accepts `30d`,
+    /// `12h`, `90m`, `45s`, or plain seconds.
+    fn run_extend_preview(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (prefix, duration_str) = match parts.as_slice() {
+            [_, prefix, duration, ..] => (*prefix, *duration),
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :extend-preview <batch-prefix> <duration>  (e.g. 30d, 12h, 90m, 45s, or plain seconds)".into(),
+                );
+            }
+        };
+        let extension_seconds = match stamp_preview::parse_duration_seconds(duration_str) {
+            Ok(s) => s,
+            Err(e) => return CommandStatus::Err(e),
+        };
+        let chain = match self.health_rx.borrow().chain_state.clone() {
+            Some(c) => c,
+            None => return CommandStatus::Err("chain state not loaded yet".into()),
+        };
+        let stamps = self.watch.stamps().borrow().clone();
+        let batch = match stamp_preview::match_batch_prefix(&stamps.batches, prefix) {
+            Ok(b) => b.clone(),
+            Err(e) => return CommandStatus::Err(e),
+        };
+        match stamp_preview::extend_preview(&batch, extension_seconds, &chain) {
+            Ok(p) => CommandStatus::Info(p.summary()),
+            Err(e) => CommandStatus::Err(e),
+        }
+    }
+
+    /// `:buy-preview <depth> <amount-plur>` — hypothetical fresh
+    /// batch; no batch lookup needed.
+    fn run_buy_preview(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (depth_str, amount_str) = match parts.as_slice() {
+            [_, depth, amount, ..] => (*depth, *amount),
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :buy-preview <depth> <amount-plur-per-chunk>".into(),
+                );
+            }
+        };
+        let depth: u8 = match depth_str.parse() {
+            Ok(d) => d,
+            Err(_) => {
+                return CommandStatus::Err(format!("invalid depth {depth_str:?} (expected u8)"));
+            }
+        };
+        let amount = match stamp_preview::parse_plur_amount(amount_str) {
+            Ok(a) => a,
+            Err(e) => return CommandStatus::Err(e),
+        };
+        let chain = match self.health_rx.borrow().chain_state.clone() {
+            Some(c) => c,
+            None => return CommandStatus::Err("chain state not loaded yet".into()),
+        };
+        match stamp_preview::buy_preview(depth, amount, &chain) {
+            Ok(p) => CommandStatus::Info(p.summary()),
+            Err(e) => CommandStatus::Err(e),
+        }
     }
 
     /// Tear down the current watch hub and ApiClient, build a new

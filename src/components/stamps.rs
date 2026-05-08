@@ -522,7 +522,7 @@ fn compute_stamp_economics(b: &PostageBatch) -> Option<StampEconomics> {
 }
 
 /// Bytes → IEC binary (KiB / MiB / GiB / TiB).
-fn format_bytes(bytes: u128) -> String {
+pub(crate) fn format_bytes(bytes: u128) -> String {
     const K: u128 = 1024;
     const M: u128 = K * 1024;
     const G: u128 = M * 1024;
@@ -540,7 +540,7 @@ fn format_bytes(bytes: u128) -> String {
     }
 }
 
-fn format_ttl_seconds(secs: i64) -> String {
+pub(crate) fn format_ttl_seconds(secs: i64) -> String {
     if secs <= 0 {
         return "expired".into();
     }

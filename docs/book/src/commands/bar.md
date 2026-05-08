@@ -55,6 +55,10 @@ target screen, but faster on a 10-screen carousel.
 | `:pins-check` (alias `:pins`) | [pins-check](./pins-check.md) | Run a full integrity check on every locally pinned reference |
 | `:loggers` | [loggers](./loggers.md) | Snapshot the live logger registry to a file |
 | `:set-logger <expr> <level>` | [loggers](./loggers.md) | Change one logger's verbosity at runtime |
+| `:topup-preview <batch> <amount>` | [stamp-previews](./stamp-previews.md) | Predict TTL + cost of topping up an existing batch |
+| `:dilute-preview <batch> <new-depth>` | [stamp-previews](./stamp-previews.md) | Predict capacity / TTL change of diluting a batch |
+| `:extend-preview <batch> <duration>` | [stamp-previews](./stamp-previews.md) | Predict cost to gain N days/hours of TTL |
+| `:buy-preview <depth> <amount>` | [stamp-previews](./stamp-previews.md) | Predict TTL / capacity / cost of a hypothetical fresh buy |
 | `:context <name>` (alias `:ctx`) | [context](./context.md) | Switch to a different node profile from your config |
 | `:context` | [context](./context.md) | List configured profiles (no switch) |
 | `:quit` (alias `:q`) | — | Exit the cockpit |
@@ -82,9 +86,11 @@ These actions deliberately don't have a `:command` form:
   on-chain transaction. Use `curl POST /chequebook/cashout/<peer>`
   if you really mean it.
 - **Buying / topping up postage.** Same reasoning. S2 shows
-  TTL and worst-bucket, but `bee postage buy` and `bee
-  postage topup` are operator decisions with funding
-  consequences.
+  TTL and worst-bucket; the `:*-preview` verbs (see
+  [stamp-previews](./stamp-previews.md)) compute predicted
+  TTL/cost without writing — but `bee postage buy` and `bee
+  postage topup` themselves are operator decisions with
+  funding consequences and stay outside the cockpit.
 - **Stake deposit / withdraw.** Same.
 - **Connect / disconnect peers.** Bee's kademlia handles
   this without operator help; manual `connect` is a
@@ -99,4 +105,5 @@ diagnostic state, not funds-bearing actions.
 - [`:diagnose`](./diagnose.md)
 - [`:pins-check`](./pins-check.md)
 - [`:loggers` / `:set-logger`](./loggers.md)
+- [Stamp dry-run previews](./stamp-previews.md)
 - [`:context`](./context.md)

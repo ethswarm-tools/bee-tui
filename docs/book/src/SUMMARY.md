@@ -27,6 +27,7 @@
 - [`:diagnose`](./commands/diagnose.md)
 - [`:pins-check`](./commands/pins-check.md)
 - [`:loggers` / `:set-logger`](./commands/loggers.md)
+- [Stamp dry-run previews](./commands/stamp-previews.md)
 - [`:context` (multi-node)](./commands/context.md)
 
 # Reference

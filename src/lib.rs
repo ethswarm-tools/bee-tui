@@ -20,6 +20,7 @@ pub mod config;
 pub mod errors;
 pub mod log_capture;
 pub mod logging;
+pub mod stamp_preview;
 pub mod state;
 pub mod theme;
 pub mod tui;
