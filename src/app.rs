@@ -74,6 +74,11 @@ pub struct App {
     /// `Some(buf)` while the user is typing a `:command`. The
     /// buffer holds the characters typed *after* the leading colon.
     command_buffer: Option<String>,
+    /// Index into the *filtered* command-suggestion list of the row
+    /// currently highlighted by the Up/Down keys. Reset to 0 on every
+    /// buffer mutation so a fresh prefix always starts at the top
+    /// match.
+    command_suggestion_index: usize,
     /// Status / error from the most recent `:command`, persisted on
     /// the command-bar line until the user enters command mode again.
     /// Cleared when `command_buffer` transitions to `Some`.
@@ -126,6 +131,62 @@ pub enum CommandStatus {
 const SCREEN_NAMES: &[&str] = &[
     "Health", "Stamps", "Swap", "Lottery", "Peers", "Network", "Warmup", "API", "Tags", "Pins",
 ];
+
+/// Catalog of every `:command` verb with a short description. Drives
+/// the suggestion popup that surfaces matches as the operator types
+/// (so they don't have to memorize the whole list). Aliases stay
+/// implicit — they still work when typed but only the primary name
+/// shows up in the popup, to keep the list tidy.
+///
+/// Order matters: this is the order operators see, so screen jumps
+/// come first (most-used), action verbs in approximate frequency
+/// order, the four economics previews + buy-suggest grouped together,
+/// utility verbs last.
+const KNOWN_COMMANDS: &[(&str, &str)] = &[
+    ("health", "S1 Health screen"),
+    ("stamps", "S2 Stamps screen"),
+    ("swap", "S3 SWAP / cheques screen"),
+    ("lottery", "S4 Lottery + rchash"),
+    ("peers", "S6 Peers + bin saturation"),
+    ("network", "S7 Network / NAT"),
+    ("warmup", "S5 Warmup checklist"),
+    ("api", "S8 RPC / API health"),
+    ("tags", "S9 Tags / uploads"),
+    ("pins", "S11 Pins screen"),
+    ("topup-preview", "<batch> <amount-plur> — predict topup"),
+    ("dilute-preview", "<batch> <new-depth> — predict dilute"),
+    ("extend-preview", "<batch> <duration> — predict extend"),
+    ("buy-preview", "<depth> <amount-plur> — predict fresh buy"),
+    ("buy-suggest", "<size> <duration> — minimum (depth, amount)"),
+    (
+        "probe-upload",
+        "<batch> — single 4 KiB chunk, end-to-end probe",
+    ),
+    ("diagnose", "Export full snapshot to a file"),
+    ("pins-check", "Bulk integrity walk to a file"),
+    ("loggers", "Dump live logger registry"),
+    ("set-logger", "<expr> <level> — change a logger's verbosity"),
+    ("context", "<name> — switch node profile"),
+    ("quit", "Exit the cockpit"),
+];
+
+/// Produce the filtered list of (name, description) pairs that match
+/// the buffer's first whitespace token (case-insensitive prefix). An
+/// empty buffer matches everything. Pure for testability.
+fn filter_command_suggestions<'a>(
+    buffer: &str,
+    catalog: &'a [(&'a str, &'a str)],
+) -> Vec<&'a (&'a str, &'a str)> {
+    let head = buffer
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    catalog
+        .iter()
+        .filter(|(name, _)| name.starts_with(&head))
+        .collect()
+}
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
@@ -313,6 +374,7 @@ impl App {
             watch,
             health_rx,
             command_buffer: None,
+            command_suggestion_index: 0,
             command_status: None,
             help_visible: false,
             quit_pending: None,
@@ -615,17 +677,52 @@ impl App {
             KeyCode::Esc => {
                 // Cancel without dispatching.
                 self.command_buffer = None;
+                self.command_suggestion_index = 0;
             }
             KeyCode::Enter => {
                 let line = std::mem::take(buf);
                 self.command_buffer = None;
+                self.command_suggestion_index = 0;
                 self.execute_command(&line)?;
+            }
+            KeyCode::Up => {
+                // Walk up the filtered suggestion list. Saturates at
+                // 0 so a stray Up doesn't wrap unexpectedly.
+                self.command_suggestion_index = self.command_suggestion_index.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                let n = filter_command_suggestions(buf, KNOWN_COMMANDS).len();
+                if n > 0 && self.command_suggestion_index + 1 < n {
+                    self.command_suggestion_index += 1;
+                }
+            }
+            KeyCode::Tab => {
+                // Autocomplete: replace the buffer's first token with
+                // the highlighted suggestion's name and append a
+                // space so the operator can type args immediately.
+                let matches = filter_command_suggestions(buf, KNOWN_COMMANDS);
+                if let Some((name, _)) = matches.get(self.command_suggestion_index) {
+                    let rest = buf
+                        .split_once(char::is_whitespace)
+                        .map(|(_, tail)| tail)
+                        .unwrap_or("");
+                    let new = if rest.is_empty() {
+                        format!("{name} ")
+                    } else {
+                        format!("{name} {rest}")
+                    };
+                    buf.clear();
+                    buf.push_str(&new);
+                    self.command_suggestion_index = 0;
+                }
             }
             KeyCode::Backspace => {
                 buf.pop();
+                self.command_suggestion_index = 0;
             }
             KeyCode::Char(c) => {
                 buf.push(c);
+                self.command_suggestion_index = 0;
             }
             _ => {}
         }
@@ -1314,6 +1411,7 @@ impl App {
         let log_pane = &mut self.log_pane;
         let log_pane_height = log_pane.height();
         let command_buffer = self.command_buffer.clone();
+        let command_suggestion_index = self.command_suggestion_index;
         let command_status = self.command_status.clone();
         let help_visible = self.help_visible;
         let profile = self.api.name.clone();
@@ -1437,6 +1535,24 @@ impl App {
             };
             frame.render_widget(Paragraph::new(prompt), chunks[2]);
 
+            // Command suggestion popup — floats above the command bar
+            // while the operator is typing. Filtered list of known
+            // verbs that prefix-match the buffer's first token; Up/Down
+            // navigates, Tab completes. Skipped silently if the
+            // command bar is closed or no commands match.
+            if let Some(buf) = &command_buffer {
+                let matches = filter_command_suggestions(buf, KNOWN_COMMANDS);
+                if !matches.is_empty() {
+                    draw_command_suggestions(
+                        frame,
+                        chunks[2],
+                        &matches,
+                        command_suggestion_index,
+                        &theme,
+                    );
+                }
+            }
+
             // Tabbed log pane
             if let Err(err) = log_pane.draw(frame, chunks[3]) {
                 let _ = tx.send(Action::Error(format!("Failed to draw log: {err:?}")));
@@ -1452,6 +1568,104 @@ impl App {
         })?;
         Ok(())
     }
+}
+
+/// Render the command-suggestion popup just above the command bar.
+/// Floats over the active screen (uses `Clear` to blank what's
+/// underneath) and highlights the row at `selected` so Up/Down
+/// navigation is visible. Auto-scrolls if the filtered list exceeds
+/// the visible window — operators see at most `MAX_VISIBLE` rows at
+/// a time.
+fn draw_command_suggestions(
+    frame: &mut ratatui::Frame,
+    bar_rect: ratatui::layout::Rect,
+    matches: &[&(&str, &str)],
+    selected: usize,
+    theme: &theme::Theme,
+) {
+    use ratatui::layout::Rect;
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+    const MAX_VISIBLE: usize = 10;
+    let visible_rows = matches.len().min(MAX_VISIBLE);
+    if visible_rows == 0 {
+        return;
+    }
+    let height = (visible_rows as u16) + 2; // +2 for top + bottom borders
+    // Width = longest "name  description" line + borders + padding,
+    // capped at 80% of the screen so wide descriptions don't push
+    // the popup off the edge.
+    let widest = matches
+        .iter()
+        .map(|(name, desc)| name.len() + desc.len() + 6)
+        .max()
+        .unwrap_or(40)
+        .min(bar_rect.width as usize);
+    let width = (widest as u16 + 2).min(bar_rect.width);
+    // Anchor above the command bar; if the popup would clip the top
+    // of the screen, fall back to as much vertical room as we have.
+    let bottom = bar_rect.y;
+    let y = bottom.saturating_sub(height);
+    let popup = Rect {
+        x: bar_rect.x,
+        y,
+        width,
+        height: bottom - y,
+    };
+
+    // Auto-scroll: keep `selected` inside the visible window.
+    let scroll_start = if selected >= visible_rows {
+        selected + 1 - visible_rows
+    } else {
+        0
+    };
+    let visible_slice = &matches[scroll_start..(scroll_start + visible_rows).min(matches.len())];
+
+    let mut lines: Vec<Line> = Vec::with_capacity(visible_slice.len());
+    for (i, (name, desc)) in visible_slice.iter().enumerate() {
+        let absolute_idx = scroll_start + i;
+        let is_selected = absolute_idx == selected;
+        let row_style = if is_selected {
+            Style::default()
+                .fg(theme.tab_active_fg)
+                .bg(theme.tab_active_bg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let cursor = if is_selected { "▸ " } else { "  " };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{cursor}:{name:<16}  "), row_style),
+            Span::styled(
+                desc.to_string(),
+                if is_selected {
+                    row_style
+                } else {
+                    Style::default().fg(theme.dim)
+                },
+            ),
+        ]));
+    }
+
+    // Title shows pagination state when the list overflows.
+    let title = if matches.len() > MAX_VISIBLE {
+        format!(" :commands ({}/{}) ", selected + 1, matches.len())
+    } else {
+        " :commands ".to_string()
+    };
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.accent))
+                .title(title),
+        ),
+        popup,
+    );
 }
 
 /// Render the `?` help overlay. Pulls a per-screen keymap from
@@ -1961,6 +2175,36 @@ mod tests {
         // Numeric and named forms sort identically.
         assert_eq!(verbosity_rank("info"), verbosity_rank("1"));
         assert_eq!(verbosity_rank("warning"), verbosity_rank("2"));
+    }
+
+    #[test]
+    fn filter_command_suggestions_empty_buffer_returns_all() {
+        let matches = filter_command_suggestions("", KNOWN_COMMANDS);
+        assert_eq!(matches.len(), KNOWN_COMMANDS.len());
+    }
+
+    #[test]
+    fn filter_command_suggestions_prefix_matches_case_insensitive() {
+        let matches = filter_command_suggestions("Bu", KNOWN_COMMANDS);
+        let names: Vec<&str> = matches.iter().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"buy-preview"));
+        assert!(names.contains(&"buy-suggest"));
+        assert_eq!(names.len(), 2);
+    }
+
+    #[test]
+    fn filter_command_suggestions_unknown_prefix_is_empty() {
+        let matches = filter_command_suggestions("xyz", KNOWN_COMMANDS);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn filter_command_suggestions_uses_first_token_only() {
+        // `:topup-preview a1b2 1000` — the prefix is the verb, not
+        // any of the args.
+        let matches = filter_command_suggestions("topup-preview a1b2 1000", KNOWN_COMMANDS);
+        let names: Vec<&str> = matches.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, vec!["topup-preview"]);
     }
 
     #[test]
