@@ -1,6 +1,5 @@
 ---
 source: tests/s6_peers_view.rs
-assertion_line: 121
 expression: view
 ---
 PeersView {
@@ -237,4 +236,13 @@ PeersView {
     reachability: "Public",
     network_availability: "Available",
     light_connected: 0,
+    saturation: SaturationSummary {
+        starving: 4,
+        over: 0,
+        relevant: 13,
+        worst_bin: Some(
+            11,
+        ),
+        worst_connected: 0,
+    },
 }

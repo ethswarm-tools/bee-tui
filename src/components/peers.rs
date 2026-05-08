@@ -130,6 +130,37 @@ pub struct PeerRow {
     pub reachability: String,
 }
 
+/// Synthesised saturation rollup. Surfaces the operator-relevant
+/// alert state in one line so a healthy node looks healthy and a
+/// node with a starving bin doesn't require the operator to scan
+/// every row of the bin strip to find it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SaturationSummary {
+    /// Number of *relevant* bins (bin ≤ depth) flagged as Starving.
+    /// Far bins with low connectivity are normal and excluded.
+    pub starving: usize,
+    /// Number of bins flagged as Over (connected > 18).
+    pub over: usize,
+    /// Total relevant bins considered. Denominator for the
+    /// `starving / relevant` ratio.
+    pub relevant: usize,
+    /// The worst (lowest-connected) starving bin, if any. Lets the
+    /// header surface "bin 5 (2/8)" without forcing operators to
+    /// hunt for it.
+    pub worst_bin: Option<u8>,
+    /// `connected` count of `worst_bin`. `0` when no starving bins.
+    pub worst_connected: u64,
+}
+
+impl SaturationSummary {
+    /// `true` when the rollup signals an operator-actionable alert
+    /// — at least one starving relevant bin. Over-saturation is
+    /// not actionable (Bee trims surplus on its own).
+    pub fn is_alert(&self) -> bool {
+        self.starving > 0
+    }
+}
+
 /// Aggregated view fed to the renderer and snapshot tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeersView {
@@ -143,6 +174,10 @@ pub struct PeersView {
     /// Number of connected light-node peers, separate from the
     /// 32-bin breakdown.
     pub light_connected: u64,
+    /// Single-glance summary of the bin-strip saturation state.
+    /// Rendered in the header so a starving bin shows up without
+    /// the operator scanning all 32 rows.
+    pub saturation: SaturationSummary,
 }
 
 /// Per-field outcome of a peer drill fetch. Each endpoint can fail
@@ -273,6 +308,7 @@ impl Peers {
         let t = snap.topology.as_ref()?;
         let bins = bin_strip_rows(t);
         let peers = peer_rows(t);
+        let saturation = compute_saturation_summary(&bins);
         Some(PeersView {
             bins,
             peers,
@@ -282,6 +318,7 @@ impl Peers {
             reachability: t.reachability.clone(),
             network_availability: t.network_availability.clone(),
             light_connected: t.light_nodes.connected,
+            saturation,
         })
     }
 
@@ -397,6 +434,44 @@ fn bin_strip_rows(t: &Topology) -> Vec<BinStripRow> {
             }
         })
         .collect()
+}
+
+/// Reduce the per-bin classification to a single header summary.
+/// `relevant` counts bins at or below `depth + FAR_BIN_RELAXATION`
+/// — operators can't act on a far bin's emptiness so it doesn't
+/// belong in the "X of N relevant" denominator. `worst_bin` is the
+/// starving bin with the lowest connected count, breaking ties by
+/// the lowest bin number (closer to the network root).
+fn compute_saturation_summary(bins: &[BinStripRow]) -> SaturationSummary {
+    let mut summary = SaturationSummary::default();
+    let mut worst: Option<&BinStripRow> = None;
+    for row in bins {
+        if row.is_relevant {
+            summary.relevant += 1;
+        }
+        match row.status {
+            BinSaturation::Starving => {
+                summary.starving += 1;
+                let pick_this = match worst {
+                    None => true,
+                    Some(prev) => {
+                        row.connected < prev.connected
+                            || (row.connected == prev.connected && row.bin < prev.bin)
+                    }
+                };
+                if pick_this {
+                    worst = Some(row);
+                }
+            }
+            BinSaturation::Over => summary.over += 1,
+            BinSaturation::Empty | BinSaturation::Healthy => {}
+        }
+    }
+    if let Some(w) = worst {
+        summary.worst_bin = Some(w.bin);
+        summary.worst_connected = w.connected;
+    }
+    summary
 }
 
 fn classify_bin(b: &BinInfo, bin: u8, depth: u8) -> BinSaturation {
@@ -570,6 +645,47 @@ impl Component for Peers {
                 format!("{} loading…", theme::spinner_glyph()),
                 Style::default().fg(t.dim),
             ));
+        } else if let Some(view) = Self::view_for(&self.snapshot) {
+            // Saturation rollup line. Healthy node = single-glance
+            // green; starving node surfaces the worst bin in red so
+            // operators don't have to scan all 32 rows of the strip.
+            let s = view.saturation;
+            if s.is_alert() {
+                let mut spans = vec![
+                    Span::styled(
+                        format!("  {} STARVING ", t.glyphs.fail),
+                        Style::default().fg(t.fail).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(format!("{} of {} relevant bins", s.starving, s.relevant)),
+                ];
+                if let Some(b) = s.worst_bin {
+                    spans.push(Span::raw(format!(
+                        " · worst bin {b} ({}/{})",
+                        s.worst_connected, SATURATION_PEERS
+                    )));
+                }
+                if s.over > 0 {
+                    spans.push(Span::styled(
+                        format!("  · {} over-saturated", s.over),
+                        Style::default().fg(t.warn),
+                    ));
+                }
+                header_l2.extend(spans);
+            } else {
+                header_l2.push(Span::styled(
+                    format!(
+                        "  {} all {} relevant bins healthy",
+                        t.glyphs.pass, s.relevant
+                    ),
+                    Style::default().fg(t.pass),
+                ));
+                if s.over > 0 {
+                    header_l2.push(Span::styled(
+                        format!(" · {} over-saturated", s.over),
+                        Style::default().fg(t.warn),
+                    ));
+                }
+            }
         }
         frame.render_widget(
             Paragraph::new(vec![header_l1, Line::from(header_l2)])
@@ -964,6 +1080,86 @@ mod tests {
         assert_eq!(bar_full, "▇".repeat(12));
         let bar_empty = bin_bar(0, 12);
         assert_eq!(bar_empty, "░".repeat(12));
+    }
+
+    fn strip_row(bin: u8, connected: u64, status: BinSaturation, is_relevant: bool) -> BinStripRow {
+        BinStripRow {
+            bin,
+            population: connected,
+            connected,
+            status,
+            is_relevant,
+        }
+    }
+
+    #[test]
+    fn saturation_summary_all_healthy_has_no_alert() {
+        let bins = vec![
+            strip_row(0, 10, BinSaturation::Healthy, true),
+            strip_row(1, 12, BinSaturation::Healthy, true),
+            strip_row(2, 14, BinSaturation::Healthy, true),
+        ];
+        let s = compute_saturation_summary(&bins);
+        assert!(!s.is_alert());
+        assert_eq!(s.starving, 0);
+        assert_eq!(s.over, 0);
+        assert_eq!(s.relevant, 3);
+        assert_eq!(s.worst_bin, None);
+    }
+
+    #[test]
+    fn saturation_summary_picks_lowest_connected_starving_bin() {
+        // bins 1 (3/8) and 4 (2/8) starving; bin 4 is worse.
+        let bins = vec![
+            strip_row(0, 10, BinSaturation::Healthy, true),
+            strip_row(1, 3, BinSaturation::Starving, true),
+            strip_row(2, 12, BinSaturation::Healthy, true),
+            strip_row(4, 2, BinSaturation::Starving, true),
+        ];
+        let s = compute_saturation_summary(&bins);
+        assert!(s.is_alert());
+        assert_eq!(s.starving, 2);
+        assert_eq!(s.worst_bin, Some(4));
+        assert_eq!(s.worst_connected, 2);
+    }
+
+    #[test]
+    fn saturation_summary_breaks_ties_by_lowest_bin() {
+        // Two bins at 0 connected; bin 1 wins because it's closer
+        // to the network root (lower bin number).
+        let bins = vec![
+            strip_row(7, 0, BinSaturation::Starving, true),
+            strip_row(1, 0, BinSaturation::Starving, true),
+        ];
+        let s = compute_saturation_summary(&bins);
+        assert_eq!(s.worst_bin, Some(1));
+    }
+
+    #[test]
+    fn saturation_summary_excludes_far_bins_from_relevant_count() {
+        // Far bins (is_relevant=false) shouldn't count toward
+        // the "X of N relevant" denominator even when populated.
+        let bins = vec![
+            strip_row(0, 10, BinSaturation::Healthy, true),
+            strip_row(1, 10, BinSaturation::Healthy, true),
+            strip_row(20, 0, BinSaturation::Empty, false),
+            strip_row(21, 0, BinSaturation::Empty, false),
+        ];
+        let s = compute_saturation_summary(&bins);
+        assert_eq!(s.relevant, 2);
+    }
+
+    #[test]
+    fn saturation_summary_counts_over_separately() {
+        let bins = vec![
+            strip_row(0, 10, BinSaturation::Healthy, true),
+            strip_row(1, 25, BinSaturation::Over, true),
+            strip_row(2, 30, BinSaturation::Over, true),
+        ];
+        let s = compute_saturation_summary(&bins);
+        assert!(!s.is_alert()); // over-sat alone isn't an alert
+        assert_eq!(s.over, 2);
+        assert_eq!(s.starving, 0);
     }
 
     #[test]

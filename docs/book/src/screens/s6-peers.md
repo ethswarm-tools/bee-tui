@@ -26,6 +26,35 @@ Bee's own `/topology` is too dense for any of these. S6 is
 the cockpit's heaviest pre-render: it computes bin saturation,
 sorts peers, and aggregates the four-way drill into one pane.
 
+## Header — saturation rollup
+
+```
+PEERS / TOPOLOGY
+  ✗ STARVING 2 of 9 relevant bins · worst bin 5 (3/8)
+```
+
+A single-glance summary of the bin-strip state, so an operator
+who pulls up S6 sees the alert state without having to scan
+all 32 rows. Healthy node:
+
+```
+PEERS / TOPOLOGY
+  ✓ all 9 relevant bins healthy
+```
+
+Components:
+
+- `X of N relevant bins` — `X` is the count of *Starving* bins;
+  `N` is bins at or below `depth + 4` (far bins don't count
+  because their emptiness isn't actionable).
+- `worst bin K (M/8)` — the lowest-connected starving bin; ties
+  broken by the lowest bin number (closer to the network root).
+  `8` is the bee-go saturation threshold; `M` is current
+  connections.
+- `· N over-saturated` — appended when any bin exceeds 18
+  connections. Not an alert (Bee trims surplus on its own) but
+  worth surfacing.
+
 ## Pane 1 — Bin saturation strip
 
 ```
