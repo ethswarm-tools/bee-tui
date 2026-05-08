@@ -65,6 +65,8 @@ target screen, but faster on a 10-screen carousel.
 | `:upload-collection <dir> <batch>` | [upload-collection](./upload-collection.md) | Recursive directory upload as a Swarm collection (tar `POST /bzz`); auto-detects `index.html` |
 | `:feed-probe <owner> <topic>` | [feed-probe](./feed-probe.md) | Latest update for a feed (read-only lookup) |
 | `:feed-timeline <owner> <topic> [N]` | [S14 — Feed Timeline](../screens/s14-feed-timeline.md) | Walk a feed's history (newest first), open S14 |
+| `:watch-ref <ref> [interval]` | [watch-ref](./watch-ref.md) | Re-run `:durability-check` on `<ref>` periodically (default 60 s) |
+| `:watch-ref-stop [ref]` | [watch-ref](./watch-ref.md) | Cancel one (or all) active `:watch-ref` daemons |
 | `:context <name>` (alias `:ctx`) | [context](./context.md) | Switch to a different node profile from your config |
 | `:context` | [context](./context.md) | List configured profiles (no switch) |
 | `:quit` (alias `:q`) | — | Exit the cockpit |

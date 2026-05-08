@@ -35,6 +35,7 @@
 - [`:upload-collection`](./commands/upload-collection.md)
 - [`:feed-probe`](./commands/feed-probe.md)
 - [`:feed-timeline`](./screens/s14-feed-timeline.md)
+- [`:watch-ref` daemon mode](./commands/watch-ref.md)
 - [`:context` (multi-node)](./commands/context.md)
 
 # Reference

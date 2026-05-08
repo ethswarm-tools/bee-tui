@@ -130,6 +130,10 @@ pub struct App {
     /// forwarded to the S14 screen on the next Tick.
     feed_timeline_tx: mpsc::UnboundedSender<FeedTimelineMessage>,
     feed_timeline_rx: mpsc::UnboundedReceiver<FeedTimelineMessage>,
+    /// Active `:watch-ref` daemon loops keyed by reference hex. Each
+    /// entry owns a `CancellationToken` whose `cancel()` stops the
+    /// daemon's tokio task on the next iteration boundary.
+    watch_refs: std::collections::HashMap<String, CancellationToken>,
     /// Per-gate transition tracker for the optional webhook alerter.
     /// On every Tick we feed it the latest gates; it returns the
     /// transitions worth pinging on (debounced per-gate). When
@@ -252,6 +256,14 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     (
         "durability-check",
         "<ref> — walk chunk graph, report total / lost / errors",
+    ),
+    (
+        "watch-ref",
+        "<ref> [interval] — run :durability-check every interval (default 60s)",
+    ),
+    (
+        "watch-ref-stop",
+        "[ref] — stop one :watch-ref daemon (or all if no arg)",
     ),
     ("watchlist", "S13 Watchlist — durability-check history"),
     (
@@ -533,6 +545,7 @@ impl App {
             durability_rx,
             feed_timeline_tx,
             feed_timeline_rx,
+            watch_refs: std::collections::HashMap::new(),
             alert_state: crate::alerts::AlertState::new(config_alerts_debounce),
         })
     }
@@ -1016,6 +1029,12 @@ impl App {
             "durability-check" => {
                 self.command_status = Some(self.run_durability_check(trimmed));
             }
+            "watch-ref" => {
+                self.command_status = Some(self.run_watch_ref(trimmed));
+            }
+            "watch-ref-stop" => {
+                self.command_status = Some(self.run_watch_ref_stop(trimmed));
+            }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
@@ -1051,7 +1070,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :feed-probe, :feed-timeline, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :feed-probe, :feed-timeline, :watch-ref, :watch-ref-stop, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
                 )));
             }
         }
@@ -1716,6 +1735,112 @@ impl App {
         CommandStatus::Info(format!(
             "durability-check {label_for_task} in flight — see S13 Watchlist for the running history"
         ))
+    }
+
+    /// `:watch-ref <ref> [interval-secs]` — start a daemon loop that
+    /// runs `:durability-check` on `<ref>` every `interval-secs`
+    /// seconds. Each run's result lands in S13 Watchlist via the
+    /// existing `durability_tx` channel. The cockpit's `root_cancel`
+    /// triggers shutdown on quit; `:watch-ref-stop [ref]` triggers
+    /// shutdown earlier. Re-issuing `:watch-ref` for a ref already
+    /// being watched cancels the prior daemon and starts a fresh one
+    /// (so the operator can change the interval without an explicit
+    /// stop).
+    fn run_watch_ref(&mut self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (ref_arg, interval_arg) = match parts.as_slice() {
+            [_, r] => (*r, None),
+            [_, r, i, ..] => (*r, Some(*i)),
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :watch-ref <ref> [interval-secs]  (default 60s)".into(),
+                );
+            }
+        };
+        let reference = match bee::swarm::Reference::from_hex(ref_arg.trim()) {
+            Ok(r) => r,
+            Err(e) => return CommandStatus::Err(format!("watch-ref: bad ref: {e}")),
+        };
+        let interval_secs = match interval_arg {
+            None => 60u64,
+            Some(s) => match s.parse::<u64>() {
+                Ok(n) if (10..=86_400).contains(&n) => n,
+                Ok(n) => {
+                    return CommandStatus::Err(format!(
+                        "watch-ref: interval {n}s out of range (10..=86400)"
+                    ));
+                }
+                Err(_) => return CommandStatus::Err(format!("watch-ref: invalid interval: {s:?}")),
+            },
+        };
+        let key = reference.to_hex();
+        // If a daemon is already running for this ref, cancel it
+        // first so we don't double-fire checks.
+        if let Some(prev) = self.watch_refs.remove(&key) {
+            prev.cancel();
+        }
+        let cancel = self.root_cancel.child_token();
+        self.watch_refs.insert(key.clone(), cancel.clone());
+
+        let api = self.api.clone();
+        let watchlist_tx = self.durability_tx.clone();
+        let label = short_hex(ref_arg, 8);
+        let label_for_task = label.clone();
+        tokio::spawn(async move {
+            let interval = std::time::Duration::from_secs(interval_secs);
+            loop {
+                let result = durability::check(api.clone(), reference.clone()).await;
+                let _ = watchlist_tx.send(result);
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {}
+                    _ = cancel.cancelled() => return,
+                }
+            }
+        });
+
+        CommandStatus::Info(format!(
+            "watch-ref {label_for_task} started — re-checking every {interval_secs}s; results in S13 Watchlist"
+        ))
+    }
+
+    /// `:watch-ref-stop [ref]` — cancel a running `:watch-ref`
+    /// daemon. With no arg, cancels every active daemon; with a
+    /// `<ref>` arg, cancels only the matching one. The daemon's
+    /// tokio task observes the cancel on its next iteration
+    /// boundary (i.e. up to `interval-secs` later); the App's
+    /// hashmap entry is removed immediately.
+    fn run_watch_ref_stop(&mut self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        match parts.as_slice() {
+            [_] => {
+                let n = self.watch_refs.len();
+                for (_, c) in self.watch_refs.drain() {
+                    c.cancel();
+                }
+                CommandStatus::Info(format!("watch-ref-stop: cancelled {n} active daemon(s)"))
+            }
+            [_, r, ..] => {
+                let reference = match bee::swarm::Reference::from_hex(r.trim()) {
+                    Ok(r) => r,
+                    Err(e) => return CommandStatus::Err(format!("watch-ref-stop: bad ref: {e}")),
+                };
+                let key = reference.to_hex();
+                match self.watch_refs.remove(&key) {
+                    Some(c) => {
+                        c.cancel();
+                        CommandStatus::Info(format!(
+                            "watch-ref-stop: cancelled daemon for {}",
+                            short_hex(r, 8)
+                        ))
+                    }
+                    None => CommandStatus::Err(format!(
+                        "watch-ref-stop: no daemon running for {}",
+                        short_hex(r, 8)
+                    )),
+                }
+            }
+            _ => CommandStatus::Err("usage: :watch-ref-stop [ref]  (omit ref to stop all)".into()),
+        }
     }
 
     /// `:pss-target <overlay>` — Bee's `/pss/send` accepts at most a
