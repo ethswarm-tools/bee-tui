@@ -108,20 +108,25 @@ The `@env:VAR` token form keeps Bearer tokens out of the config file. With the
 
 ## What you get
 
-Nine operator screens plus an always-on command-log pane:
+Fourteen operator screens plus an always-on command-log pane:
 
 | Screen | What it answers |
 |---|---|
 | **S1 Health** | "Why is my node unhealthy?" — 10 gates with WHY tooltips encoding tribal knowledge (e.g. "storageRadius decreases ONLY on the 30-min reserve worker tick"). |
 | **S2 Stamps** | "Which batch is about to fail uploads?" — worst-bucket fill bar, immutable-vs-mutable rejection semantics (bee#5334), 5-state status ladder. **`↵` drills into the per-bucket fill histogram.** |
-| **S3 Swap / cheques** | Chequebook headroom (with on-chain contract address), per-peer net (received − sent) with `\|net\| > 0.5 BZZ` flagging, last-received cheque table. |
+| **S3 Swap / cheques** | Chequebook headroom (with on-chain contract address), per-peer net (received − sent) with `\|net\| > 0.5 BZZ` flagging, last-received cheque table. Optional `[economics].enable_market_tile` adds an xBZZ→USD + Gnosis basefee tile. |
 | **S4 Lottery** | "Why am I not earning rewards?" — round timeline, anchor summary (last won / played / selected / frozen with `Δ`), stake card with frozen / unhealthy / insufficient-gas reasoning, on-demand `r`-key rchash benchmark. |
 | **S5 Warmup** | "What's Bee actually doing during the 25–60-minute cold start?" — five-step checklist with a depth-stability window. |
 | **S6 Peers** | Bin saturation strip (Empty / Starving / Healthy / Over) anchored on bee-go's `SaturationPeers=8` and `OverSaturationPeers=18` constants — surfaces the bin-starvation gap no other tool derives. **`↵` drills into per-peer balance / cheques / settlement / ping.** |
 | **S7 Network / NAT** | "Why am I unreachable?" — public-vs-private underlay classification, AutoNAT reachability with stability window (flickers under symmetric NAT). |
-| **S8 RPC / API health** | Bee API call stats (p50 / p99 latency, error rate over the last 100 calls), pending operator transactions. |
+| **S8 RPC / API health** | Bee API call stats (p50 / p99 latency, error rate over the last 100 calls), pending operator transactions with full tx hash + to-address per row. |
 | **S9 Tags / uploads** | "Where is my upload stuck?" — per-tag lifecycle counters (split → sent → synced) and a TagStatus ladder. Long lists scroll with `j k` / `PgUp PgDn` / `Home`. |
-| **S10 Command log** | Always-visible `bee::http` request tail (lazygit-style). The trust anchor — operators learn the API by watching it. |
+| **S11 Pins** | Pinned-reference inspector with per-pin drill (pin detail). Pair with `:pins-check` for a chunk-level integrity walk. |
+| **S12 Manifests** | Mantaray tree browser. `:manifest <ref>` or `:inspect <ref>` opens the tree; `↵` lazy-loads forks. The first screen that gives operators X-ray vision into their *data*, not just their node. |
+| **S13 Watchlist** | Rolling history of `:durability-check` results — the operator-facing answer to "is my data still alive?" Walks the chunk graph rooted at `<ref>`, BMT-verifies every chunk, optionally cross-checks against swarmscan. |
+| **S14 Feed Timeline** | Walks a feed's history (newest first, bounded-parallel) via `:feed-timeline <owner> <topic> [N]`. Default 50 entries, hard cap 1 000. |
+| **S15 Pubsub watch** | Live tail of PSS topic + GSOC subscriptions, merged timeline. `:pubsub-pss / :pubsub-gsoc` open subscriptions; `:pubsub-filter` narrows the timeline; `[pubsub].history_file` persists every frame to JSONL with size-based rotation; `:pubsub-replay <path>` loads prior sessions. |
+| **Bottom log pane** | Always-visible `bee::http` request tail (lazygit-style) plus six other tabs (Errors / Warn / Info / Debug / Bee HTTP / Cockpit). The trust anchor — operators learn the API by watching it. |
 
 ## Drill panes
 
@@ -144,6 +149,45 @@ opens the drill, `Esc` closes it.
   field instead of blanking the drill.
 
   ![S6 peer drill](docs/tapes/s6-peer-drill.gif)
+
+## Data screens (v1.2+)
+
+The cockpit grew an "audit" tier across v1.2-v1.9 — screens that
+inspect the *data*, the *network's view of the data*, and the
+*pubsub messages* flowing through it.
+
+- **S12 Manifests** — `:manifest <ref>` or `:inspect <ref>` opens
+  the Mantaray tree; `↵` lazy-loads forks one chunk at a time.
+
+  ![S12 manifest browser](docs/tapes/s12-manifest.gif)
+
+- **S13 Watchlist** — `:durability-check <ref>` walks the chunk
+  graph and records the result with BMT verification + optional
+  swarmscan cross-check. `:watch-ref <ref> [interval]` runs it as
+  a daemon.
+
+  ![S13 durability watchlist](docs/tapes/s13-durability.gif)
+
+- **S14 Feed Timeline** — `:feed-timeline <owner> <topic> [N]`
+  walks a feed's update history (newest first, bounded-parallel).
+
+  ![S14 feed timeline](docs/tapes/s14-feed-timeline.gif)
+
+- **S15 Pubsub watch** — `:pubsub-pss` / `:pubsub-gsoc` open
+  WebSocket subscriptions; `:pubsub-filter` narrows the merged
+  timeline; `:pubsub-replay <path>` reloads a prior session's
+  JSONL history file.
+
+  ![S15 pubsub watch](docs/tapes/s15-pubsub.gif)
+
+## CI mode (v1.3+)
+
+`bee-tui --once <verb> [args…] [--json]` runs a single verb without
+launching the TUI. 24 verbs across pure-local, Bee-API, and stamp
+economics; exit codes `0` (ok) / `1` (unhealthy) / `2` (usage error).
+Designed for cron, monitoring, and CI gates.
+
+![--once CI mode](docs/tapes/once-ci.gif)
 
 ## Keys
 
@@ -172,7 +216,7 @@ intercept it.
 
 | | |
 |---|---|
-| `:health`, `:stamps`, `:swap`, `:lottery`, `:peers`, `:network`, `:warmup`, `:api`, `:tags` | jump to that screen |
+| `:health`, `:stamps`, `:swap`, `:lottery`, `:peers`, `:network`, `:warmup`, `:api`, `:tags`, `:pins`, `:manifest <ref>`, `:watchlist`, `:feedtimeline`, `:pubsub` | jump to that screen |
 | `:context <name>` | switch to another node from `config.nodes` |
 | `:diagnose` | export a redacted bundle to `$TMPDIR/bee-tui-diagnostic-<ts>.txt` (paste-ready for support threads — Bearer tokens never captured) |
 | `:pins-check` | walk every pinned root via `/pins/check`, write results to `$TMPDIR/bee-tui-pins-check-<profile>-<ts>.txt` (NDJSON streamed by Bee, collected and tail-friendly) — see [demo](docs/tapes/pins-check.gif) |

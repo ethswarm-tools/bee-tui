@@ -6,7 +6,7 @@
 # Operator tour: launch, watch the syncing warn, tab through the
 # fourteen screens, observe the gates settle as Bee finishes warmup.
 
-Output cold-start.gif
+Output docs/tapes/cold-start.gif
 
 Set FontSize 14
 Set Width 1200
@@ -14,9 +14,9 @@ Set Height 720
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 60ms
 
-Type "bee-tui"
+Type "bee-tui --bee-bin ../bee/dist/bee --bee-config ../testnet.yaml"
 Enter
-Sleep 3s
+Sleep 8s
 
 # Cycle through all fourteen screens. Tab moves to the next; we
 # press it 13 times to land on the last one (Pubsub).

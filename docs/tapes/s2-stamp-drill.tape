@@ -3,7 +3,7 @@
 # Render: vhs s2-stamp-drill.tape
 # Output: s2-stamp-drill.gif
 
-Output s2-stamp-drill.gif
+Output docs/tapes/s2-stamp-drill.gif
 
 Set FontSize 14
 Set Width 1200
@@ -11,9 +11,9 @@ Set Height 720
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 60ms
 
-Type "bee-tui"
+Type "bee-tui --bee-bin ../bee/dist/bee --bee-config ../testnet.yaml"
 Enter
-Sleep 2s
+Sleep 6s
 
 # Jump to S2
 Type ":stamps"

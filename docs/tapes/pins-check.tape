@@ -4,7 +4,7 @@
 # Render: vhs pins-check.tape
 # Output: pins-check.gif
 
-Output pins-check.gif
+Output docs/tapes/pins-check.gif
 
 Set FontSize 14
 Set Width 1200
@@ -12,9 +12,9 @@ Set Height 720
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 60ms
 
-Type "bee-tui"
+Type "bee-tui --bee-bin ../bee/dist/bee --bee-config ../testnet.yaml"
 Enter
-Sleep 2s
+Sleep 6s
 
 # Open the command bar and type the command
 Type ":pins-check"

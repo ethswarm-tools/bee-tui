@@ -12,7 +12,7 @@
 #   * the --json toggle for CI parsing
 #   * the exit-code surface
 
-Output once-ci.gif
+Output docs/tapes/once-ci.gif
 
 Set FontSize 14
 Set Width 1200

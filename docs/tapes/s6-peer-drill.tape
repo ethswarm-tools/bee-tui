@@ -4,7 +4,7 @@
 # Render: vhs s6-peer-drill.tape
 # Output: s6-peer-drill.gif
 
-Output s6-peer-drill.gif
+Output docs/tapes/s6-peer-drill.gif
 
 Set FontSize 14
 Set Width 1200
@@ -12,9 +12,9 @@ Set Height 720
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 60ms
 
-Type "bee-tui"
+Type "bee-tui --bee-bin ../bee/dist/bee --bee-config ../testnet.yaml"
 Enter
-Sleep 2s
+Sleep 6s
 
 Type ":peers"
 Enter

@@ -10,7 +10,7 @@
 # The topic accepts either 64-hex or any plain string (which is
 # keccak256-hashed at runtime via Topic::from_string).
 
-Output s14-feed-timeline.gif
+Output docs/tapes/s14-feed-timeline.gif
 
 Set FontSize 14
 Set Width 1200
@@ -18,9 +18,9 @@ Set Height 720
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 60ms
 
-Type "bee-tui"
+Type "bee-tui --bee-bin ../bee/dist/bee --bee-config ../testnet.yaml"
 Enter
-Sleep 2s
+Sleep 6s
 
 # Walk the timeline of an example feed. The verb jumps to S14
 # on dispatch; rows fill in as the bounded-parallel SOC fetches

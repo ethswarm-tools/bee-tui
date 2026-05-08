@@ -9,7 +9,7 @@
 # the failure mode) but a resolvable manifest gives the more
 # satisfying "X chunks total · 0 lost · BMT" green line.
 
-Output s13-durability.gif
+Output docs/tapes/s13-durability.gif
 
 Set FontSize 14
 Set Width 1200
@@ -17,9 +17,9 @@ Set Height 720
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 60ms
 
-Type "bee-tui"
+Type "bee-tui --bee-bin ../bee/dist/bee --bee-config ../testnet.yaml"
 Enter
-Sleep 2s
+Sleep 6s
 
 # Jump to S13 first so viewers see the empty state.
 Type ":watchlist"

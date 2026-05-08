@@ -11,7 +11,7 @@
 # but a resolvable ref produces the more interesting tree-walk
 # rendering.
 
-Output s12-manifest.gif
+Output docs/tapes/s12-manifest.gif
 
 Set FontSize 14
 Set Width 1200
@@ -19,9 +19,9 @@ Set Height 720
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 60ms
 
-Type "bee-tui"
+Type "bee-tui --bee-bin ../bee/dist/bee --bee-config ../testnet.yaml"
 Enter
-Sleep 2s
+Sleep 6s
 
 # Open the command bar and load a manifest. The screen jumps to
 # S12 immediately; the root chunk fetch runs async.

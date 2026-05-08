@@ -11,7 +11,7 @@
 # running a publisher in another shell will see live frames
 # scroll in.
 
-Output s15-pubsub.gif
+Output docs/tapes/s15-pubsub.gif
 
 Set FontSize 14
 Set Width 1200
@@ -19,9 +19,9 @@ Set Height 720
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 60ms
 
-Type "bee-tui"
+Type "bee-tui --bee-bin ../bee/dist/bee --bee-config ../testnet.yaml"
 Enter
-Sleep 2s
+Sleep 6s
 
 # Open a PSS subscription on a string topic. The cockpit
 # keccak-hashes the string into the 32-byte topic; the verb
