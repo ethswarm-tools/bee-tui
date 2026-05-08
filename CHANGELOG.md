@@ -11,6 +11,89 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.3.0] - 2026-05-08
+
+The "CI cockpit" release. `--once` CI mode + `:plan-batch` ship the
+sleeper bet from the research synthesis: every preview verb is now
+usable from a shell pipeline or GitHub Action without parsing TUI
+output, and operators get unified topup-or-dilute-or-both decisions
+in one verb.
+
+Three commits since v1.2.0 (`142ce87`, `2713c79`, `912f9ac`):
+
+### Added — `--once` CI mode
+
+- **`bee-tui --once <verb> [args…]`** — runs a single verb without
+  launching the TUI, prints to stdout, exits with `0` (ok), `1`
+  (unhealthy / network failure), or `2` (usage error). The whole
+  TUI runtime is bypassed; pure-local verbs do nothing
+  network-bound, Bee-API verbs do a one-shot fetch and exit.
+
+- **15 verbs** in the first cut, split between pure-local and
+  Bee-API:
+
+  *Pure-local* (no Bee call):
+  `hash <path>` · `cid <ref> [m|f]` · `depth-table` ·
+  `pss-target <overlay>` · `gsoc-mine <overlay> <id>`
+
+  *Bee-API* (one-shot fetch, no watch hub):
+  `readiness` (gateway-proxy-style: `health.status=='ok' &&
+  depth in [1, 30]`) · `version-check` ·
+  `inspect <ref>` · `durability-check <ref>` · `buy-preview` ·
+  `buy-suggest` · `topup-preview` · `dilute-preview` ·
+  `extend-preview` · `plan-batch`
+
+- **`--json`** flag emits a single JSON object on stdout instead of
+  the human-readable line: `{ verb, status, message, data }`. The
+  `data` field carries each verb's structured fields so CI can
+  parse without regex on the human line.
+
+- **No tracing init in --once mode.** Stdout is clean — shell
+  pipelines `grep` without filtering log noise.
+
+### Added — `:plan-batch` unified topup+dilute preview
+
+- **`:plan-batch <prefix> [usage-thr] [ttl-thr] [extra-depth]`** —
+  read-only run of beekeeper-stamper's `Set` algorithm. Tells the
+  operator whether the batch needs topup, dilute, both, or nothing,
+  plus the BZZ cost. Closes the gap from the three single-leg
+  preview verbs (`:topup-preview`, `:dilute-preview`,
+  `:extend-preview`) which each answered one piece of a multi-step
+  decision in isolation.
+
+- **Defaults match the cross-ecosystem convention** (gateway-proxy /
+  swarm-gateway / beekeeper-stamper): usage threshold 0.85, TTL
+  threshold 24h, dilute by +2 depth (4× capacity).
+
+- **Four action variants:**
+  - `None` — batch healthy against both thresholds.
+  - `Topup` — TTL below threshold, usage healthy.
+  - `Dilute` — usage above threshold, post-dilute TTL still healthy.
+  - `TopupThenDilute` — both fail; topup pre-dilute to a TTL high
+    enough that post-dilute (÷ `2^extra_depth`) clears the
+    threshold.
+
+- **Immutable batch handling.** Immutable batches can't dilute; the
+  algorithm flags this and either plans topup-only (when TTL needs
+  it) or returns `None` with a reason explaining why we can't act
+  on the high usage.
+
+- **Also via `--once plan-batch`.** Exits `1` when an action is
+  recommended (so a CI job can gate on "this batch needs human
+  attention"), `0` only when no action is needed.
+
+### Notes
+
+- **Test count**: 350+ lib + ~80 insta integration tests; clippy +
+  fmt clean.
+- **bee-rs dependency**: still 1.6 (no bump required).
+- **Semver**: every addition is additive — no breaking changes
+  to the v1.0-committed surface.
+- **`--once` exit codes** are part of the v1.3-committed CLI
+  contract; we'll preserve `0` / `1` / `2` semantics in future
+  minor bumps and grow the `data` field with new keys rather than
+  rename existing ones.
+
 ## [1.2.0] - 2026-05-08
 
 The "audit cockpit" release. Two new screens (S12 Manifests, S13
