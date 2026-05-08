@@ -140,6 +140,10 @@ pub struct App {
     /// recv loop and the forwarding task that pushes messages onto
     /// `pubsub_msg_tx`.
     pubsub_subs: std::collections::HashMap<String, CancellationToken>,
+    /// Optional shared history-file writer. `Some(...)` when
+    /// `[pubsub].history_file` is configured; cloned into each
+    /// watcher so JSONL appends serialise across subscriptions.
+    pubsub_history: crate::pubsub::HistoryWriter,
     /// Async-message channel feeding the S15 Pubsub screen with
     /// every PSS / GSOC frame the active subscriptions deliver.
     pubsub_msg_tx: mpsc::UnboundedSender<crate::pubsub::PubsubMessage>,
@@ -269,6 +273,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
         "<ref> — walk chunk graph, report total / lost / errors",
     ),
     (
+        "grantees-list",
+        "<ref> — list ACT grantees on a reference (read-only)",
+    ),
+    (
         "watch-ref",
         "<ref> [interval] — run :durability-check every interval (default 60s)",
     ),
@@ -287,6 +295,14 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     (
         "pubsub-stop",
         "[sub-id] — stop one pubsub subscription (or all if no arg)",
+    ),
+    (
+        "pubsub-filter",
+        "<substring> — show only messages whose channel/preview contains substring",
+    ),
+    (
+        "pubsub-filter-clear",
+        "remove the active S15 substring filter",
     ),
     ("watchlist", "S13 Watchlist — durability-check history"),
     (
@@ -396,6 +412,20 @@ impl App {
         let (feed_timeline_tx, feed_timeline_rx) = mpsc::unbounded_channel();
         let (pubsub_msg_tx, pubsub_msg_rx) = mpsc::unbounded_channel();
         let config = Config::new()?;
+
+        // Optional pubsub history-file writer. Failures here aren't
+        // fatal — the live tail keeps working without persistence —
+        // so we log a warning and keep going.
+        let pubsub_history = match config.pubsub.history_file.as_deref() {
+            Some(path) => match crate::pubsub::open_history_writer(path).await {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!(target: "bee_tui::pubsub", "history file disabled: {e}");
+                    None
+                }
+            },
+            None => None,
+        };
         // Install the theme first so any tracing emitted during the
         // rest of `new` already reflects the operator's choice.
         let force_no_color = overrides.no_color || theme::no_color_env();
@@ -571,6 +601,7 @@ impl App {
             feed_timeline_rx,
             watch_refs: std::collections::HashMap::new(),
             pubsub_subs: std::collections::HashMap::new(),
+            pubsub_history,
             pubsub_msg_tx,
             pubsub_msg_rx,
             alert_state: crate::alerts::AlertState::new(config_alerts_debounce),
@@ -1056,6 +1087,9 @@ impl App {
             "durability-check" => {
                 self.command_status = Some(self.run_durability_check(trimmed));
             }
+            "grantees-list" => {
+                self.command_status = Some(self.run_grantees_list(trimmed));
+            }
             "watch-ref" => {
                 self.command_status = Some(self.run_watch_ref(trimmed));
             }
@@ -1070,6 +1104,12 @@ impl App {
             }
             "pubsub-stop" => {
                 self.command_status = Some(self.run_pubsub_stop(trimmed));
+            }
+            "pubsub-filter" => {
+                self.command_status = Some(self.run_pubsub_filter(trimmed));
+            }
+            "pubsub-filter-clear" => {
+                self.command_status = Some(self.run_pubsub_filter_clear());
             }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
@@ -1106,7 +1146,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :feed-probe, :feed-timeline, :watch-ref, :watch-ref-stop, :pubsub-pss, :pubsub-gsoc, :pubsub-stop, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :feed-probe, :feed-timeline, :watch-ref, :watch-ref-stop, :pubsub-pss, :pubsub-gsoc, :pubsub-stop, :pubsub-filter, :pubsub-filter-clear, :grantees-list, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
                 )));
             }
         }
@@ -1732,6 +1772,56 @@ impl App {
     /// fork's `self_address`); on raw chunks it's just the single
     /// fetch. Either way, the cockpit jumps to S13 so the operator
     /// sees the running history while the new check completes.
+    /// `:grantees-list <ref>` — fetch `GET /grantee/{ref}` and print
+    /// the registered public key list. Read-only; pairs cleanly with
+    /// `:inspect`. A full S16 ACT Grantees screen with create/patch
+    /// is on the v1.8+ roadmap; this verb is the read-side
+    /// foundation operators need today.
+    fn run_grantees_list(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let ref_arg = match parts.as_slice() {
+            [_, r, ..] => *r,
+            _ => return CommandStatus::Err("usage: :grantees-list <ref>".into()),
+        };
+        let reference = match bee::swarm::Reference::from_hex(ref_arg.trim()) {
+            Ok(r) => r,
+            Err(e) => return CommandStatus::Err(format!("grantees-list: bad ref: {e}")),
+        };
+        let api = self.api.clone();
+        let tx = self.cmd_status_tx.clone();
+        let label = short_hex(ref_arg, 8);
+        let label_for_task = label.clone();
+        tokio::spawn(async move {
+            let status = match api.bee().api().get_grantees(&reference).await {
+                Ok(list) => {
+                    if list.is_empty() {
+                        CommandStatus::Info(format!(
+                            "grantees-list {label_for_task}: no grantees registered"
+                        ))
+                    } else {
+                        let preview: Vec<String> =
+                            list.iter().take(3).map(|p| short_hex(p, 12)).collect();
+                        let suffix = if list.len() > 3 {
+                            format!(" (+{} more)", list.len() - 3)
+                        } else {
+                            String::new()
+                        };
+                        CommandStatus::Info(format!(
+                            "grantees-list {label_for_task}: {} grantee(s) — {}{suffix}",
+                            list.len(),
+                            preview.join(", "),
+                        ))
+                    }
+                }
+                Err(e) => CommandStatus::Err(format!("grantees-list {label_for_task} failed: {e}")),
+            };
+            let _ = tx.send(status);
+        });
+        CommandStatus::Info(format!(
+            "grantees-list {label} in flight — result will replace this line"
+        ))
+    }
+
     fn run_durability_check(&mut self, line: &str) -> CommandStatus {
         let parts: Vec<&str> = line.split_whitespace().collect();
         let ref_arg = match parts.as_slice() {
@@ -1933,8 +2023,10 @@ impl App {
         let tx = self.pubsub_msg_tx.clone();
         let status_tx = self.cmd_status_tx.clone();
         let sub_id_for_task = sub_id.clone();
+        let history = self.pubsub_history.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::pubsub::spawn_pss_watcher(api, topic, cancel, tx).await {
+            if let Err(e) = crate::pubsub::spawn_pss_watcher(api, topic, cancel, tx, history).await
+            {
                 let _ = status_tx.send(CommandStatus::Err(format!(
                     "pubsub-pss {sub_id_for_task}: {e}"
                 )));
@@ -1974,9 +2066,10 @@ impl App {
         let tx = self.pubsub_msg_tx.clone();
         let status_tx = self.cmd_status_tx.clone();
         let sub_id_for_task = sub_id.clone();
+        let history = self.pubsub_history.clone();
         tokio::spawn(async move {
             if let Err(e) =
-                crate::pubsub::spawn_gsoc_watcher(api, owner, identifier, cancel, tx).await
+                crate::pubsub::spawn_gsoc_watcher(api, owner, identifier, cancel, tx, history).await
             {
                 let _ = status_tx.send(CommandStatus::Err(format!(
                     "pubsub-gsoc {sub_id_for_task}: {e}"
@@ -2016,6 +2109,48 @@ impl App {
         if let Some(idx) = SCREEN_NAMES.iter().position(|n| *n == "Pubsub") {
             self.current_screen = idx;
         }
+    }
+
+    /// `:pubsub-filter <substring>` — show only S15 rows whose
+    /// channel hex or smart-preview contains the given substring.
+    /// Case-insensitive; underlying ring still receives every
+    /// message (filtering is presentation-only).
+    fn run_pubsub_filter(&mut self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.splitn(2, char::is_whitespace).collect();
+        let needle = match parts.as_slice() {
+            [_, rest] => rest.trim().to_string(),
+            _ => return CommandStatus::Err("usage: :pubsub-filter <substring>".into()),
+        };
+        if needle.is_empty() {
+            return CommandStatus::Err("usage: :pubsub-filter <substring>".into());
+        }
+        if let Some(idx) = SCREEN_NAMES.iter().position(|n| *n == "Pubsub") {
+            if let Some(ps) = self
+                .screens
+                .get_mut(idx)
+                .and_then(|s| s.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Pubsub>())
+            {
+                ps.set_filter(Some(needle.clone()));
+            }
+            self.current_screen = idx;
+        }
+        CommandStatus::Info(format!("pubsub-filter: showing rows containing {needle:?}"))
+    }
+
+    /// `:pubsub-filter-clear` — remove the active S15 filter.
+    fn run_pubsub_filter_clear(&mut self) -> CommandStatus {
+        if let Some(idx) = SCREEN_NAMES.iter().position(|n| *n == "Pubsub") {
+            if let Some(ps) = self
+                .screens
+                .get_mut(idx)
+                .and_then(|s| s.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Pubsub>())
+            {
+                ps.set_filter(None);
+            }
+        }
+        CommandStatus::Info("pubsub-filter-clear: filter removed".into())
     }
 
     /// `:pss-target <overlay>` — Bee's `/pss/send` accepts at most a
@@ -3180,6 +3315,11 @@ fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)
             (":pubsub-pss <topic>", "subscribe to a PSS topic"),
             (":pubsub-gsoc <owner> <id>", "subscribe to a GSOC SOC"),
             (":pubsub-stop [sub-id]", "stop one (or all) subscriptions"),
+            (
+                ":pubsub-filter <substr>",
+                "show only rows containing substring",
+            ),
+            (":pubsub-filter-clear", "remove the active filter"),
         ],
         _ => &[],
     }

@@ -29,6 +29,11 @@ pub struct Pubsub {
     /// header. Updated by `App` via [`Self::set_active_count`] when
     /// subscriptions start / stop.
     active_subs: usize,
+    /// Optional case-insensitive substring filter. When `Some`,
+    /// only rows whose channel hex or smart-preview contains the
+    /// substring are rendered; the underlying ring still receives
+    /// every message (filtering is presentation-only).
+    filter: Option<String>,
 }
 
 impl Default for Pubsub {
@@ -43,7 +48,27 @@ impl Pubsub {
             rows: VecDeque::with_capacity(MAX_MESSAGES),
             selected: 0,
             active_subs: 0,
+            filter: None,
         }
+    }
+
+    /// Set or clear the substring filter. `None` clears it.
+    pub fn set_filter(&mut self, substring: Option<String>) {
+        self.filter = substring.map(|s| s.to_ascii_lowercase());
+        self.selected = 0;
+    }
+
+    /// True iff `msg` matches the active filter (or no filter is
+    /// set). Pure for testability.
+    pub fn matches_filter(&self, msg: &PubsubMessage) -> bool {
+        let Some(needle) = self.filter.as_deref() else {
+            return true;
+        };
+        if msg.channel.to_ascii_lowercase().contains(needle) {
+            return true;
+        }
+        let preview = smart_preview(&msg.payload, 200).to_ascii_lowercase();
+        preview.contains(needle)
     }
 
     /// Push a freshly-received message onto the front of the
@@ -105,7 +130,7 @@ impl Component for Pubsub {
         .split(area);
 
         // Header
-        let header_line = Line::from(vec![
+        let mut header_spans = vec![
             Span::styled(
                 "PUBSUB WATCH",
                 Style::default().add_modifier(Modifier::BOLD),
@@ -115,7 +140,14 @@ impl Component for Pubsub {
                 self.active_subs,
                 self.rows.len(),
             )),
-        ]);
+        ];
+        if let Some(f) = &self.filter {
+            header_spans.push(Span::styled(
+                format!("  · filter: {f:?}"),
+                Style::default().fg(t.warn).add_modifier(Modifier::BOLD),
+            ));
+        }
+        let header_line = Line::from(header_spans);
         frame.render_widget(
             Paragraph::new(header_line).block(Block::default().borders(Borders::BOTTOM)),
             chunks[0],
@@ -133,8 +165,23 @@ impl Component for Pubsub {
                 Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         } else {
-            for (i, msg) in self.rows.iter().enumerate() {
-                body.push(render_row(msg, i == self.selected, t));
+            // Pre-collect filtered rows so the cursor index lines up
+            // with what's actually displayed.
+            let visible: Vec<(usize, &PubsubMessage)> = self
+                .rows
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| self.matches_filter(m))
+                .collect();
+            if visible.is_empty() {
+                body.push(Line::from(Span::styled(
+                    "  (filter matches no messages — :pubsub-filter-clear to clear)",
+                    Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
+                )));
+            } else {
+                for (i, msg) in &visible {
+                    body.push(render_row(msg, *i == self.selected, t));
+                }
             }
         }
         frame.render_widget(Paragraph::new(body), chunks[1]);
@@ -289,5 +336,36 @@ mod tests {
         let mut s = Pubsub::new();
         s.set_active_count(3);
         assert_eq!(s.active_subs, 3);
+    }
+
+    #[test]
+    fn matches_filter_no_filter_set_passes_everything() {
+        let s = Pubsub::new();
+        let m = msg(PubsubKind::Pss, "abc123", b"hello");
+        assert!(s.matches_filter(&m));
+    }
+
+    #[test]
+    fn matches_filter_substring_in_channel() {
+        let mut s = Pubsub::new();
+        s.set_filter(Some("CAFE".to_string()));
+        let m = msg(PubsubKind::Pss, "cafebabe1234", b"unrelated");
+        assert!(s.matches_filter(&m), "channel match (case-insensitive)");
+    }
+
+    #[test]
+    fn matches_filter_substring_in_preview() {
+        let mut s = Pubsub::new();
+        s.set_filter(Some("ping".to_string()));
+        let m = msg(PubsubKind::Pss, "topic", b"{\"event\":\"ping\"}");
+        assert!(s.matches_filter(&m), "preview match");
+    }
+
+    #[test]
+    fn matches_filter_no_match_drops() {
+        let mut s = Pubsub::new();
+        s.set_filter(Some("xyz".to_string()));
+        let m = msg(PubsubKind::Pss, "topic", b"hello");
+        assert!(!s.matches_filter(&m));
     }
 }

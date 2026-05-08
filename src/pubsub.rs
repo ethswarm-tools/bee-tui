@@ -9,10 +9,12 @@
 //! [`PubsubMessage`] shape that flows between the background watcher
 //! tasks and the screen via an mpsc channel in `App`.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use bee::swarm::{EthAddress, Identifier, Topic};
+use tokio::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
@@ -68,15 +70,80 @@ pub fn gsoc_sub_id(owner: &EthAddress, identifier: &Identifier) -> String {
     format!("gsoc:{}:{}", owner.to_hex(), identifier.to_hex())
 }
 
+/// Optional history-file writer shared by every active subscription.
+/// `None` when `[pubsub].history_file` is unset; `Some(file)` when
+/// the operator opted in. The writer is wrapped in a `tokio::sync::Mutex`
+/// so concurrent watchers serialise their appends — JSONL stays
+/// well-formed even when two subscriptions deliver simultaneously.
+pub type HistoryWriter = Option<Arc<Mutex<tokio::fs::File>>>;
+
+/// Open `path` for append (`O_CREATE | O_APPEND`), creating it if
+/// it doesn't exist. Returns `Some(writer)` ready to share across
+/// watchers. Errors are surfaced to the caller so cockpit startup
+/// can log a clear "history file disabled: <reason>" message and
+/// keep the live tail going without persistence.
+pub async fn open_history_writer(path: &Path) -> Result<HistoryWriter, String> {
+    let mut opts = tokio::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        // tokio::fs::OpenOptions exposes mode() directly on Unix
+        // (no OpenOptionsExt import needed). Owner-only because
+        // pubsub payloads can be sensitive on shared hosts.
+        opts.mode(0o600);
+    }
+    let file = opts
+        .open(path)
+        .await
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    Ok(Some(Arc::new(Mutex::new(file))))
+}
+
+/// Append one JSONL line for `msg`. Failures are logged but never
+/// fatal — losing a history line shouldn't kill the live tail.
+async fn append_history(writer: &HistoryWriter, msg: &PubsubMessage) {
+    let Some(file) = writer.as_ref() else {
+        return;
+    };
+    let received_unix = msg
+        .received_at
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = serde_json::json!({
+        "received_unix": received_unix,
+        "kind": msg.kind.as_str(),
+        "channel": msg.channel,
+        "size": msg.payload.len(),
+        "payload_hex": hex_preview(&msg.payload, msg.payload.len() * 2),
+    });
+    let mut bytes = match serde_json::to_vec(&line) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(target: "bee_tui::pubsub", "history serialise failed: {e}");
+            return;
+        }
+    };
+    bytes.push(b'\n');
+    let mut guard = file.lock().await;
+    use tokio::io::AsyncWriteExt;
+    if let Err(e) = guard.write_all(&bytes).await {
+        tracing::warn!(target: "bee_tui::pubsub", "history append failed: {e}");
+    }
+}
+
 /// Spawn a background task that drives a PSS subscription's
 /// `recv()` loop and forwards every delivered message into `tx` as
 /// a [`PubsubMessage`] until `cancel` fires. Returns immediately
 /// after `subscribe` succeeds; the actual recv loop runs on tokio.
+/// `history` is the optional shared writer that appends every
+/// frame to a JSONL file on arrival.
 pub async fn spawn_pss_watcher(
     api: Arc<ApiClient>,
     topic: Topic,
     cancel: CancellationToken,
     tx: UnboundedSender<PubsubMessage>,
+    history: HistoryWriter,
 ) -> Result<(), String> {
     let mut sub = api
         .bee()
@@ -91,12 +158,14 @@ pub async fn spawn_pss_watcher(
                 msg = sub.recv() => {
                     match msg {
                         Some(payload) => {
-                            let _ = tx.send(PubsubMessage {
+                            let m = PubsubMessage {
                                 received_at: SystemTime::now(),
                                 kind: PubsubKind::Pss,
                                 channel: channel.clone(),
                                 payload: payload.to_vec(),
-                            });
+                            };
+                            append_history(&history, &m).await;
+                            let _ = tx.send(m);
                         }
                         None => return, // ws closed by Bee
                     }
@@ -119,6 +188,7 @@ pub async fn spawn_gsoc_watcher(
     identifier: Identifier,
     cancel: CancellationToken,
     tx: UnboundedSender<PubsubMessage>,
+    history: HistoryWriter,
 ) -> Result<(), String> {
     let mut sub = api
         .bee()
@@ -137,12 +207,14 @@ pub async fn spawn_gsoc_watcher(
                 msg = sub.recv() => {
                     match msg {
                         Some(payload) => {
-                            let _ = tx.send(PubsubMessage {
+                            let m = PubsubMessage {
                                 received_at: SystemTime::now(),
                                 kind: PubsubKind::Gsoc,
                                 channel: channel.clone(),
                                 payload: payload.to_vec(),
-                            });
+                            };
+                            append_history(&history, &m).await;
+                            let _ = tx.send(m);
                         }
                         None => return,
                     }

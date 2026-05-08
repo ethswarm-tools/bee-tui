@@ -143,6 +143,7 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         "upload-collection" => once_upload_collection(args).await,
         "feed-probe" => once_feed_probe(args).await,
         "feed-timeline" => once_feed_timeline(args).await,
+        "grantees-list" => once_grantees_list(args).await,
 
         // ---- Stamp-economics verbs (one-shot fetch of chain state +
         //      stamps list, then pure math).
@@ -161,7 +162,7 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         other => OnceResult::usage(
             other,
             format!(
-                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, price, basefee, inspect, durability-check, upload-file, upload-collection, feed-probe, feed-timeline, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
+                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, price, basefee, inspect, durability-check, upload-file, upload-collection, feed-probe, feed-timeline, grantees-list, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
             ),
         ),
     }
@@ -708,6 +709,65 @@ async fn once_feed_timeline(args: &[String]) -> OnceResult {
         "entries": entries_json,
     });
     OnceResult::ok_with_data("feed-timeline", timeline.summary(), data)
+}
+
+/// `--once grantees-list <ref>` — read-only ACT grantee fetch.
+/// Emits `{ "reference", "count", "grantees": [...] }`. CI-friendly
+/// shape — a workflow can assert a known builder's public key is
+/// still on the list before treating an upload as published.
+async fn once_grantees_list(args: &[String]) -> OnceResult {
+    let ref_arg = match args.first() {
+        Some(r) => r.as_str(),
+        None => return OnceResult::usage("grantees-list", "usage: --once grantees-list <ref>"),
+    };
+    let reference = match bee::swarm::Reference::from_hex(ref_arg.trim()) {
+        Ok(r) => r,
+        Err(e) => return OnceResult::usage("grantees-list", format!("bad ref: {e}")),
+    };
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    match api.bee().api().get_grantees(&reference).await {
+        Ok(list) => {
+            let preview: Vec<String> = list
+                .iter()
+                .take(3)
+                .map(|p| {
+                    let stripped = p.trim_start_matches("0x");
+                    if stripped.len() > 12 {
+                        format!("{}…", &stripped[..12])
+                    } else {
+                        stripped.to_string()
+                    }
+                })
+                .collect();
+            let summary = if list.is_empty() {
+                format!("grantees-list {ref_arg}: no grantees registered")
+            } else {
+                let suffix = if list.len() > 3 {
+                    format!(" (+{} more)", list.len() - 3)
+                } else {
+                    String::new()
+                };
+                format!(
+                    "grantees-list {ref_arg}: {} grantee(s) — {}{suffix}",
+                    list.len(),
+                    preview.join(", ")
+                )
+            };
+            OnceResult::ok_with_data(
+                "grantees-list",
+                summary,
+                json!({
+                    "reference": reference.to_hex(),
+                    "count": list.len(),
+                    "grantees": list,
+                }),
+            )
+        }
+        Err(e) => OnceResult::error("grantees-list", format!("/grantee/{ref_arg} failed: {e}")),
+    }
 }
 
 /// `--once buy-preview <depth> <amount-plur>` — predict cost / TTL

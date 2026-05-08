@@ -92,6 +92,12 @@ pub struct Config {
     /// independent network probe explicitly.
     #[serde(default)]
     pub durability: DurabilityConfig,
+    /// `[pubsub]` section — optional history-file writer for the
+    /// S15 Pubsub watch live tail. Off by default; setting
+    /// `history_file` to a path turns on JSONL append-on-arrival
+    /// for every PSS / GSOC message.
+    #[serde(default)]
+    pub pubsub: PubsubConfig,
 }
 
 /// `[bee]` table from `config.toml`. Both fields are required so a
@@ -228,6 +234,23 @@ impl Default for DurabilityConfig {
 
 fn default_swarmscan_url() -> String {
     "https://api.swarmscan.io/v1/chunks/{ref}".into()
+}
+
+/// `[pubsub]` table from `config.toml`. Off by default — fresh
+/// installs don't write any pubsub messages to disk. Setting
+/// `history_file` to a path turns on append-on-arrival JSONL
+/// logging of every delivered PSS / GSOC frame, useful for
+/// offline analysis of overnight subscriptions.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PubsubConfig {
+    /// Path to a JSONL file that bee-tui appends to whenever a
+    /// pubsub frame arrives. The file is created with mode 0600
+    /// (owner read/write only) so payloads can't accidentally be
+    /// world-readable on a multi-user host. Each line is one
+    /// JSON object with the same shape `--once feed-probe`'s
+    /// data field uses.
+    #[serde(default)]
+    pub history_file: Option<PathBuf>,
 }
 
 /// `[alerts]` table from `config.toml`. Off by default — without a
