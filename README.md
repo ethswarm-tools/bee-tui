@@ -9,15 +9,16 @@
 > per-screen reference, command bar, keymap, FAQ.
 
 A k9s-style terminal cockpit for [Ethereum Swarm](https://www.ethswarm.org/) Bee
-node operators — nine live screens that surface the state Bee's API hides:
+node operators — fourteen live screens that surface the state Bee's API hides:
 bucket collisions, redistribution skip reasons, bin starvation, NAT reality,
-and a live HTTP tail so operators trust what they see.
+manifest contents, durability checks, feed timelines, pubsub watches — plus
+a live HTTP tail so operators trust what they see.
 
 ![bee-tui cold-start tour](docs/tapes/cold-start.gif)
 
 ```text
  bee-tui   prod-1 @ http://10.0.1.5:1633   ping 12ms   UTC 14:32:18
- [Health]  Stamps  Swap  Lottery  Peers  Network  Warmup  API  Tags    :cmd · Tab · ? help
+ [Health]  Stamps  Swap  Lottery  Peers  Network  Warmup  API  Tags  Pins  Manifest  Watchlist  FeedTimeline  Pubsub    :cmd · Tab · ? help
 ─────────────────────────────────────────────────────────────────────────────────────
 HEALTH   prod-1 · http://10.0.1.5:1633     ping: 8ms
 
@@ -208,9 +209,11 @@ Runtime theme switching (`:theme <name>`) lands in v0.6.
 
 ## Status
 
-**v1.0.0** on crates.io (May 2026). Full nine-screen cockpit with drill panes,
-command bar, multi-node, theme system, ASCII fallback, scrollbars, `?` help
-overlay, and prebuilt installers for all five major targets.
+**v1.9.0** on crates.io (May 2026). Fourteen-screen cockpit with drill panes,
+51 cockpit verbs (24 also exposed as `--once` CI verbs), webhook health alerts,
+manifest browser, durability + feed timeline + pubsub watches, recursive uploads,
+multi-node, theme system, ASCII fallback, scrollbars, `?` help overlay, and
+prebuilt installers for all five major targets.
 
 | Version | Scope | State |
 |---|---|---|
@@ -218,6 +221,14 @@ overlay, and prebuilt installers for all five major targets.
 | v0.2.0 | S3 SWAP, S4 Lottery, S5 Warmup, S6 Peers, S7 NAT, S8 RPC, S9 Tags, command bar, multi-node, theme system | ✅ shipped |
 | v0.9.0 | `:pins-check` / `:loggers` / `:set-logger`, S2 + S6 drill panes, scrollbars, `?` help, `--ascii` / `--no-color`, cargo-dist | ✅ shipped |
 | v1.0.0 | Cold-start spinner, footer `?` chips, copy-affordance docs, semver-stable surface | ✅ shipped |
+| v1.2.0 | "audit cockpit": S12 Manifests, S13 Watchlist, `:manifest` / `:inspect` / `:durability-check`, utility verbs, log-pane Tab cycling | ✅ shipped |
+| v1.3.0 | `--once` CI mode (15 verbs), `:plan-batch` unified topup/dilute decision | ✅ shipped |
+| v1.4.0 | Webhook gate alerts, Stamp TTL gate, S3 Market tile (`:price` / `:basefee`), `:check-version`, `:config-doctor`, `:upload-file` | ✅ shipped |
+| v1.5.0 | `:upload-collection`, BMT verification on `:durability-check`, `:feed-probe` | ✅ shipped |
+| v1.6.0 | S14 Feed Timeline + `:feed-timeline`, `:watch-ref` / `:watch-ref-stop` daemon mode | ✅ shipped |
+| v1.7.0 | S15 Pubsub watch + `:pubsub-pss` / `:pubsub-gsoc` / `:pubsub-stop`, swarmscan cross-check | ✅ shipped |
+| v1.8.0 | `:grantees-list`, `[pubsub].history_file`, `:pubsub-filter` / `:pubsub-filter-clear` | ✅ shipped |
+| v1.9.0 | `[pubsub].rotate_size_mb` + `keep_files` rotation, `:pubsub-replay` | ✅ shipped |
 
 Backed by [bee-rs](https://github.com/ethswarm-tools/bee-rs) v1.6 (full
 coverage of the Bee 8.0.0 OpenAPI surface). Full screen specs in

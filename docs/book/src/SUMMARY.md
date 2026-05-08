@@ -19,7 +19,7 @@
 - [S7 — Network / NAT](./screens/s7-network.md)
 - [S8 — RPC / API health](./screens/s8-api.md)
 - [S9 — Tags / uploads](./screens/s9-tags.md)
-- [S10 — Command log](./screens/s10-log.md)
+- [S10 — Command log pane](./screens/s10-log.md)
 - [S11 — Pins](./screens/s11-pins.md)
 - [S14 — Feed Timeline](./screens/s14-feed-timeline.md)
 - [S15 — Pubsub watch](./screens/s15-pubsub.md)
@@ -35,9 +35,7 @@
 - [`:upload-file`](./commands/upload-file.md)
 - [`:upload-collection`](./commands/upload-collection.md)
 - [`:feed-probe`](./commands/feed-probe.md)
-- [`:feed-timeline`](./screens/s14-feed-timeline.md)
 - [`:watch-ref` daemon mode](./commands/watch-ref.md)
-- [`:pubsub-pss` / `:pubsub-gsoc`](./screens/s15-pubsub.md)
 - [`:context` (multi-node)](./commands/context.md)
 
 # Reference

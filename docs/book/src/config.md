@@ -173,6 +173,34 @@ actually still has. Pair with `[alerts].webhook_url` to ping on
 gate transitions and use `swarmscan_seen` as a manual sanity
 check.
 
+### `[pubsub]` — pubsub history file + rotation (optional)
+
+```toml
+[pubsub]
+history_file   = "/var/lib/bee-tui/pubsub.jsonl"  # off by default
+rotate_size_mb = 64    # active file rolls over at this size; 0 disables (default 64)
+keep_files     = 5     # retain .1 .. .5; older rotations unlinked (default 5)
+```
+
+Off by default — fresh installs don't write any pubsub messages
+to disk. When `history_file` is set, every PSS / GSOC frame
+delivered to S15 is also appended to the JSONL file (one
+JSON-encoded message per line) so overnight subscriptions can be
+analysed offline. The file is created with mode `0600`
+(owner-only) since payloads can be sensitive on multi-user hosts.
+
+Rotation keeps disk usage bounded. When the active file crosses
+`rotate_size_mb` MiB, bee-tui renames it to `<path>.1` (older
+rotations shift to `.2`, `.3`, …, `.keep_files`; oldest beyond
+`keep_files` is unlinked) and re-opens `<path>` empty.
+Concurrent watchers serialise through the same mutex that orders
+appends, so no rename races. Set `rotate_size_mb = 0` to disable
+rotation (file grows unbounded).
+
+Pair with [`:pubsub-replay <path>`](./commands/bar.md) to load a
+prior session's JSONL back into S15 for visual analysis without
+restarting any subscription.
+
 ### `[alerts]` — webhook ping when a health gate flips (optional)
 
 ```toml

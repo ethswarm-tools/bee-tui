@@ -24,7 +24,7 @@ rather than scribbling escape sequences into your scrollback.
 
 ```
  bee-tui   local @ http://localhost:1633   ping —   UTC HH:MM:SS
- [Health]  Stamps  Swap  Lottery  Peers  Network  Warmup  API  Tags    :cmd · Tab · ? help
+ [Health]  Stamps  Swap  Lottery  Peers  Network  Warmup  API  Tags  Pins  Manifest  Watchlist  FeedTimeline  Pubsub    :cmd · Tab · ? help
 ─────────────────────────────────────────────────────────────────────────────────────
 HEALTH   local · http://localhost:1633     ping: —ms
  ⠋ loading…
@@ -133,7 +133,7 @@ After ~30 seconds against a healthy mainnet node:
 - **S2 Stamps**: usually 1–3 batches. Worst-bucket fill
   percentage is the headline number to watch — anything
   above 80 % is Skewed (yellow), above 95 % is Critical (red).
-- **S10 Command log**: a constant stream of `GET /status` /
+- **Bottom log pane** (always visible): a constant stream of `GET /status` /
   `GET /chainstate` / etc. every 1–2 seconds. If this strip
   goes silent for >5 seconds, something is wrong with the
   cockpit (or your network), not with Bee.

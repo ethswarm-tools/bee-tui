@@ -3,8 +3,8 @@
 `bee-tui` is a terminal cockpit for [Ethereum Swarm](https://www.ethswarm.org/)
 Bee node operators. It surfaces the state Bee's API hides — bucket
 collisions, redistribution skip reasons, bin starvation, NAT reality — in
-nine live screens, with an always-on HTTP request tail so operators trust
-what they see.
+fourteen live screens, with an always-on HTTP request tail so operators
+trust what they see.
 
 ![bee-tui cold-start tour](https://raw.githubusercontent.com/ethswarm-tools/bee-tui/main/docs/tapes/cold-start.gif)
 

@@ -10,7 +10,7 @@ offline reference.
 |---|---|
 | `Tab` | Next screen |
 | `Shift+Tab` | Previous screen |
-| `[` / `]` | Previous / next tab on the bottom log pane (Errors / Warn / Info / Debug / Bee HTTP / bee::http). Persisted across launches. |
+| `[` / `]` | Previous / next tab on the bottom log pane (Errors / Warn / Info / Debug / Bee HTTP / bee::http / Cockpit). Persisted across launches. |
 | `+` / `-` | Grow / shrink the bottom log pane height by one line. Clamped to 4..24. Persisted across launches. |
 | `Shift+↑` / `Shift+↓` | Scroll the active log tab back / forward by one line. Pauses auto-tail; the title shows a `paused N ↑` indicator. |
 | `Shift+PgUp` / `Shift+PgDn` | Same, ten lines at a time. |
@@ -57,6 +57,45 @@ screen-specific keys.
 | `↑↓` / `j k` | Scroll one row |
 | `PgUp` / `PgDn` | Scroll ten rows |
 | `Home` | Back to top |
+
+### S11 — Pins
+
+| Key | Effect |
+|---|---|
+| `↑↓` / `j k` | Move cursor through the pinned-reference list |
+| `↵` | Drill into selected pin (pin detail) |
+| `Esc` | Close drill |
+
+### S12 — Manifests
+
+| Key | Effect |
+|---|---|
+| `↑↓` / `j k` | Move cursor through the Mantaray tree |
+| `↵` | Expand / load the cursored fork |
+| `Esc` | Collapse the cursored fork |
+| `c` | Copy the reference under the cursor to the `selected:` line |
+| `p` | Print `/bzz/<root>/<path>` to the log pane |
+
+### S13 — Watchlist
+
+| Key | Effect |
+|---|---|
+| `↑↓` / `j k` | Move cursor through `:watch-ref` daemons |
+
+### S14 — Feed Timeline
+
+| Key | Effect |
+|---|---|
+| `↑↓` / `j k` | Move cursor through the feed update history |
+| `PgUp` / `PgDn` | Page ten entries |
+
+### S15 — Pubsub watch
+
+| Key | Effect |
+|---|---|
+| `↑↓` / `j k` | Move cursor through the merged PSS / GSOC timeline |
+| `PgUp` / `PgDn` | Page ten entries |
+| `c` | Clear the timeline (subscriptions stay open) |
 
 ## The command bar
 

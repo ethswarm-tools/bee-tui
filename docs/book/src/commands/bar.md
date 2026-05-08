@@ -42,10 +42,14 @@ Every screen has a name; `:<name>` jumps there.
 | `:network` | S7 — Network / NAT |
 | `:api` | S8 — RPC / API health |
 | `:tags` | S9 — Tags / uploads |
-| `:log` | S10 — Command log |
+| `:pins` | S11 — Pins |
+| `:manifest <ref>` | S12 — Manifests (preloads root + jumps) |
+| `:watchlist` | S13 — Watchlist |
+| `:feedtimeline` | S14 — Feed Timeline |
+| `:pubsub` | S15 — Pubsub watch |
 
 These are equivalent to pressing `Tab` until you reach the
-target screen, but faster on a 10-screen carousel.
+target screen, but faster on a 14-screen carousel.
 
 ## Action commands
 
@@ -70,6 +74,24 @@ target screen, but faster on a 10-screen carousel.
 | `:pubsub-pss <topic>` | [S15 — Pubsub](../screens/s15-pubsub.md) | Subscribe to a PSS topic, surface frames in S15 |
 | `:pubsub-gsoc <owner> <id>` | [S15 — Pubsub](../screens/s15-pubsub.md) | Subscribe to a GSOC SOC, surface frames in S15 |
 | `:pubsub-stop [sub-id]` | [S15 — Pubsub](../screens/s15-pubsub.md) | Cancel one (or all) active pubsub subscriptions |
+| `:pubsub-filter <substring>` | [S15 — Pubsub](../screens/s15-pubsub.md) | Show only S15 rows whose channel/preview contains substring |
+| `:pubsub-filter-clear` | [S15 — Pubsub](../screens/s15-pubsub.md) | Remove the active S15 filter |
+| `:pubsub-replay <path>` | [S15 — Pubsub](../screens/s15-pubsub.md) | Load a prior session's pubsub-history JSONL into S15 |
+| `:manifest <ref>` | — | Open a Mantaray manifest for browsing (preloads root + jumps to S12 Manifests) |
+| `:inspect <ref>` | — | Universal "what is this thing?" — auto-detects manifest / raw chunk / feed manifest |
+| `:durability-check <ref>` | — | Walk every chunk of `<ref>` and report retrieved / lost / corrupt / network-seen counts |
+| `:plan-batch <prefix> [usage] [ttl] [extra-depth]` | [stamp-previews](./stamp-previews.md) | Run beekeeper-stamper's `Set` algorithm read-only — outputs PlanAction (None/Topup/Dilute/Both) |
+| `:check-version` | — | GitHub Releases API check; reports if a newer bee-tui is published |
+| `:config-doctor` | — | Read-only audit of `bee.yaml` against swarm-desktop's migration rules |
+| `:price` | [S3 — SWAP](../screens/s3-swap.md) | xBZZ → USD lookup via public token service |
+| `:basefee` | [S3 — SWAP](../screens/s3-swap.md) | Gnosis Chain JSON-RPC basefee + tip lookup |
+| `:grantees-list <ref>` | — | Read-only `GET /grantee/{ref}` for ACT grantee inspection |
+| `:hash <path>` | — | Local Swarm-hash of a file via Mantaray (no Bee call) |
+| `:cid <ref> [--type=manifest\|feed]` | — | Local Reference → CID conversion (no Bee call) |
+| `:depth-table` | — | Print canonical depth → capacity table (no Bee call) |
+| `:gsoc-mine <overlay> <identifier>` | — | Local CPU work — find a PrivateKey whose SOC address matches `<overlay>` |
+| `:pss-target <overlay>` | — | Extract the 4-hex-char `target` prefix Bee accepts on `/pss/send` |
+| `:watchlist` (jump) | — | Jump to S13 Watchlist (history of `:durability-check` results) |
 | `:context <name>` (alias `:ctx`) | [context](./context.md) | Switch to a different node profile from your config |
 | `:context` | [context](./context.md) | List configured profiles (no switch) |
 | `:quit` (alias `:q`) | — | Exit the cockpit |
@@ -107,12 +129,22 @@ These actions deliberately don't have a `:command` form:
   this without operator help; manual `connect` is a
   debugging escape hatch.
 
-The cockpit is a read-mostly observer. The few mutating
-commands it *does* have are scoped to diagnostic state, not
-funds-bearing actions: `:set-logger` (changes a Bee logger
-level) and `:probe-upload` (uploads one synthetic 4 KiB chunk
-worth fractions of a cent of BZZ to verify the upload path
-works end-to-end).
+The cockpit is a read-mostly observer. The mutating commands it
+*does* have are scoped to upload + diagnostic state, never
+chain-mutation:
+
+- `:set-logger` — changes a Bee logger level (no funds, no chain)
+- `:probe-upload` — uploads one synthetic 4 KiB chunk against a
+  caller-supplied stamp to verify the upload path end-to-end
+- `:upload-file` / `:upload-collection` — real content uploads
+  via `POST /bzz`; capped at 256 MiB (collections also at 10k
+  entries). Stamp consumption is the operator's responsibility
+  via the explicit `<batch>` argument.
+
+There is intentionally **no** `:reupload`, `:tx-bump`, or
+`:grantees-create` verb yet — write tier verbs that
+consume stamps or mutate chain state warrant their own UX +
+confirmation pass. The current write surface stops at uploads.
 
 ## See also
 
