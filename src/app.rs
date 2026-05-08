@@ -124,6 +124,13 @@ pub struct App {
     /// formatted `CommandStatus` string.
     durability_tx: mpsc::UnboundedSender<crate::durability::DurabilityResult>,
     durability_rx: mpsc::UnboundedReceiver<crate::durability::DurabilityResult>,
+    /// Per-gate transition tracker for the optional webhook alerter.
+    /// On every Tick we feed it the latest gates; it returns the
+    /// transitions worth pinging on (debounced per-gate). When
+    /// `[alerts].webhook_url` is unset, [`Self::tick_alerts`] short-
+    /// circuits before touching this state so the cost is one
+    /// `Option::is_none` check per Tick.
+    alert_state: crate::alerts::AlertState,
 }
 
 /// Window during which a second `q` press is interpreted as confirming
@@ -435,6 +442,8 @@ impl App {
             }
         }
 
+        let config_alerts_debounce = config.alerts.debounce_secs;
+
         Ok(Self {
             tick_rate,
             frame_rate,
@@ -465,6 +474,7 @@ impl App {
             cmd_status_rx,
             durability_tx,
             durability_rx,
+            alert_state: crate::alerts::AlertState::new(config_alerts_debounce),
         })
     }
 
@@ -1868,7 +1878,8 @@ impl App {
         let now = format_utc_now();
         let health = self.health_rx.borrow().clone();
         let topology = self.watch.topology().borrow().clone();
-        let gates = Health::gates_for(&health, Some(&topology));
+        let stamps = self.watch.stamps().borrow().clone();
+        let gates = Health::gates_for_with_stamps(&health, Some(&topology), Some(&stamps));
         let recent: Vec<_> = log_capture::handle()
             .map(|c| {
                 let mut snap = c.snapshot();
@@ -1914,6 +1925,32 @@ impl App {
             env!("CARGO_PKG_VERSION"),
         ));
         out
+    }
+
+    /// Per-Tick webhook alerter. No-op when `[alerts].webhook_url`
+    /// is unset — operators get the cockpit's existing visual gates
+    /// without any outbound traffic. When configured, we compute the
+    /// same `Health::gates_for(...)` view the cockpit renders, diff
+    /// against the previous Tick's status, and POST one webhook per
+    /// transition that survives the per-gate debounce.
+    fn tick_alerts(&mut self) {
+        let url = match self.config.alerts.webhook_url.as_deref() {
+            Some(u) if !u.is_empty() => u.to_string(),
+            _ => return,
+        };
+        let health = self.health_rx.borrow().clone();
+        let topology = self.watch.topology().borrow().clone();
+        let stamps = self.watch.stamps().borrow().clone();
+        let gates = Health::gates_for_with_stamps(&health, Some(&topology), Some(&stamps));
+        let alerts = self.alert_state.diff_and_record(&gates);
+        for alert in alerts {
+            let url = url.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::alerts::fire(&url, &alert).await {
+                    tracing::warn!(target: "bee_tui::alerts", "webhook fire failed: {e}");
+                }
+            });
+        }
     }
 
     fn handle_actions(&mut self, tui: &mut Tui) -> color_eyre::Result<()> {
@@ -1968,6 +2005,10 @@ impl App {
                             }
                         }
                     }
+                    // Webhook health-gate alerts. Cheap when not
+                    // configured (no clones, no work) — only computes
+                    // gates and diffs when [alerts].webhook_url is set.
+                    self.tick_alerts();
                 }
                 Action::Quit => self.should_quit = true,
                 Action::Suspend => self.should_suspend = true,

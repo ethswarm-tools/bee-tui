@@ -119,6 +119,24 @@ predicted TTL, pending-tx age, bee-tui's own request percentiles)
 that Bee's own `/metrics` doesn't expose. See the [Prometheus
 metrics reference](./reference/metrics.md) for the full list.
 
+### `[alerts]` — webhook ping when a health gate flips (optional)
+
+```toml
+[alerts]
+webhook_url    = "https://hooks.slack.com/services/T000/B000/XXX"
+debounce_secs  = 300   # default; per-gate cool-down so a flapping gate doesn't pin Slack
+```
+
+Off by default — without `webhook_url`, no outbound traffic. When
+set, every health-gate transition (e.g. `Reachability: Pass → Fail`,
+`StorageRadius: Warn → Pass`, `Stamp TTL: Pass → Warn` when a batch
+crosses the 7-day topup-planning threshold) becomes one POST with a
+Slack/Discord-compatible `{"text": "..."}` body. Transitions to or
+from `Unknown` (data-not-loaded-yet) are suppressed so cockpit
+startup never spams the channel. After firing for gate X, no further
+alert for X until `debounce_secs` elapses, regardless of how many
+times that gate flapped in between.
+
 ### CLI overrides
 
 Three command-line flags override the config file:

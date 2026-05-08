@@ -105,6 +105,32 @@ impl Health {
     /// tests so they can stub the inputs and assert the resulting
     /// gate list without a running app loop.
     pub fn gates_for(snap: &HealthSnapshot, topology: Option<&TopologySnapshot>) -> Vec<Gate> {
+        Self::gates_for_with_stamps(snap, topology, None)
+    }
+
+    /// Same as [`Self::gates_for`] but with an optional stamps
+    /// snapshot — when present, the returned list includes a
+    /// "Stamp TTL" gate aggregating the worst usable batch's
+    /// remaining TTL. Plumbed separately so the existing visual
+    /// `Health` screen (which doesn't pull stamps) keeps the same
+    /// gate count it had before; the alerter and `:diagnose` bundle
+    /// pass the snapshot in.
+    pub fn gates_for_with_stamps(
+        snap: &HealthSnapshot,
+        topology: Option<&TopologySnapshot>,
+        stamps: Option<&crate::watch::StampsSnapshot>,
+    ) -> Vec<Gate> {
+        let mut gates = Self::gates_for_inner(snap, topology);
+        if let Some(s) = stamps {
+            gates.push(stamp_ttl_gate(s));
+        }
+        gates
+    }
+
+    fn gates_for_inner(
+        snap: &HealthSnapshot,
+        topology: Option<&TopologySnapshot>,
+    ) -> Vec<Gate> {
         let mut gates = Vec::with_capacity(10);
 
         // 1. API reachable -------------------------------------------------
@@ -341,6 +367,63 @@ impl Health {
     }
 }
 
+/// "Stamp TTL" gate. Aggregates over usable batches (`usable=true`,
+/// non-empty TTL) and reports the worst-case bucket. Pending batches
+/// (`usable=false`) and zero-batch nodes are reported as Unknown
+/// (no opinion) rather than Pass — operators on a fresh node would
+/// be surprised by a green stamp gate when no batches exist.
+fn stamp_ttl_gate(s: &crate::watch::StampsSnapshot) -> Gate {
+    if s.last_update.is_none() {
+        return unknown("Stamp TTL");
+    }
+    let usable: Vec<&bee::postage::PostageBatch> =
+        s.batches.iter().filter(|b| b.usable).collect();
+    if usable.is_empty() {
+        return Gate {
+            label: "Stamp TTL",
+            status: GateStatus::Unknown,
+            value: "no usable batches".into(),
+            why: None,
+        };
+    }
+    let worst = usable.iter().min_by_key(|b| b.batch_ttl).copied().unwrap();
+    let ttl = worst.batch_ttl;
+    let hex = worst.batch_id.to_hex();
+    let id_short: &str = if hex.len() > 8 { &hex[..8] } else { &hex };
+    let value = format!(
+        "worst-batch {id_short} · TTL {}",
+        crate::components::stamps::format_ttl_seconds(ttl),
+    );
+    if ttl <= crate::components::stamps::TOPUP_URGENT_SECS {
+        Gate {
+            label: "Stamp TTL",
+            status: GateStatus::Fail,
+            value,
+            why: Some(format!(
+                "topup URGENT — under {}h threshold",
+                crate::components::stamps::TOPUP_URGENT_SECS / 3600
+            )),
+        }
+    } else if ttl <= crate::components::stamps::TOPUP_SOON_SECS {
+        Gate {
+            label: "Stamp TTL",
+            status: GateStatus::Warn,
+            value,
+            why: Some(format!(
+                "topup soon — under {}d planning threshold",
+                crate::components::stamps::TOPUP_SOON_SECS / 86_400
+            )),
+        }
+    } else {
+        Gate {
+            label: "Stamp TTL",
+            status: GateStatus::Pass,
+            value,
+            why: None,
+        }
+    }
+}
+
 fn unknown(label: &'static str) -> Gate {
     Gate {
         label,
@@ -517,5 +600,93 @@ impl Component for Health {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod stamp_ttl_tests {
+    use super::*;
+    use crate::components::stamps::{TOPUP_SOON_SECS, TOPUP_URGENT_SECS};
+    use crate::watch::StampsSnapshot;
+    use bee::postage::PostageBatch;
+    use std::time::Instant;
+
+    fn batch(ttl_secs: i64, usable: bool) -> PostageBatch {
+        PostageBatch {
+            batch_id: bee::swarm::BatchId::new(&[0xab; 32]).unwrap(),
+            amount: None,
+            start: 0,
+            owner: String::new(),
+            depth: 22,
+            bucket_depth: 16,
+            immutable: true,
+            batch_ttl: ttl_secs,
+            utilization: 0,
+            usable,
+            exists: true,
+            label: "test".into(),
+            block_number: 0,
+        }
+    }
+
+    fn loaded(batches: Vec<PostageBatch>) -> StampsSnapshot {
+        StampsSnapshot {
+            batches,
+            last_error: None,
+            last_update: Some(Instant::now()),
+        }
+    }
+
+    #[test]
+    fn stamp_ttl_unknown_when_not_loaded() {
+        let snap = StampsSnapshot::default();
+        let g = stamp_ttl_gate(&snap);
+        assert_eq!(g.status, GateStatus::Unknown);
+    }
+
+    #[test]
+    fn stamp_ttl_unknown_when_no_usable_batches() {
+        // Pending batches don't count.
+        let snap = loaded(vec![batch(30 * 86_400, false)]);
+        let g = stamp_ttl_gate(&snap);
+        assert_eq!(g.status, GateStatus::Unknown);
+        assert!(g.value.contains("no usable"));
+    }
+
+    #[test]
+    fn stamp_ttl_pass_when_all_above_planning_threshold() {
+        let snap = loaded(vec![batch(30 * 86_400, true), batch(10 * 86_400, true)]);
+        let g = stamp_ttl_gate(&snap);
+        assert_eq!(g.status, GateStatus::Pass);
+    }
+
+    #[test]
+    fn stamp_ttl_warn_when_within_planning_window() {
+        // 3 days < 7d planning threshold but > 24h urgent threshold.
+        let ttl = 3 * 86_400;
+        assert!(ttl <= TOPUP_SOON_SECS);
+        assert!(ttl > TOPUP_URGENT_SECS);
+        let snap = loaded(vec![batch(30 * 86_400, true), batch(ttl, true)]);
+        let g = stamp_ttl_gate(&snap);
+        assert_eq!(g.status, GateStatus::Warn);
+        // Worst-batch wins.
+        assert!(g.value.contains("3d") || g.value.contains("72h"));
+    }
+
+    #[test]
+    fn stamp_ttl_fail_when_under_urgent_threshold() {
+        let snap = loaded(vec![batch(30 * 86_400, true), batch(12 * 3600, true)]);
+        let g = stamp_ttl_gate(&snap);
+        assert_eq!(g.status, GateStatus::Fail);
+    }
+
+    #[test]
+    fn gates_for_with_stamps_appends_one_extra_gate() {
+        let snap = HealthSnapshot::default();
+        let baseline = Health::gates_for(&snap, None);
+        let with_stamps =
+            Health::gates_for_with_stamps(&snap, None, Some(&StampsSnapshot::default()));
+        assert_eq!(with_stamps.len(), baseline.len() + 1);
+        assert_eq!(with_stamps.last().unwrap().label, "Stamp TTL");
     }
 }

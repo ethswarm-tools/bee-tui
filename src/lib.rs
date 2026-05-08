@@ -8,6 +8,7 @@
 //! command-line binary, not this lib.
 
 pub mod action;
+pub mod alerts;
 pub mod api;
 pub mod app;
 pub mod bee_log;

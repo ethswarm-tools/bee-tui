@@ -82,6 +82,10 @@ pub struct Config {
     /// service); `:basefee` requires `gnosis_rpc_url` to be set.
     #[serde(default)]
     pub economics: EconomicsConfig,
+    /// `[alerts]` section — webhook ping when a health gate flips.
+    /// Disabled when `webhook_url` is absent (the default).
+    #[serde(default)]
+    pub alerts: AlertsConfig,
 }
 
 /// `[bee]` table from `config.toml`. Both fields are required so a
@@ -177,6 +181,35 @@ pub struct EconomicsConfig {
     /// with a clear "configure [economics].gnosis_rpc_url" hint.
     #[serde(default)]
     pub gnosis_rpc_url: Option<String>,
+}
+
+/// `[alerts]` table from `config.toml`. Off by default — without a
+/// `webhook_url`, the alerter is a no-op. The debounce knob exists
+/// so a flapping gate doesn't pin an operator's Slack channel.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AlertsConfig {
+    /// Slack/Discord-compatible incoming-webhook URL. When absent
+    /// (the default), no alerts are sent.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    /// Per-gate debounce window in seconds. After firing for gate X,
+    /// no further alert for X until this elapses regardless of how
+    /// many times the gate flapped. Default 300 (5 min).
+    #[serde(default = "default_alerts_debounce_secs")]
+    pub debounce_secs: u64,
+}
+
+impl Default for AlertsConfig {
+    fn default() -> Self {
+        Self {
+            webhook_url: None,
+            debounce_secs: default_alerts_debounce_secs(),
+        }
+    }
+}
+
+fn default_alerts_debounce_secs() -> u64 {
+    crate::alerts::DEFAULT_DEBOUNCE_SECS
 }
 
 /// `[ui]` table from `config.toml`. Every field has a sensible
