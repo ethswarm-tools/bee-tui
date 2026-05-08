@@ -155,6 +155,313 @@ impl BuyPreview {
     }
 }
 
+/// Output of `:plan-batch` — the unified topup+dilute decision the
+/// beekeeper-stamper module makes per-batch. Given thresholds and a
+/// batch, returns whether topup and/or dilute is needed and the BZZ
+/// cost of each leg. Each leg is independent; the cockpit shows them
+/// together so the operator sees the full picture at once.
+///
+/// Mirrors `pkg/stamper/node.go:Set` in beekeeper, except read-only
+/// (no chain writes). Default thresholds match the cross-ecosystem
+/// convention (swarm-gateway): usage 0.85, TTL 24h, dilute by +2.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanPreview {
+    pub batch_id_short: String,
+    /// Snapshot of the batch's state at plan time.
+    pub current_depth: u8,
+    pub current_usage_pct: f64,
+    pub current_ttl_seconds: i64,
+    /// Threshold inputs the plan was computed against.
+    pub usage_threshold_pct: f64,
+    pub ttl_threshold_seconds: i64,
+    pub extra_depth: u8,
+    /// Action recommended: `None` when nothing to do, otherwise zero
+    /// or more legs that together restore the batch to thresholds.
+    pub action: PlanAction,
+    /// Total BZZ cost across both legs. Dilute is free; topup pays.
+    pub total_cost_bzz: f64,
+    /// Reason rendered alongside the plan ("usage above 85%", "TTL
+    /// below 24h after dilute", "immutable batch can't dilute", etc.)
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlanAction {
+    /// Batch is healthy against both thresholds — no action needed.
+    None,
+    /// Just topup; usage is still under threshold.
+    Topup {
+        delta_amount_plur: BigInt,
+        new_ttl_seconds: i64,
+        cost_bzz: f64,
+    },
+    /// Just dilute; TTL is still above threshold post-dilute.
+    Dilute {
+        new_depth: u8,
+        post_dilute_ttl_seconds: i64,
+    },
+    /// Both. Topup happens first (preserves the per-chunk amount),
+    /// then dilute drops the post-topup TTL by `2^extra_depth`.
+    TopupThenDilute {
+        topup_delta_amount_plur: BigInt,
+        topup_cost_bzz: f64,
+        new_depth: u8,
+        post_dilute_ttl_seconds: i64,
+    },
+}
+
+impl PlanPreview {
+    pub fn summary(&self) -> String {
+        let action_line = match &self.action {
+            PlanAction::None => "no action needed".to_string(),
+            PlanAction::Topup {
+                delta_amount_plur,
+                cost_bzz,
+                new_ttl_seconds,
+                ..
+            } => format!(
+                "topup +{} PLUR/chunk → TTL {} (cost {cost_bzz:.4} BZZ)",
+                delta_amount_plur,
+                format_ttl_seconds(*new_ttl_seconds),
+            ),
+            PlanAction::Dilute {
+                new_depth,
+                post_dilute_ttl_seconds,
+            } => format!(
+                "dilute → depth {new_depth} (TTL {} after, no BZZ)",
+                format_ttl_seconds(*post_dilute_ttl_seconds),
+            ),
+            PlanAction::TopupThenDilute {
+                topup_delta_amount_plur,
+                topup_cost_bzz,
+                new_depth,
+                post_dilute_ttl_seconds,
+            } => format!(
+                "topup +{topup_delta_amount_plur} PLUR/chunk + dilute → depth {new_depth} (TTL {} after, cost {topup_cost_bzz:.4} BZZ)",
+                format_ttl_seconds(*post_dilute_ttl_seconds),
+            ),
+        };
+        format!(
+            "plan-batch {}: usage {:.1}% (thr {:.0}%), TTL {} (thr {}); {action_line}; total {:.4} BZZ — {}",
+            self.batch_id_short,
+            self.current_usage_pct * 100.0,
+            self.usage_threshold_pct * 100.0,
+            format_ttl_seconds(self.current_ttl_seconds),
+            format_ttl_seconds(self.ttl_threshold_seconds),
+            self.total_cost_bzz,
+            self.reason,
+        )
+    }
+}
+
+/// Default thresholds, sourced from gateway-proxy and swarm-gateway:
+/// trigger dilute when usage exceeds 85%, top-up when remaining TTL
+/// drops below 24 hours, dilute by +2 depth (4× capacity).
+pub const DEFAULT_USAGE_THRESHOLD: f64 = 0.85;
+pub const DEFAULT_TTL_THRESHOLD_SECONDS: i64 = 24 * 60 * 60;
+pub const DEFAULT_EXTRA_DEPTH: u8 = 2;
+
+/// Run beekeeper-stamper's `Set` algorithm read-only on a single
+/// batch. Decides whether to topup, dilute, both, or skip.
+///
+/// * `usage_threshold` — fraction in `[0, 1]`. Above this, dilute.
+/// * `ttl_threshold_seconds` — if remaining TTL (after any dilute)
+///   is below this, topup to bring it back above.
+/// * `extra_depth` — how many depth levels to dilute by when needed.
+pub fn plan_batch(
+    batch: &PostageBatch,
+    chain_state: &ChainState,
+    usage_threshold: f64,
+    ttl_threshold_seconds: i64,
+    extra_depth: u8,
+) -> Result<PlanPreview, String> {
+    if !(0.0..=1.0).contains(&usage_threshold) {
+        return Err(format!(
+            "usage_threshold {usage_threshold} out of range [0, 1]"
+        ));
+    }
+    if ttl_threshold_seconds <= 0 {
+        return Err("ttl_threshold must be a positive duration".into());
+    }
+    if chain_state.current_price <= BigInt::from(0) {
+        return Err("chain price not loaded yet — try again in a moment".into());
+    }
+    let bucket_depth = batch.bucket_depth.max(16);
+    let usage_pct = stamp_usage(batch.utilization, batch.depth, bucket_depth);
+    let current_ttl = batch.batch_ttl.max(0);
+
+    let new_depth = batch.depth.saturating_add(extra_depth);
+    if new_depth > 41 {
+        return Err(format!(
+            "current depth {} + extra_depth {extra_depth} exceeds Bee's depth ceiling 41",
+            batch.depth
+        ));
+    }
+
+    // Dilute leg: when usage exceeds threshold + the batch is
+    // mutable. Each +1 depth halves the remaining TTL.
+    let needs_dilute = usage_pct >= usage_threshold;
+    let dilute_factor = 1i64 << extra_depth;
+    let post_dilute_ttl = current_ttl / dilute_factor.max(1);
+
+    if batch.immutable && needs_dilute {
+        // Immutable batches can't dilute — flag and only consider topup.
+        if current_ttl >= ttl_threshold_seconds {
+            return Ok(PlanPreview {
+                batch_id_short: short_batch_id(batch),
+                current_depth: batch.depth,
+                current_usage_pct: usage_pct,
+                current_ttl_seconds: current_ttl,
+                usage_threshold_pct: usage_threshold,
+                ttl_threshold_seconds,
+                extra_depth,
+                action: PlanAction::None,
+                total_cost_bzz: 0.0,
+                reason: format!(
+                    "immutable batch above usage threshold ({:.1}%) — can't dilute, but TTL still above threshold",
+                    usage_pct * 100.0
+                ),
+            });
+        }
+        let needed = ttl_threshold_seconds.saturating_sub(current_ttl).max(1);
+        let amount = amount_for_ttl_extension(
+            needed,
+            &chain_state.current_price,
+            GNOSIS_BLOCK_TIME_SECS,
+        );
+        let cost = cost_bzz(&amount, batch.depth);
+        return Ok(PlanPreview {
+            batch_id_short: short_batch_id(batch),
+            current_depth: batch.depth,
+            current_usage_pct: usage_pct,
+            current_ttl_seconds: current_ttl,
+            usage_threshold_pct: usage_threshold,
+            ttl_threshold_seconds,
+            extra_depth,
+            action: PlanAction::Topup {
+                delta_amount_plur: amount,
+                new_ttl_seconds: current_ttl + needed,
+                cost_bzz: cost,
+            },
+            total_cost_bzz: cost,
+            reason: "immutable batch above usage threshold + TTL below threshold — topup only"
+                .to_string(),
+        });
+    }
+
+    let effective_ttl_after = if needs_dilute {
+        post_dilute_ttl
+    } else {
+        current_ttl
+    };
+    let needs_topup = effective_ttl_after < ttl_threshold_seconds;
+
+    match (needs_topup, needs_dilute) {
+        (false, false) => Ok(PlanPreview {
+            batch_id_short: short_batch_id(batch),
+            current_depth: batch.depth,
+            current_usage_pct: usage_pct,
+            current_ttl_seconds: current_ttl,
+            usage_threshold_pct: usage_threshold,
+            ttl_threshold_seconds,
+            extra_depth,
+            action: PlanAction::None,
+            total_cost_bzz: 0.0,
+            reason: "batch is healthy against both thresholds".into(),
+        }),
+        (true, false) => {
+            let needed = ttl_threshold_seconds.saturating_sub(current_ttl).max(1);
+            let amount = amount_for_ttl_extension(
+                needed,
+                &chain_state.current_price,
+                GNOSIS_BLOCK_TIME_SECS,
+            );
+            let cost = cost_bzz(&amount, batch.depth);
+            Ok(PlanPreview {
+                batch_id_short: short_batch_id(batch),
+                current_depth: batch.depth,
+                current_usage_pct: usage_pct,
+                current_ttl_seconds: current_ttl,
+                usage_threshold_pct: usage_threshold,
+                ttl_threshold_seconds,
+                extra_depth,
+                action: PlanAction::Topup {
+                    delta_amount_plur: amount,
+                    new_ttl_seconds: current_ttl + needed,
+                    cost_bzz: cost,
+                },
+                total_cost_bzz: cost,
+                reason: format!(
+                    "TTL below threshold ({}) — topup",
+                    format_ttl_seconds(ttl_threshold_seconds)
+                ),
+            })
+        }
+        (false, true) => Ok(PlanPreview {
+            batch_id_short: short_batch_id(batch),
+            current_depth: batch.depth,
+            current_usage_pct: usage_pct,
+            current_ttl_seconds: current_ttl,
+            usage_threshold_pct: usage_threshold,
+            ttl_threshold_seconds,
+            extra_depth,
+            action: PlanAction::Dilute {
+                new_depth,
+                post_dilute_ttl_seconds: post_dilute_ttl,
+            },
+            total_cost_bzz: 0.0,
+            reason: format!(
+                "usage above threshold ({:.0}%) — dilute",
+                usage_threshold * 100.0
+            ),
+        }),
+        (true, true) => {
+            // Topup first to a TTL high enough that post-dilute we
+            // still clear the threshold. Required pre-dilute TTL is
+            // `ttl_threshold × dilute_factor`. Topup buys the gap.
+            let target_pre_dilute_ttl =
+                ttl_threshold_seconds.saturating_mul(dilute_factor.max(1));
+            let needed = target_pre_dilute_ttl.saturating_sub(current_ttl).max(1);
+            let amount = amount_for_ttl_extension(
+                needed,
+                &chain_state.current_price,
+                GNOSIS_BLOCK_TIME_SECS,
+            );
+            let cost = cost_bzz(&amount, batch.depth);
+            let post_dilute_ttl = (current_ttl + needed) / dilute_factor.max(1);
+            Ok(PlanPreview {
+                batch_id_short: short_batch_id(batch),
+                current_depth: batch.depth,
+                current_usage_pct: usage_pct,
+                current_ttl_seconds: current_ttl,
+                usage_threshold_pct: usage_threshold,
+                ttl_threshold_seconds,
+                extra_depth,
+                action: PlanAction::TopupThenDilute {
+                    topup_delta_amount_plur: amount,
+                    topup_cost_bzz: cost,
+                    new_depth,
+                    post_dilute_ttl_seconds: post_dilute_ttl,
+                },
+                total_cost_bzz: cost,
+                reason: "usage above threshold + post-dilute TTL would fall below — topup then dilute"
+                    .to_string(),
+            })
+        }
+    }
+}
+
+/// Fractional bucket usage on `[0, 1]`. Bee's `utilization` is the
+/// max-bucket count, so the meaningful denominator is
+/// `2^(depth - bucket_depth)` (the per-bucket capacity).
+fn stamp_usage(utilization: u32, depth: u8, bucket_depth: u8) -> f64 {
+    if depth <= bucket_depth {
+        return 0.0;
+    }
+    let denom = 1u64 << (depth - bucket_depth);
+    f64::from(utilization) / (denom as f64)
+}
+
 /// Output of `:buy-suggest` — the inverse of `:buy-preview`.
 /// Operator supplies a *target* (size + duration); we return the
 /// minimum (depth, amount) that meets it. Capacity rounds *up* to
@@ -970,5 +1277,148 @@ mod tests {
         let s = p.summary();
         assert!(s.starts_with("buy-preview"));
         assert!(!s.contains('\n'));
+    }
+
+    fn mutable_batch(amount: u64, depth: u8, batch_ttl: i64, utilization: u32) -> PostageBatch {
+        let mut b = make_batch(Some(BigInt::from(amount)), depth, batch_ttl);
+        b.immutable = false;
+        b.utilization = utilization;
+        b
+    }
+
+    #[test]
+    fn plan_batch_healthy_returns_no_action() {
+        // depth=22, util=0%, TTL=30 days, threshold 24h: nothing to do.
+        let batch = mutable_batch(1_000_000, 22, 30 * 86_400, 0);
+        let plan = plan_batch(
+            &batch,
+            &chain(1),
+            DEFAULT_USAGE_THRESHOLD,
+            DEFAULT_TTL_THRESHOLD_SECONDS,
+            DEFAULT_EXTRA_DEPTH,
+        )
+        .unwrap();
+        assert_eq!(plan.action, PlanAction::None);
+        assert_eq!(plan.total_cost_bzz, 0.0);
+        assert!(plan.reason.contains("healthy"));
+    }
+
+    #[test]
+    fn plan_batch_low_ttl_only_topup() {
+        // depth=22, util=0%, TTL=1h. Below 24h threshold, but usage
+        // is 0 so no dilute needed.
+        let batch = mutable_batch(1_000_000, 22, 3600, 0);
+        let plan = plan_batch(
+            &batch,
+            &chain(1),
+            DEFAULT_USAGE_THRESHOLD,
+            DEFAULT_TTL_THRESHOLD_SECONDS,
+            DEFAULT_EXTRA_DEPTH,
+        )
+        .unwrap();
+        match plan.action {
+            PlanAction::Topup {
+                ref delta_amount_plur,
+                ..
+            } => {
+                assert!(*delta_amount_plur > BigInt::from(0));
+            }
+            other => panic!("expected Topup, got {other:?}"),
+        }
+        assert!(plan.total_cost_bzz > 0.0);
+    }
+
+    #[test]
+    fn plan_batch_high_usage_only_dilute() {
+        // util at 100%, but TTL very high so post-dilute (TTL/4) is
+        // still way above threshold. Pure dilute.
+        // bucket_depth = depth - 6 = 16; depth=22; max bucket count
+        // = 2^(22-16) = 64. utilization=64 → 100% usage.
+        let batch = mutable_batch(1_000_000, 22, 365 * 86_400, 64);
+        let plan = plan_batch(
+            &batch,
+            &chain(1),
+            DEFAULT_USAGE_THRESHOLD,
+            DEFAULT_TTL_THRESHOLD_SECONDS,
+            DEFAULT_EXTRA_DEPTH,
+        )
+        .unwrap();
+        match plan.action {
+            PlanAction::Dilute { new_depth, .. } => {
+                assert_eq!(new_depth, 24);
+            }
+            other => panic!("expected Dilute, got {other:?}"),
+        }
+        assert_eq!(plan.total_cost_bzz, 0.0);
+    }
+
+    #[test]
+    fn plan_batch_high_usage_low_ttl_topup_then_dilute() {
+        // util=100% AND TTL barely above threshold — post-dilute TTL
+        // would fall below, so plan is topup-then-dilute.
+        let batch = mutable_batch(1_000_000, 22, 2 * 24 * 3600, 64);
+        let plan = plan_batch(
+            &batch,
+            &chain(1),
+            DEFAULT_USAGE_THRESHOLD,
+            DEFAULT_TTL_THRESHOLD_SECONDS,
+            DEFAULT_EXTRA_DEPTH,
+        )
+        .unwrap();
+        match plan.action {
+            PlanAction::TopupThenDilute {
+                ref topup_delta_amount_plur,
+                new_depth,
+                ..
+            } => {
+                assert!(*topup_delta_amount_plur > BigInt::from(0));
+                assert_eq!(new_depth, 24);
+            }
+            other => panic!("expected TopupThenDilute, got {other:?}"),
+        }
+        assert!(plan.total_cost_bzz > 0.0);
+    }
+
+    #[test]
+    fn plan_batch_immutable_high_usage_skips_dilute() {
+        let mut batch = mutable_batch(1_000_000, 22, 30 * 86_400, 64);
+        batch.immutable = true;
+        let plan = plan_batch(
+            &batch,
+            &chain(1),
+            DEFAULT_USAGE_THRESHOLD,
+            DEFAULT_TTL_THRESHOLD_SECONDS,
+            DEFAULT_EXTRA_DEPTH,
+        )
+        .unwrap();
+        // Immutable + healthy TTL → None with a reason explaining
+        // why we can't act on the high usage.
+        assert_eq!(plan.action, PlanAction::None);
+        assert!(plan.reason.contains("immutable"));
+    }
+
+    #[test]
+    fn plan_batch_rejects_out_of_range_threshold() {
+        let batch = mutable_batch(1_000_000, 22, 30 * 86_400, 0);
+        assert!(
+            plan_batch(&batch, &chain(1), 1.5, DEFAULT_TTL_THRESHOLD_SECONDS, 2).is_err()
+        );
+        assert!(plan_batch(&batch, &chain(1), -0.1, 86400, 2).is_err());
+    }
+
+    #[test]
+    fn plan_batch_summary_is_one_line() {
+        let batch = mutable_batch(1_000_000, 22, 3600, 64);
+        let plan = plan_batch(
+            &batch,
+            &chain(1),
+            DEFAULT_USAGE_THRESHOLD,
+            DEFAULT_TTL_THRESHOLD_SECONDS,
+            DEFAULT_EXTRA_DEPTH,
+        )
+        .unwrap();
+        let s = plan.summary();
+        assert!(s.starts_with("plan-batch"));
+        assert!(!s.contains('\n'), "summary must be a single line: {s}");
     }
 }

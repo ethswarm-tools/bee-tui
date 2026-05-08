@@ -182,6 +182,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     ("buy-preview", "<depth> <amount-plur> — predict fresh buy"),
     ("buy-suggest", "<size> <duration> — minimum (depth, amount)"),
     (
+        "plan-batch",
+        "<batch> [usage-thr] [ttl-thr] [extra-depth] — unified topup+dilute plan",
+    ),
+    (
         "probe-upload",
         "<batch> — single 4 KiB chunk, end-to-end probe",
     ),
@@ -876,6 +880,9 @@ impl App {
             "buy-suggest" => {
                 self.command_status = Some(self.run_buy_suggest(trimmed));
             }
+            "plan-batch" => {
+                self.command_status = Some(self.run_plan_batch(trimmed));
+            }
             "probe-upload" => {
                 self.command_status = Some(self.run_probe_upload(trimmed));
             }
@@ -938,7 +945,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :probe-upload, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
                 )));
             }
         }
@@ -1328,6 +1335,66 @@ impl App {
         match utility_verbs::pss_target_for(overlay) {
             Ok(prefix) => CommandStatus::Info(format!("pss target prefix: {prefix}")),
             Err(e) => CommandStatus::Err(format!("pss-target failed: {e}")),
+        }
+    }
+
+    /// `:plan-batch <batch-prefix> [usage-thr] [ttl-thr] [extra-depth]` —
+    /// runs beekeeper-stamper's `Set` algorithm read-only and tells
+    /// the operator whether the batch needs topup, dilute, both, or
+    /// nothing — plus the BZZ cost. Defaults: usage 0.85, TTL 24h,
+    /// extra depth +2 (cross-ecosystem convention).
+    fn run_plan_batch(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let prefix = match parts.as_slice() {
+            [_, prefix, ..] => *prefix,
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :plan-batch <batch-prefix> [usage-thr] [ttl-thr] [extra-depth]"
+                        .into(),
+                );
+            }
+        };
+        let usage_thr = match parts.get(2) {
+            Some(s) => match s.parse::<f64>() {
+                Ok(v) => v,
+                Err(_) => {
+                    return CommandStatus::Err(format!(
+                        "invalid usage-thr {s:?} (expected float in [0,1], default 0.85)"
+                    ));
+                }
+            },
+            None => stamp_preview::DEFAULT_USAGE_THRESHOLD,
+        };
+        let ttl_thr = match parts.get(3) {
+            Some(s) => match stamp_preview::parse_duration_seconds(s) {
+                Ok(v) => v,
+                Err(e) => return CommandStatus::Err(format!("ttl-thr: {e}")),
+            },
+            None => stamp_preview::DEFAULT_TTL_THRESHOLD_SECONDS,
+        };
+        let extra_depth = match parts.get(4) {
+            Some(s) => match s.parse::<u8>() {
+                Ok(v) => v,
+                Err(_) => {
+                    return CommandStatus::Err(format!(
+                        "invalid extra-depth {s:?} (expected u8, default 2)"
+                    ));
+                }
+            },
+            None => stamp_preview::DEFAULT_EXTRA_DEPTH,
+        };
+        let chain = match self.health_rx.borrow().chain_state.clone() {
+            Some(c) => c,
+            None => return CommandStatus::Err("chain state not loaded yet".into()),
+        };
+        let stamps = self.watch.stamps().borrow().clone();
+        let batch = match stamp_preview::match_batch_prefix(&stamps.batches, prefix) {
+            Ok(b) => b.clone(),
+            Err(e) => return CommandStatus::Err(e),
+        };
+        match stamp_preview::plan_batch(&batch, &chain, usage_thr, ttl_thr, extra_depth) {
+            Ok(p) => CommandStatus::Info(p.summary()),
+            Err(e) => CommandStatus::Err(e),
         }
     }
 

@@ -142,12 +142,13 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         "topup-preview" => once_topup_preview(args).await,
         "dilute-preview" => once_dilute_preview(args).await,
         "extend-preview" => once_extend_preview(args).await,
+        "plan-batch" => once_plan_batch(args).await,
 
         // ---- Catch-all. --------------------------------------------
         other => OnceResult::usage(
             other,
             format!(
-                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, inspect, durability-check, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview"
+                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, inspect, durability-check, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
             ),
         ),
     }
@@ -621,6 +622,96 @@ async fn once_extend_preview(args: &[String]) -> OnceResult {
             }),
         ),
         Err(e) => OnceResult::error("extend-preview", e),
+    }
+}
+
+/// `--once plan-batch <prefix> [usage-thr] [ttl-thr] [extra-depth]` —
+/// the unified topup+dilute decision. Mirrors the cockpit's
+/// `:plan-batch` verb. Exits `1` when an action is recommended (so a
+/// CI job can gate on "this batch needs human attention").
+async fn once_plan_batch(args: &[String]) -> OnceResult {
+    let prefix = match args.first() {
+        Some(p) => p.as_str(),
+        None => {
+            return OnceResult::usage(
+                "plan-batch",
+                "usage: --once plan-batch <batch-prefix> [usage-thr] [ttl-thr] [extra-depth]",
+            );
+        }
+    };
+    let usage_thr = match args.get(1) {
+        Some(s) => match s.parse::<f64>() {
+            Ok(v) => v,
+            Err(_) => {
+                return OnceResult::usage(
+                    "plan-batch",
+                    format!("invalid usage-thr {s:?} (expected float in [0,1])"),
+                );
+            }
+        },
+        None => stamp_preview::DEFAULT_USAGE_THRESHOLD,
+    };
+    let ttl_thr = match args.get(2) {
+        Some(s) => match stamp_preview::parse_duration_seconds(s) {
+            Ok(v) => v,
+            Err(e) => return OnceResult::usage("plan-batch", format!("ttl-thr: {e}")),
+        },
+        None => stamp_preview::DEFAULT_TTL_THRESHOLD_SECONDS,
+    };
+    let extra_depth = match args.get(3) {
+        Some(s) => match s.parse::<u8>() {
+            Ok(v) => v,
+            Err(_) => {
+                return OnceResult::usage(
+                    "plan-batch",
+                    format!("invalid extra-depth {s:?}"),
+                );
+            }
+        },
+        None => stamp_preview::DEFAULT_EXTRA_DEPTH,
+    };
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let (batches, chain) = match fetch_stamps_and_chain(&api).await {
+        Ok(p) => p,
+        Err(e) => return OnceResult::error("plan-batch", e),
+    };
+    let batch = match stamp_preview::match_batch_prefix(&batches, prefix) {
+        Ok(b) => b.clone(),
+        Err(e) => return OnceResult::usage("plan-batch", e),
+    };
+    match stamp_preview::plan_batch(&batch, &chain, usage_thr, ttl_thr, extra_depth) {
+        Ok(p) => {
+            let action_kind = match &p.action {
+                stamp_preview::PlanAction::None => "none",
+                stamp_preview::PlanAction::Topup { .. } => "topup",
+                stamp_preview::PlanAction::Dilute { .. } => "dilute",
+                stamp_preview::PlanAction::TopupThenDilute { .. } => "topup_then_dilute",
+            };
+            let data = json!({
+                "batch_id": batch.batch_id.to_hex(),
+                "current_depth": p.current_depth,
+                "current_usage_pct": p.current_usage_pct,
+                "current_ttl_seconds": p.current_ttl_seconds,
+                "usage_threshold_pct": p.usage_threshold_pct,
+                "ttl_threshold_seconds": p.ttl_threshold_seconds,
+                "extra_depth": p.extra_depth,
+                "action": action_kind,
+                "total_cost_bzz": p.total_cost_bzz,
+                "reason": p.reason.clone(),
+            });
+            // Exit 1 when an action is recommended — lets CI gate on
+            // "this batch needs attention." Status `Ok` only when no
+            // action is needed.
+            if matches!(p.action, stamp_preview::PlanAction::None) {
+                OnceResult::ok_with_data("plan-batch", p.summary(), data)
+            } else {
+                OnceResult::unhealthy("plan-batch", p.summary(), data)
+            }
+        }
+        Err(e) => OnceResult::error("plan-batch", e),
     }
 }
 
