@@ -9,6 +9,116 @@ format follows [Keep a Changelog]; the project adheres to
 
 ## [Unreleased]
 
+TBD.
+
+## [1.1.0] - 2026-05-08
+
+Large feature release. Three operator-tiers of cockpit polish on top
+of the supervisor / log-pane / refresh-preset work that landed earlier
+in the cycle:
+
+- **Tier 1**: predictive stamp economics, pending-tx age column with
+  threshold colouring, bee-supervisor log rotation.
+- **Tier 2**: stamp dry-run preview verbs (topup / dilute / extend /
+  buy / buy-suggest), opt-in Prometheus `/metrics` endpoint,
+  `:probe-upload` single-chunk end-to-end probe.
+- **Tier 3**: S11 Pins screen with on-demand integrity checks, S6
+  saturation rollup line in the header.
+
+Plus three operator-feedback fixes: full-ID copy on every cursor-driven
+screen, horizontal scroll in the log pane, autocompleting `:command`
+suggestion popup.
+
+### Added — Tier 3 (extra cockpit screens & summaries)
+
+- **S11 Pins screen.** New tenth-screen tab listing every pinned root
+  with on-demand integrity checks. `Enter` checks the cursored pin;
+  `c` walks every pin in sequence; `s` cycles sort modes
+  (Reference / BadFirst / TotalChunks). Async fetch results drain via
+  an mpsc channel so the UI stays responsive while a long check runs.
+  Status ladder: `Idle / Checking / Ok / Failed`; failed pins float to
+  the top in BadFirst mode.
+- **S6 saturation rollup line.** Header shows `✗ STARVING X of N` or
+  `✓ all N relevant bins healthy` so the operator reads the network
+  health gate at a glance without scanning every bin row. Drill-down
+  now reveals the full peer overlay; a `selected: ...` detail line
+  above the footer makes the cursored ID copyable on every
+  cursor-driven screen.
+
+### Added — Tier 2 (cost-preview verbs, Prometheus, probe-upload)
+
+- **Four stamp dry-run preview verbs.** `:topup-preview`,
+  `:dilute-preview`, `:extend-preview`, `:buy-preview` predict
+  capacity / cost / TTL before any chain-bearing write. Pure
+  `BigInt` arithmetic against the live stamp snapshot — no Bee call
+  required. Short batch-ID prefix matching, binary / decimal / shorthand
+  size parsing (`64MiB`, `1.5GB`, `4096`), human-duration parsing
+  (`30d`, `2w`, `5h30m`), PLUR / xBZZ amount parsing.
+- **`:buy-suggest <size> <duration>`** — inverse of `:buy-preview`.
+  Given target volume + duration, returns the minimum
+  `(depth, amount)` tuple that satisfies it, plus the projected cost.
+  `chunks_needed = ceil(target_bytes / 4096)`,
+  `depth = max(17, ceil(log2(chunks_needed)))`,
+  `amount = ceil(target_secs / 5) × current_price`.
+- **Opt-in Prometheus `/metrics` endpoint.** Hand-rolled tokio
+  `TcpListener`-based HTTP/1.1 server emitting ~30 metrics across
+  status / chain / stamps / tx / swap / lottery / topology / network /
+  self-request namespaces. Per-batch labels on stamp gauges; a
+  synthesised `bee_tui_status_depth_radius_gap` gauge derived from
+  `(committed_depth - storage_radius)`. Off by default; enable via
+  `[metrics] enabled = true, addr = "127.0.0.1:9101"`. 5 s
+  per-connection timeout; cancellation-token shutdown so quit unwinds
+  the listener cleanly.
+- **`:probe-upload`.** Single-chunk end-to-end probe. Synthesises a
+  unique 4104-byte chunk (8-byte span + 16-byte timestamp + zero-pad),
+  uploads it under the operator-supplied stamp, retrieves it back,
+  prints a four-line timing breakdown (upload / propagate / retrieve /
+  total). Each invocation produces a fresh reference so a probe is
+  never served from local cache.
+
+### Added — Tier 1 (predictive economics, pending-tx age, log rotation)
+
+- **S2 predictive stamp economics.** Drill pane now shows theoretical
+  capacity in human bytes, total cost-in-xBZZ, and days-until-expiry
+  derived from `amount × 2^depth / 1e16`. Stamp status now uses three
+  TTL bands (`TOPUP_SOON_SECS = 7d`, `TOPUP_URGENT_SECS = 24h`) on top
+  of utilization, so a low-utilization batch about to expire is no
+  longer reported as `Healthy`.
+- **S8 pending-tx age column.** Each pending tx shows time-since-creation
+  with `PENDING_TX_WARN_AGE_SECS = 300` / `PENDING_TX_FAIL_AGE_SECS =
+  1800` colouring (5 min warn, 30 min fail). A continuation line under
+  each pending row exposes the full `to:` address + transaction hash
+  in plain text so terminal-native click-drag copies them straight to
+  a block explorer.
+- **bee-supervisor log rotation.** Spawned-Bee stdout/stderr now route
+  through a size + `keep_files` rotating writer (defaults: 64 MiB,
+  5 files) instead of `Stdio::from(File)`. Atomic rename moves
+  `base → .1 → .2 → ...` to keep logfmt entries intact across rotation
+  boundaries. The bee-log tailer detects rotation by inode mismatch +
+  size shrink and reopens the file cleanly. Configure with
+  `[bee.logs] rotate_size_mb = 64, keep_files = 5`.
+
+### Added — operator-feedback fixes
+
+- **Selectable full IDs on every cursor-driven screen.** A `selected:`
+  detail line lives above the footer on S2 (Stamps), S6 (Peers), and
+  S11 (Pins). Whatever row the cursor sits on has its full identifier
+  (batch ID / overlay / reference) rendered in plain text on that
+  line — terminal-native click-drag copies it without expanding the
+  drill or chasing through truncated columns.
+- **Horizontal scroll in the log pane.** `Shift+←` / `Shift+→` step
+  8 columns left / right through the active tab. `Shift+End` resumes
+  tail mode and resets both axes. Switching tabs (`[` / `]`) also
+  resets. Title strip shows `→ N` when h-scrolled so the operator can
+  see which tab+offset they're on. Long Bee log lines and wide
+  bee::http tab tables no longer truncate.
+- **Autocompleting `:command` suggestion popup.** A vertical popup
+  above the command bar lists matching commands from a 22-entry
+  catalog with one-line descriptions. As you type, the list filters
+  by prefix. `Up` / `Down` navigate; `Tab` accepts the highlighted
+  suggestion. Auto-scrolls when the filtered list exceeds 10 visible
+  rows. Discoverability for every verb without leaving the keyboard.
+
 ### Changed
 
 - **S7 Network shows full overlay + ethereum addresses.** Previously
@@ -20,7 +130,7 @@ format follows [Keep a Changelog]; the project adheres to
 - **S2 Stamps drill header shows the full batch ID.** Same
   rationale; the drill-pane is now the place to copy a batch ID.
 
-### Added
+### Added — earlier in the cycle (post-1.0.0, pre-Tier-1)
 
 - **bee-tui-only User-Agent + Bee HTTP tab filtering.** Every Bee
   API call now ships `User-Agent: bee-tui/<version>` (set on the
