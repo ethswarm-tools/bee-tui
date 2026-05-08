@@ -1,6 +1,5 @@
 ---
 source: tests/s9_tags_view.rs
-assertion_line: 161
 expression: view
 ---
 TagsView {
@@ -15,6 +14,7 @@ TagsView {
             sent: 0,
             synced: 0,
             address_short: "040404…0404",
+            address_full: "0404040404040404040404040404040404040404040404040404040404040404",
             status: Pending,
             completion_pct: 0,
             started_at: "2024-05-07T12:00:00Z",
@@ -29,6 +29,7 @@ TagsView {
             sent: 100,
             synced: 50,
             address_short: "030303…0303",
+            address_full: "0303030303030303030303030303030303030303030303030303030303030303",
             status: Syncing,
             completion_pct: 50,
             started_at: "2024-05-07T12:00:00Z",
@@ -43,6 +44,7 @@ TagsView {
             sent: 0,
             synced: 0,
             address_short: "020202…0202",
+            address_full: "0202020202020202020202020202020202020202020202020202020202020202",
             status: Splitting,
             completion_pct: 0,
             started_at: "2024-05-07T12:00:00Z",
@@ -57,6 +59,7 @@ TagsView {
             sent: 100,
             synced: 100,
             address_short: "010101…0101",
+            address_full: "0101010101010101010101010101010101010101010101010101010101010101",
             status: Synced,
             completion_pct: 100,
             started_at: "2024-05-07T12:00:00Z",

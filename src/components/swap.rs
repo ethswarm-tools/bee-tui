@@ -85,6 +85,10 @@ pub struct ChequebookCard {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckRow {
     pub peer_short: String,
+    /// Full peer overlay (`0x` stripped). Rendered on the row's
+    /// continuation line so operators can click-drag to copy without
+    /// shrinking the table column.
+    pub peer_full: String,
     /// Pre-formatted payout (`BZZ x.xxxx` or `—` if no cheque yet).
     pub payout: String,
     /// `true` if this peer has not sent us any cheque yet.
@@ -95,6 +99,8 @@ pub struct CheckRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettlementRow {
     pub peer_short: String,
+    /// Full peer overlay (`0x` stripped). See [`CheckRow::peer_full`].
+    pub peer_full: String,
     pub received: String,
     pub sent: String,
     /// Sign-prefixed net (`+x` if we're owed, `-x` if we owe).
@@ -305,6 +311,7 @@ fn cheque_rows_for(last_received: &[LastCheque]) -> Vec<CheckRow> {
             };
             CheckRow {
                 peer_short: short_peer(&lc.peer),
+                peer_full: lc.peer.trim_start_matches("0x").to_string(),
                 payout,
                 never,
             }
@@ -355,6 +362,7 @@ fn settlement_row(s: &Settlement) -> SettlementRow {
     let net_flagged = abs > half_bzz;
     SettlementRow {
         peer_short: short_peer(&s.peer),
+        peer_full: s.peer.trim_start_matches("0x").to_string(),
         received: format_plur(recv),
         sent: format_plur(sent),
         net,
@@ -584,6 +592,12 @@ impl Component for Swap {
                     Span::raw(format!("{:<14}", r.peer_short)),
                     Span::styled(r.payout.clone(), payout_style),
                 ]));
+                // Continuation line with full peer overlay so operators
+                // can click-drag to copy without shrinking the column.
+                cheque_lines.push(Line::from(vec![
+                    Span::styled("        peer 0x", Style::default().fg(t.dim)),
+                    Span::styled(r.peer_full.clone(), Style::default().fg(t.info)),
+                ]));
             }
         }
         frame.render_widget(
@@ -625,6 +639,11 @@ impl Component for Swap {
                     Span::raw(format!("{:<22}", r.received)),
                     Span::raw(format!("{:<21}", r.sent)),
                     Span::styled(r.net.clone(), net_style),
+                ]));
+                // Continuation line with full peer overlay.
+                settle_lines.push(Line::from(vec![
+                    Span::styled("        peer 0x", Style::default().fg(t.dim)),
+                    Span::styled(r.peer_full.clone(), Style::default().fg(t.info)),
                 ]));
             }
         }

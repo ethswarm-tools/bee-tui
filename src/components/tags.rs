@@ -84,6 +84,10 @@ pub struct TagRow {
     pub sent: i64,
     pub synced: i64,
     pub address_short: String,
+    /// Full Swarm reference address (`0x` stripped). Rendered on the
+    /// row's continuation line so operators can click-drag to copy
+    /// without shrinking the table column.
+    pub address_full: String,
     pub status: TagStatus,
     /// `synced / total` percentage in `0..=100`. `0` if total ≤ 0.
     pub completion_pct: u32,
@@ -166,6 +170,7 @@ fn row_from_tag(t: &Tag) -> TagRow {
         sent: t.sent,
         synced: t.synced,
         address_short: short_ref(&t.address),
+        address_full: t.address.trim_start_matches("0x").to_string(),
         status,
         completion_pct,
         started_at: t.started_at.clone(),
@@ -320,7 +325,7 @@ impl Component for Tags {
                 table_chunks[1],
             );
         } else {
-            let mut lines: Vec<Line> = Vec::with_capacity(view.rows.len());
+            let mut lines: Vec<Line> = Vec::with_capacity(view.rows.len() * 2);
             for r in &view.rows {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -345,6 +350,15 @@ impl Component for Tags {
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
+                // Continuation line with the full reference address
+                // when available — empty `address_full` means the tag
+                // hasn't received an address yet (Pending state).
+                if !r.address_full.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("        ref 0x", Style::default().fg(t.dim)),
+                        Span::styled(r.address_full.clone(), Style::default().fg(t.info)),
+                    ]));
+                }
             }
             let body = table_chunks[1];
             let visible_rows = body.height as usize;

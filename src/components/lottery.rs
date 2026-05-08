@@ -708,7 +708,6 @@ impl Component for Lottery {
                 duration_seconds,
                 hash,
             } => {
-                let prefix: String = hash.chars().take(8).collect();
                 let safe = *duration_seconds < 95.0;
                 let style = if safe {
                     Style::default().fg(t.pass)
@@ -723,8 +722,15 @@ impl Component for Lottery {
                 stake_lines.push(Line::from(vec![
                     Span::raw("    "),
                     Span::styled(format!("{duration_seconds:.1}s"), style),
-                    Span::raw(format!("   hash {prefix}…   ")),
+                    Span::raw("   "),
                     Span::styled(verdict, Style::default().fg(t.dim)),
+                ]));
+                // Continuation line with the full reserve commitment
+                // hash — operators can click-drag to copy.
+                let trimmed = hash.trim_start_matches("0x");
+                stake_lines.push(Line::from(vec![
+                    Span::styled("       hash 0x", Style::default().fg(t.dim)),
+                    Span::styled(trimmed.to_string(), Style::default().fg(t.info)),
                 ]));
             }
             BenchState::Failed { error } => {

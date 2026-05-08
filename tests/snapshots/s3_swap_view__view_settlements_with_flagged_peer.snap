@@ -15,6 +15,7 @@ SwapView {
     settlements: [
         SettlementRow {
             peer_short: "bbbbbb…bbbb",
+            peer_full: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             received: "BZZ 2.0000",
             sent: "BZZ 0.5000",
             net: "+BZZ 1.5000",
@@ -22,6 +23,7 @@ SwapView {
         },
         SettlementRow {
             peer_short: "cccccc…cccc",
+            peer_full: "cccccccccccccccccccccccccccccccc",
             received: "BZZ 0.2000",
             sent: "BZZ 1.0000",
             net: "-BZZ 0.8000",
@@ -29,6 +31,7 @@ SwapView {
         },
         SettlementRow {
             peer_short: "aaaaaa…aaaa",
+            peer_full: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             received: "BZZ 0.3000",
             sent: "BZZ 0.2000",
             net: "+BZZ 0.1000",

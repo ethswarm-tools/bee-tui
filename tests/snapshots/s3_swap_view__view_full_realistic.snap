@@ -14,16 +14,19 @@ SwapView {
     cheques: [
         CheckRow {
             peer_short: "aaaaaa…aaaa",
+            peer_full: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             payout: "BZZ 1.2000",
             never: false,
         },
         CheckRow {
             peer_short: "bbbbbb…bbbb",
+            peer_full: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             payout: "BZZ 0.4000",
             never: false,
         },
         CheckRow {
             peer_short: "cccccc…cccc",
+            peer_full: "cccccccccccccccccccccccccccccccc",
             payout: "—",
             never: true,
         },
@@ -31,6 +34,7 @@ SwapView {
     settlements: [
         SettlementRow {
             peer_short: "aaaaaa…aaaa",
+            peer_full: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             received: "BZZ 2.5000",
             sent: "BZZ 0.3000",
             net: "+BZZ 2.2000",
@@ -38,6 +42,7 @@ SwapView {
         },
         SettlementRow {
             peer_short: "bbbbbb…bbbb",
+            peer_full: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             received: "BZZ 1.5000",
             sent: "BZZ 0.5000",
             net: "+BZZ 1.0000",

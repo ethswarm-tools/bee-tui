@@ -14,21 +14,25 @@ SwapView {
     cheques: [
         CheckRow {
             peer_short: "cccccc…cccc",
+            peer_full: "cccccccccccccccccccccccccccccccc",
             payout: "BZZ 1.5000",
             never: false,
         },
         CheckRow {
             peer_short: "dddddd…dddd",
+            peer_full: "dddddddddddddddddddddddddddddddd",
             payout: "BZZ 0.7000",
             never: false,
         },
         CheckRow {
             peer_short: "aaaaaa…aaaa",
+            peer_full: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             payout: "BZZ 0.3000",
             never: false,
         },
         CheckRow {
             peer_short: "bbbbbb…bbbb",
+            peer_full: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             payout: "—",
             never: true,
         },

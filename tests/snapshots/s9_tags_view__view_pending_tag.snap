@@ -1,6 +1,5 @@
 ---
 source: tests/s9_tags_view.rs
-assertion_line: 66
 expression: view
 ---
 TagsView {
@@ -15,6 +14,7 @@ TagsView {
             sent: 0,
             synced: 0,
             address_short: "aaaaaa…aaaa",
+            address_full: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             status: Pending,
             completion_pct: 0,
             started_at: "2024-05-07T12:00:00Z",

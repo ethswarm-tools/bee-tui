@@ -2450,6 +2450,23 @@ impl App {
             .ok_or_else(|| eyre!("no node configured with name {target:?}"))?
             .clone();
         let new_api = Arc::new(ApiClient::from_node(&node)?);
+        // Cancel any pubsub subscriptions + watch-ref daemons spawned
+        // against the previous node. Their tokio tasks each hold an
+        // `Arc<ApiClient>` to the *old* node — without cancelling them
+        // here they would keep polling the wrong URL and leak old-node
+        // messages into the new screens. Operators that want them on
+        // the new node must re-issue the verbs after the switch.
+        for (_, c) in self.pubsub_subs.drain() {
+            c.cancel();
+        }
+        for (_, c) in self.watch_refs.drain() {
+            c.cancel();
+        }
+        // Reset gate-state memory: the old node's `Pass`/`Fail` history
+        // is meaningless for the new node, and a stale entry could
+        // fire a spurious webhook on the next tick (or suppress a
+        // genuine transition because the old status happened to match).
+        self.alert_state = crate::alerts::AlertState::new(self.config.alerts.debounce_secs);
         // Cancel the current hub's children and let it drop. The new
         // hub spawns under the same root_cancel so quit-time teardown
         // still walks the whole tree in one go.
