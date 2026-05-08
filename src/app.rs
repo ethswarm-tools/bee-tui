@@ -31,7 +31,7 @@ use crate::{
         watchlist::Watchlist,
     },
     config::Config,
-    config_doctor, durability, log_capture,
+    config_doctor, durability, economics_oracle, log_capture,
     manifest_walker::{self, InspectResult},
     pprof_bundle, stamp_preview,
     state::State,
@@ -192,6 +192,11 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     (
         "config-doctor",
         "audit bee.yaml for deprecated keys (read-only, never modifies)",
+    ),
+    ("price", "fetch xBZZ → USD spot price"),
+    (
+        "basefee",
+        "fetch Gnosis basefee + tip (requires [economics].gnosis_rpc_url)",
     ),
     (
         "probe-upload",
@@ -897,6 +902,12 @@ impl App {
             "config-doctor" => {
                 self.command_status = Some(self.run_config_doctor());
             }
+            "price" => {
+                self.command_status = Some(self.run_price());
+            }
+            "basefee" => {
+                self.command_status = Some(self.run_basefee());
+            }
             "probe-upload" => {
                 self.command_status = Some(self.run_probe_upload(trimmed));
             }
@@ -1350,6 +1361,47 @@ impl App {
             Ok(prefix) => CommandStatus::Info(format!("pss target prefix: {prefix}")),
             Err(e) => CommandStatus::Err(format!("pss-target failed: {e}")),
         }
+    }
+
+    /// `:price` — fire a one-shot fetch of the xBZZ → USD spot
+    /// price from Swarm's public tokenservice. Async via
+    /// cmd_status_tx. The cockpit doesn't auto-poll the price —
+    /// operators ask for it when they want to think about
+    /// economics in dollars.
+    fn run_price(&self) -> CommandStatus {
+        let tx = self.cmd_status_tx.clone();
+        tokio::spawn(async move {
+            let status = match economics_oracle::fetch_xbzz_price().await {
+                Ok(p) => CommandStatus::Info(p.summary()),
+                Err(e) => CommandStatus::Err(format!("price: {e}")),
+            };
+            let _ = tx.send(status);
+        });
+        CommandStatus::Info("price: querying tokenservice.ethswarm.org…".into())
+    }
+
+    /// `:basefee` — fire JSON-RPC calls against the configured
+    /// Gnosis RPC endpoint (`[economics].gnosis_rpc_url`) for the
+    /// pending block's basefee + the network's expected tip. Async.
+    fn run_basefee(&self) -> CommandStatus {
+        let url = match self.config.economics.gnosis_rpc_url.clone() {
+            Some(u) => u,
+            None => {
+                return CommandStatus::Err(
+                    "basefee: set [economics].gnosis_rpc_url in config.toml (typically the same URL as Bee's --blockchain-rpc-endpoint)"
+                        .into(),
+                );
+            }
+        };
+        let tx = self.cmd_status_tx.clone();
+        tokio::spawn(async move {
+            let status = match economics_oracle::fetch_gnosis_gas(&url).await {
+                Ok(g) => CommandStatus::Info(g.summary()),
+                Err(e) => CommandStatus::Err(format!("basefee: {e}")),
+            };
+            let _ = tx.send(status);
+        });
+        CommandStatus::Info("basefee: querying gnosis RPC…".into())
     }
 
     /// `:config-doctor` — audit the operator's `bee.yaml` against

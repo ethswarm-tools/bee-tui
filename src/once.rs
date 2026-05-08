@@ -35,6 +35,7 @@ use crate::api::ApiClient;
 use crate::config::Config;
 use crate::config_doctor;
 use crate::durability;
+use crate::economics_oracle;
 use crate::manifest_walker::{self, InspectResult};
 use crate::stamp_preview;
 use crate::utility_verbs;
@@ -147,12 +148,14 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         "plan-batch" => once_plan_batch(args).await,
         "check-version" => once_check_version().await,
         "config-doctor" => once_config_doctor(args),
+        "price" => once_price().await,
+        "basefee" => once_basefee().await,
 
         // ---- Catch-all. --------------------------------------------
         other => OnceResult::usage(
             other,
             format!(
-                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, inspect, durability-check, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
+                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, price, basefee, inspect, durability-check, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
             ),
         ),
     }
@@ -626,6 +629,55 @@ async fn once_extend_preview(args: &[String]) -> OnceResult {
             }),
         ),
         Err(e) => OnceResult::error("extend-preview", e),
+    }
+}
+
+/// `--once price` — print xBZZ → USD spot price. No drift detection
+/// (price moves independently of operator action), so always exits
+/// 0 on success, 1 on fetch failure.
+async fn once_price() -> OnceResult {
+    match economics_oracle::fetch_xbzz_price().await {
+        Ok(p) => OnceResult::ok_with_data(
+            "price",
+            p.summary(),
+            json!({
+                "usd": p.usd,
+                "source": p.source,
+            }),
+        ),
+        Err(e) => OnceResult::error("price", e),
+    }
+}
+
+/// `--once basefee` — print Gnosis basefee + tip. Uses
+/// `[economics].gnosis_rpc_url` from config.toml. Always exits 0
+/// on success — gas fluctuates, gating CI on a threshold should
+/// happen at the workflow level.
+async fn once_basefee() -> OnceResult {
+    let url = match Config::new()
+        .ok()
+        .and_then(|c| c.economics.gnosis_rpc_url)
+    {
+        Some(u) => u,
+        None => {
+            return OnceResult::usage(
+                "basefee",
+                "set [economics].gnosis_rpc_url in config.toml",
+            );
+        }
+    };
+    match economics_oracle::fetch_gnosis_gas(&url).await {
+        Ok(g) => OnceResult::ok_with_data(
+            "basefee",
+            g.summary(),
+            json!({
+                "base_fee_gwei": g.base_fee_gwei,
+                "max_priority_fee_gwei": g.max_priority_fee_gwei,
+                "total_gwei": g.total_gwei(),
+                "source_url": g.source_url,
+            }),
+        ),
+        Err(e) => OnceResult::error("basefee", e),
     }
 }
 

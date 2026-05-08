@@ -76,6 +76,12 @@ pub struct Config {
     /// listener should be an explicit operator opt-in.
     #[serde(default)]
     pub metrics: MetricsConfig,
+    /// `[economics]` section — optional cost-context oracles
+    /// (xBZZ → USD price + Gnosis chain gas). The `:price` verb
+    /// works without configuration (uses Swarm's public token
+    /// service); `:basefee` requires `gnosis_rpc_url` to be set.
+    #[serde(default)]
+    pub economics: EconomicsConfig,
 }
 
 /// `[bee]` table from `config.toml`. Both fields are required so a
@@ -158,6 +164,19 @@ impl Default for MetricsConfig {
 
 fn default_metrics_addr() -> String {
     "127.0.0.1:9101".into()
+}
+
+/// `[economics]` table from `config.toml`. Optional cost-context
+/// oracles. Both fields have sensible defaults so omitting the
+/// table entirely is fine (the verbs gracefully degrade).
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct EconomicsConfig {
+    /// JSON-RPC endpoint that the `:basefee` verb queries for
+    /// Gnosis-chain gas pricing. Typically the same URL as Bee's
+    /// `--blockchain-rpc-endpoint`. When unset, `:basefee` errors
+    /// with a clear "configure [economics].gnosis_rpc_url" hint.
+    #[serde(default)]
+    pub gnosis_rpc_url: Option<String>,
 }
 
 /// `[ui]` table from `config.toml`. Every field has a sensible

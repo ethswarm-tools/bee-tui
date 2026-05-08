@@ -19,6 +19,7 @@ pub mod components;
 pub mod config;
 pub mod config_doctor;
 pub mod durability;
+pub mod economics_oracle;
 pub mod errors;
 pub mod log_capture;
 pub mod logging;
