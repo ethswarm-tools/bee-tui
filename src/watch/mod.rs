@@ -24,6 +24,7 @@ use bee::debug::{
     Topology, TransactionInfo, Wallet,
 };
 use bee::postage::PostageBatch;
+use bee::swarm::Reference;
 use num_bigint::BigInt;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -117,6 +118,25 @@ pub struct TagsSnapshot {
 }
 
 impl TagsSnapshot {
+    pub fn is_loaded(&self) -> bool {
+        self.last_update.is_some() && self.last_error.is_none()
+    }
+}
+
+/// Snapshot fed to the S11 Pins screen. `/pins` is operator-driven
+/// (it only changes when someone explicitly pins/unpins a reference)
+/// so the poll cadence is the slow tier. Per-pin integrity isn't
+/// auto-polled — `/pins/check` walks the entire chunk graph and is
+/// expensive — operators trigger it on demand from the screen.
+#[derive(Clone, Debug, Default)]
+pub struct PinsSnapshot {
+    /// References returned by `GET /pins`, in Bee's response order.
+    pub pins: Vec<Reference>,
+    pub last_error: Option<String>,
+    pub last_update: Option<Instant>,
+}
+
+impl PinsSnapshot {
     pub fn is_loaded(&self) -> bool {
         self.last_update.is_some() && self.last_error.is_none()
     }
@@ -285,6 +305,15 @@ impl RefreshProfile {
             Self::Slow => Duration::from_secs(120),
         }
     }
+    pub fn pins(self) -> Duration {
+        // /pins is a tiny list; cadence is set by how fast a pin set
+        // can change in practice (operator-driven). Same tier as
+        // swap/lottery/transactions.
+        match self {
+            Self::Live | Self::Default => Duration::from_secs(30),
+            Self::Slow => Duration::from_secs(60),
+        }
+    }
 }
 
 /// Watch-channel hub. Owns one [`watch::Sender`] per resource group;
@@ -300,6 +329,7 @@ pub struct BeeWatch {
     network_rx: watch::Receiver<NetworkSnapshot>,
     transactions_rx: watch::Receiver<TransactionsSnapshot>,
     tags_rx: watch::Receiver<TagsSnapshot>,
+    pins_rx: watch::Receiver<PinsSnapshot>,
     cancel: CancellationToken,
 }
 
@@ -354,7 +384,9 @@ impl BeeWatch {
             profile.transactions(),
         );
         let (tags_tx, tags_rx) = watch::channel(TagsSnapshot::default());
-        spawn_tags_poller(client, tags_tx, cancel.clone(), profile.tags());
+        spawn_tags_poller(client.clone(), tags_tx, cancel.clone(), profile.tags());
+        let (pins_tx, pins_rx) = watch::channel(PinsSnapshot::default());
+        spawn_pins_poller(client, pins_tx, cancel.clone(), profile.pins());
         Self {
             health_rx,
             stamps_rx,
@@ -364,6 +396,7 @@ impl BeeWatch {
             network_rx,
             transactions_rx,
             tags_rx,
+            pins_rx,
             cancel,
         }
     }
@@ -408,6 +441,14 @@ impl BeeWatch {
     /// Subscribe to the tags snapshot stream (`/tags`).
     pub fn tags(&self) -> watch::Receiver<TagsSnapshot> {
         self.tags_rx.clone()
+    }
+
+    /// Subscribe to the pins snapshot stream (`/pins`). Per-pin
+    /// integrity (from `/pins/check`) isn't part of this stream —
+    /// the S11 component walks integrity on demand because the
+    /// underlying check is expensive.
+    pub fn pins(&self) -> watch::Receiver<PinsSnapshot> {
+        self.pins_rx.clone()
     }
 
     /// Cancel every polling task this hub owns. Idempotent.
@@ -742,6 +783,48 @@ async fn collect_tags(client: &ApiClient) -> TagsSnapshot {
         Err(e) => TagsSnapshot {
             tags: Vec::new(),
             last_error: Some(format!("tags: {e}")),
+            last_update: Some(Instant::now()),
+        },
+    }
+}
+
+/// Poll `GET /pins` and broadcast a fresh [`PinsSnapshot`]. Same
+/// shape as the other slow-tier pollers; integrity (`/pins/check`)
+/// is *not* called from here — operators trigger it from the S11
+/// component on demand.
+fn spawn_pins_poller(
+    client: Arc<ApiClient>,
+    tx: watch::Sender<PinsSnapshot>,
+    cancel: CancellationToken,
+    interval: Duration,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = tick.tick() => {
+                    let snap = collect_pins(&client).await;
+                    if tx.send(snap).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn collect_pins(client: &ApiClient) -> PinsSnapshot {
+    match client.bee().api().list_pins().await {
+        Ok(pins) => PinsSnapshot {
+            pins,
+            last_error: None,
+            last_update: Some(Instant::now()),
+        },
+        Err(e) => PinsSnapshot {
+            pins: Vec::new(),
+            last_error: Some(format!("pins: {e}")),
             last_update: Some(Instant::now()),
         },
     }

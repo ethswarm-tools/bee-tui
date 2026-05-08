@@ -22,6 +22,7 @@ use crate::{
         lottery::Lottery,
         network::Network,
         peers::Peers,
+        pins::Pins,
         stamps::Stamps,
         swap::Swap,
         tags::Tags,
@@ -123,7 +124,7 @@ pub enum CommandStatus {
 /// Names the top-level screens. Index matches position in
 /// [`App::screens`].
 const SCREEN_NAMES: &[&str] = &[
-    "Health", "Stamps", "Swap", "Lottery", "Peers", "Network", "Warmup", "API", "Tags",
+    "Health", "Stamps", "Swap", "Lottery", "Peers", "Network", "Warmup", "API", "Tags", "Pins",
 ];
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -640,7 +641,12 @@ impl App {
                     Err(e) => CommandStatus::Err(format!("diagnose failed: {e}")),
                 });
             }
-            "pins-check" | "pins" => {
+            "pins-check" => {
+                // `:pins-check` keeps the legacy bulk-check-to-file behaviour;
+                // `:pins` (without `-check`) now jumps to the S11 screen via
+                // the screen-name catch-all below. The two are deliberately
+                // distinct so an operator who types `:pins` doesn't kick off
+                // a many-minute integrity walk by accident.
                 self.command_status = Some(match self.start_pins_check() {
                     Ok(path) => CommandStatus::Info(format!(
                         "pins integrity check running → {} (tail to watch progress)",
@@ -725,7 +731,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :probe-upload, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :probe-upload, :context, :quit)"
                 )));
             }
         }
@@ -1546,18 +1552,25 @@ fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)
             ("PgUp / PgDn", "scroll ten rows"),
             ("Home", "back to top"),
         ],
+        // 9: Pins — selectable rows + on-demand integrity check.
+        9 => &[
+            ("↑↓ / j k", "move row selection"),
+            ("Enter", "integrity-check the highlighted pin"),
+            ("c", "integrity-check every unchecked pin"),
+            ("s", "cycle sort: ref order / bad first / by size"),
+        ],
         _ => &[],
     }
 }
 
-/// Construct the eight v0.3 screens with receivers from the supplied
+/// Construct every cockpit screen with receivers from the supplied
 /// hub. Extracted so `App::new` and the `:context` profile-switcher
 /// can share the wiring — the screen list is the same on every
 /// connection, only the underlying watch hub changes.
 ///
 /// Order matters — the [`SCREEN_NAMES`] table assumes index 0 is
 /// Health, 1 is Stamps, 2 is Swap, 3 is Lottery, 4 is Peers, 5 is
-/// Network, 6 is Warmup, 7 is API, 8 is Tags.
+/// Network, 6 is Warmup, 7 is API, 8 is Tags, 9 is Pins.
 fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Component>> {
     let health = Health::new(api.clone(), watch.health(), watch.topology());
     let stamps = Stamps::new(api.clone(), watch.stamps());
@@ -1573,6 +1586,7 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
         log_capture::handle(),
     );
     let tags = Tags::new(watch.tags());
+    let pins = Pins::new(api.clone(), watch.pins());
     vec![
         Box::new(health),
         Box::new(stamps),
@@ -1583,6 +1597,7 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
         Box::new(warmup),
         Box::new(api_health),
         Box::new(tags),
+        Box::new(pins),
     ]
 }
 

@@ -13,6 +13,7 @@ pub mod log_pane;
 pub mod lottery;
 pub mod network;
 pub mod peers;
+pub mod pins;
 pub mod scroll;
 pub mod stamps;
 pub mod swap;

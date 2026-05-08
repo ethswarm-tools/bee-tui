@@ -20,6 +20,7 @@
 - [S8 — RPC / API health](./screens/s8-api.md)
 - [S9 — Tags / uploads](./screens/s9-tags.md)
 - [S10 — Command log](./screens/s10-log.md)
+- [S11 — Pins](./screens/s11-pins.md)
 
 # Commands
 
