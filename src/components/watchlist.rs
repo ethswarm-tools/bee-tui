@@ -108,12 +108,19 @@ impl Watchlist {
                     .duration_since(r.started_at)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
+                let corrupt_segment = if r.chunks_corrupt > 0 || r.bmt_verified {
+                    format!(" · {} corrupt", r.chunks_corrupt)
+                } else {
+                    String::new()
+                };
                 let detail = format!(
-                    "{} total · {} lost · {} errors · {}ms{}",
+                    "{} total · {} lost · {} errors{} · {}ms{}{}",
                     r.chunks_total,
                     r.chunks_lost,
                     r.chunks_errors,
+                    corrupt_segment,
                     r.duration_ms,
+                    if r.bmt_verified { " · BMT" } else { "" },
                     if r.truncated { " · truncated" } else { "" },
                 );
                 WatchlistRow {
@@ -301,8 +308,10 @@ mod tests {
             chunks_total: 4,
             chunks_lost: if healthy { 0 } else { 1 },
             chunks_errors: 0,
+            chunks_corrupt: 0,
             root_is_manifest: true,
             truncated: false,
+            bmt_verified: true,
         }
     }
 

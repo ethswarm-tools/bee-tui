@@ -1071,9 +1071,11 @@ async fn once_durability_check(args: &[String]) -> OnceResult {
         "chunks_total": result.chunks_total,
         "chunks_lost": result.chunks_lost,
         "chunks_errors": result.chunks_errors,
+        "chunks_corrupt": result.chunks_corrupt,
         "duration_ms": result.duration_ms,
         "root_is_manifest": result.root_is_manifest,
         "truncated": result.truncated,
+        "bmt_verified": result.bmt_verified,
     });
     if result.is_healthy() {
         OnceResult::ok_with_data("durability-check", result.summary(), data)
