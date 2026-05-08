@@ -11,6 +11,66 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.7.0] - 2026-05-08
+
+The "pubsub + cross-check" release. Two features land: pubsub
+finally has a surface in bee-tui (the receiver-side complement to
+v1.3's writer verbs), and `:durability-check` / `:watch-ref` gain
+an optional independent cross-check against a swarmscan-style
+indexer.
+
+Two commits since v1.6.0 (`ddc36a7`, `214c547`).
+
+### Added — pubsub
+
+- **S15 Pubsub watch screen** — merged timeline of PSS topic
+  subscriptions and GSOC `(owner, identifier)` subscriptions.
+  Each delivered frame becomes one row with kind glyph, channel
+  short hex, payload size, and smart-preview (ASCII when ≥75 %
+  printable, hex otherwise). Cursor + PgUp/PgDn navigation;
+  `c` clears the timeline; ring-buffered to 500 messages.
+- **`:pubsub-pss <topic>`** / **`:pubsub-gsoc <owner> <id>`** —
+  open a Bee WebSocket against `/pss/subscribe` or
+  `/gsoc/subscribe` and forward every delivered frame into S15.
+  Topic accepts the same forms as `:feed-probe` (64-hex literal
+  or string-form via `Topic::from_string`).
+- **`:pubsub-stop [sub-id]`** — cancel one or all active
+  subscriptions. Re-issuing for an already-watched
+  `(topic)` / `(owner, id)` errors with a clear message — no
+  silent duplicate sockets.
+- New `crate::pubsub` module owns spawn_pss_watcher /
+  spawn_gsoc_watcher (async setup → tokio task with select! over
+  recv + cancel) plus pure ASCII / hex / smart preview formatters
+  (9 unit tests). The screen has 5 more covering ring eviction,
+  cursor clamping, clear-key behavior.
+
+### Added — durability cross-check
+
+- **Swarmscan cross-check** (`[durability].swarmscan_check`).
+  Off by default. When on, every completed `:durability-check`
+  (single-shot or via the `:watch-ref` daemon) hits an indexer
+  URL (templated, defaults to swarmscan's public chunk endpoint)
+  for an independent "does the network see this ref?" answer.
+  New `DurabilityResult.swarmscan_seen` field (`Some(true)` /
+  `Some(false)` / `None`); surfaces in summary line, S13 row
+  detail, and `--once durability-check` JSON.
+- Useful for catching cases where the local Bee returns a chunk
+  from cache that no peer in the network actually still serves.
+  Closes the second half of Batch E's deferred trail from the
+  v1.3 plan.
+
+### Internals
+
+- New `App::pubsub_subs: HashMap<String, CancellationToken>` for
+  the active subscription registry; matches the
+  `App::watch_refs` shape introduced in v1.6.
+- New `pubsub_msg_tx/rx` mpsc channel feeds delivered frames into
+  the S15 screen via the Tick handler.
+- New `App::durability_check_options()` reads
+  `[durability].swarmscan_check` per-walk, so config edits via
+  future `:context` re-loads take effect on the next check.
+- 407 lib tests + integration suite passing.
+
 ## [1.6.0] - 2026-05-08
 
 The "watch + walk" release. Two features extend v1.5's primitives
