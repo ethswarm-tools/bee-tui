@@ -86,6 +86,12 @@ pub struct Config {
     /// Disabled when `webhook_url` is absent (the default).
     #[serde(default)]
     pub alerts: AlertsConfig,
+    /// `[durability]` section — knobs for `:durability-check` and
+    /// `:watch-ref`. Defaults preserve v1.6 behaviour (no swarmscan
+    /// cross-check, BMT verification on); operators opt in to the
+    /// independent network probe explicitly.
+    #[serde(default)]
+    pub durability: DurabilityConfig,
 }
 
 /// `[bee]` table from `config.toml`. Both fields are required so a
@@ -187,6 +193,41 @@ pub struct EconomicsConfig {
     /// installs make no outbound traffic without an explicit opt-in.
     #[serde(default)]
     pub enable_market_tile: bool,
+}
+
+/// `[durability]` table from `config.toml`. Knobs for the chunk-graph
+/// walker that powers `:durability-check` + `:watch-ref`. All fields
+/// optional; defaults preserve v1.6 behaviour.
+#[derive(Clone, Debug, Deserialize)]
+pub struct DurabilityConfig {
+    /// When `true`, every completed durability walk probes
+    /// `swarmscan_url` for an independent "does the network see
+    /// this ref" answer. The result lands on
+    /// `DurabilityResult.swarmscan_seen` and surfaces in the
+    /// summary line + S13 Watchlist row. Off by default — fresh
+    /// installs make no outbound traffic to a third-party indexer.
+    #[serde(default)]
+    pub swarmscan_check: bool,
+    /// URL template the swarmscan probe hits. The literal
+    /// `{ref}` substring is replaced with the hex-encoded
+    /// reference at request time. Any indexer with a similar
+    /// shape (200 = seen, 404 = not seen) can be used. Defaults
+    /// to swarmscan's public chunk endpoint.
+    #[serde(default = "default_swarmscan_url")]
+    pub swarmscan_url: String,
+}
+
+impl Default for DurabilityConfig {
+    fn default() -> Self {
+        Self {
+            swarmscan_check: false,
+            swarmscan_url: default_swarmscan_url(),
+        }
+    }
+}
+
+fn default_swarmscan_url() -> String {
+    "https://api.swarmscan.io/v1/chunks/{ref}".into()
 }
 
 /// `[alerts]` table from `config.toml`. Off by default — without a

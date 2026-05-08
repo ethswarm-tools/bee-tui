@@ -72,6 +72,11 @@ pub struct DurabilityResult {
     /// before v1.5 deserialise as `false` (no `chunks_corrupt`
     /// information available).
     pub bmt_verified: bool,
+    /// Independent network-side answer from a swarmscan-style
+    /// indexer probe. `Some(true)` = indexer sees the ref;
+    /// `Some(false)` = indexer returned 404; `None` = probe was
+    /// skipped (config off) or errored (timeout, non-200/404).
+    pub swarmscan_seen: Option<bool>,
 }
 
 impl DurabilityResult {
@@ -88,16 +93,21 @@ impl DurabilityResult {
         };
         let trunc = if self.truncated { " (truncated)" } else { "" };
         let verify = if self.bmt_verified { " · BMT" } else { "" };
+        let swarmscan = match self.swarmscan_seen {
+            Some(true) => " · swarmscan: seen",
+            Some(false) => " · swarmscan: NOT seen",
+            None => "",
+        };
         if self.is_healthy() {
             format!(
-                "durability-check OK in {}ms · {kind} · {} chunk{} retrievable{verify}{trunc}",
+                "durability-check OK in {}ms · {kind} · {} chunk{} retrievable{verify}{swarmscan}{trunc}",
                 self.duration_ms,
                 self.chunks_total,
                 if self.chunks_total == 1 { "" } else { "s" },
             )
         } else {
             format!(
-                "durability-check UNHEALTHY in {}ms · {kind} · total {} · lost {} · errors {} · corrupt {}{trunc}",
+                "durability-check UNHEALTHY in {}ms · {kind} · total {} · lost {} · errors {} · corrupt {}{swarmscan}{trunc}",
                 self.duration_ms,
                 self.chunks_total,
                 self.chunks_lost,
@@ -112,15 +122,13 @@ impl DurabilityResult {
 /// Times out per-chunk via reqwest's default; the surrounding `tokio`
 /// task can be cancelled by dropping its handle (the Watchlist
 /// screen owns the in-flight handle). BMT verification on by
-/// default — see [`check_with_options`].
+/// default; swarmscan probe off — see [`check_with_options`].
 pub async fn check(api: Arc<ApiClient>, reference: Reference) -> DurabilityResult {
-    check_with_options(api, reference, CheckOptions { bmt_verify: true }).await
+    check_with_options(api, reference, CheckOptions::default()).await
 }
 
-/// Knobs for the durability walk. `bmt_verify` is the only one
-/// today; future iterations may add `concurrency`,
-/// `bytes_per_chunk_limit`, etc.
-#[derive(Debug, Clone, Copy)]
+/// Knobs for the durability walk.
+#[derive(Debug, Clone)]
 pub struct CheckOptions {
     /// When `true`, every fetched chunk's content is BMT-hashed
     /// and compared against the requested reference. Mismatches
@@ -128,11 +136,21 @@ pub struct CheckOptions {
     /// `chunks_errors`). Default on for new callers — the cost is
     /// one keccak per chunk and the correctness gain is high.
     pub bmt_verify: bool,
+    /// When `Some(url_template)`, after the local walk completes
+    /// the cockpit hits the indexer URL (replacing `{ref}` with
+    /// the hex-encoded reference) and records the outcome on
+    /// `DurabilityResult.swarmscan_seen`. `None` skips the probe.
+    /// Templated so swarmscan API URL changes (or operators using
+    /// a different indexer) don't require a code change.
+    pub swarmscan_url: Option<String>,
 }
 
 impl Default for CheckOptions {
     fn default() -> Self {
-        Self { bmt_verify: true }
+        Self {
+            bmt_verify: true,
+            swarmscan_url: None,
+        }
     }
 }
 
@@ -157,6 +175,7 @@ pub async fn check_with_options(
         root_is_manifest: false,
         truncated: false,
         bmt_verified: opts.bmt_verify,
+        swarmscan_seen: None,
     };
 
     // Root fetch.
@@ -248,8 +267,35 @@ pub async fn check_with_options(
             }
         }
     }
+    // Optional swarmscan cross-check. The probe URL is templated
+    // so the operator can point at any indexer with a similar
+    // shape (200 = seen, 404 = not seen).
+    if let Some(template) = opts.swarmscan_url.as_deref() {
+        result.swarmscan_seen = swarmscan_probe(template, &reference).await;
+    }
     result.duration_ms = elapsed_ms(started);
     result
+}
+
+/// HTTP GET against the swarmscan-style probe URL.
+/// `Some(true)` on 200, `Some(false)` on 404, `None` on anything
+/// else (timeout, 5xx, DNS failure, …) — the operator's S13 row
+/// then renders "?" rather than a misleading boolean.
+async fn swarmscan_probe(url_template: &str, reference: &Reference) -> Option<bool> {
+    let url = url_template.replace("{ref}", &reference.to_hex());
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .user_agent(concat!("bee-tui/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .ok()?;
+    match client.get(&url).send().await {
+        Ok(resp) => match resp.status().as_u16() {
+            200 => Some(true),
+            404 => Some(false),
+            _ => None,
+        },
+        Err(_) => None,
+    }
 }
 
 /// True when `bytes` BMT-hashes to `expected`. Returns `false` on
@@ -288,6 +334,7 @@ mod tests {
             root_is_manifest: true,
             truncated: false,
             bmt_verified: true,
+            swarmscan_seen: None,
         };
         let s = r.summary();
         assert!(s.contains("OK"), "{s}");
@@ -308,6 +355,7 @@ mod tests {
             root_is_manifest: true,
             truncated: false,
             bmt_verified: true,
+            swarmscan_seen: None,
         };
         let s = r.summary();
         assert!(s.contains("UNHEALTHY"), "{s}");
@@ -328,6 +376,7 @@ mod tests {
             root_is_manifest: true,
             truncated: false,
             bmt_verified: true,
+            swarmscan_seen: None,
         };
         let s = r.summary();
         assert!(!r.is_healthy());
@@ -348,6 +397,7 @@ mod tests {
             root_is_manifest: true,
             truncated: false,
             bmt_verified: true,
+            swarmscan_seen: None,
         };
         assert!(r.summary().contains("BMT"), "{}", r.summary());
     }
@@ -365,6 +415,7 @@ mod tests {
             root_is_manifest: true,
             truncated: false,
             bmt_verified: false,
+            swarmscan_seen: None,
         };
         assert!(!r.summary().contains("BMT"), "{}", r.summary());
     }
@@ -382,6 +433,7 @@ mod tests {
             root_is_manifest: true,
             truncated: true,
             bmt_verified: true,
+            swarmscan_seen: None,
         };
         assert!(r.summary().contains("truncated"), "{}", r.summary());
     }
@@ -399,6 +451,7 @@ mod tests {
             root_is_manifest: true,
             truncated: false,
             bmt_verified: true,
+            swarmscan_seen: None,
         };
         assert!(r.is_healthy());
         r.chunks_lost = 1;
@@ -409,6 +462,36 @@ mod tests {
         r.chunks_errors = 0;
         r.chunks_corrupt = 1;
         assert!(!r.is_healthy());
+    }
+
+    #[test]
+    fn summary_includes_swarmscan_seen() {
+        let mut r = DurabilityResult {
+            reference: fake_ref(),
+            started_at: SystemTime::now(),
+            duration_ms: 100,
+            chunks_total: 3,
+            chunks_lost: 0,
+            chunks_errors: 0,
+            chunks_corrupt: 0,
+            root_is_manifest: true,
+            truncated: false,
+            bmt_verified: true,
+            swarmscan_seen: Some(true),
+        };
+        assert!(r.summary().contains("swarmscan: seen"), "{}", r.summary());
+
+        r.swarmscan_seen = Some(false);
+        // A "NOT seen" answer doesn't change is_healthy() — it's a
+        // separate independent signal — but the summary surfaces it.
+        assert!(
+            r.summary().contains("swarmscan: NOT seen"),
+            "{}",
+            r.summary(),
+        );
+
+        r.swarmscan_seen = None;
+        assert!(!r.summary().contains("swarmscan"), "{}", r.summary());
     }
 
     #[test]

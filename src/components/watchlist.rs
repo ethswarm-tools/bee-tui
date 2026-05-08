@@ -113,14 +113,20 @@ impl Watchlist {
                 } else {
                     String::new()
                 };
+                let swarmscan_segment = match r.swarmscan_seen {
+                    Some(true) => " · scan: seen",
+                    Some(false) => " · scan: NOT seen",
+                    None => "",
+                };
                 let detail = format!(
-                    "{} total · {} lost · {} errors{} · {}ms{}{}",
+                    "{} total · {} lost · {} errors{} · {}ms{}{}{}",
                     r.chunks_total,
                     r.chunks_lost,
                     r.chunks_errors,
                     corrupt_segment,
                     r.duration_ms,
                     if r.bmt_verified { " · BMT" } else { "" },
+                    swarmscan_segment,
                     if r.truncated { " · truncated" } else { "" },
                 );
                 WatchlistRow {
@@ -312,6 +318,7 @@ mod tests {
             root_is_manifest: true,
             truncated: false,
             bmt_verified: true,
+            swarmscan_seen: None,
         }
     }
 

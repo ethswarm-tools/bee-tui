@@ -1178,6 +1178,7 @@ async fn once_durability_check(args: &[String]) -> OnceResult {
         "root_is_manifest": result.root_is_manifest,
         "truncated": result.truncated,
         "bmt_verified": result.bmt_verified,
+        "swarmscan_seen": result.swarmscan_seen,
     });
     if result.is_healthy() {
         OnceResult::ok_with_data("durability-check", result.summary(), data)

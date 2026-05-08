@@ -1758,8 +1758,9 @@ impl App {
         let watchlist_tx = self.durability_tx.clone();
         let label = short_hex(ref_arg, 8);
         let label_for_task = label.clone();
+        let opts = self.durability_check_options();
         tokio::spawn(async move {
-            let result = durability::check(api, reference).await;
+            let result = durability::check_with_options(api, reference, opts).await;
             let summary = result.summary();
             let _ = watchlist_tx.send(result);
             let _ = tx.send(if summary.contains("UNHEALTHY") {
@@ -1771,6 +1772,21 @@ impl App {
         CommandStatus::Info(format!(
             "durability-check {label_for_task} in flight — see S13 Watchlist for the running history"
         ))
+    }
+
+    /// Read `[durability]` from config and convert to a
+    /// `CheckOptions`. Cheap; called per-walk so config edits picked
+    /// up via a future `:context` switch take effect on the next
+    /// check without a cockpit restart.
+    fn durability_check_options(&self) -> durability::CheckOptions {
+        durability::CheckOptions {
+            bmt_verify: true,
+            swarmscan_url: if self.config.durability.swarmscan_check {
+                Some(self.config.durability.swarmscan_url.clone())
+            } else {
+                None
+            },
+        }
     }
 
     /// `:watch-ref <ref> [interval-secs]` — start a daemon loop that
@@ -1822,10 +1838,13 @@ impl App {
         let watchlist_tx = self.durability_tx.clone();
         let label = short_hex(ref_arg, 8);
         let label_for_task = label.clone();
+        let opts = self.durability_check_options();
         tokio::spawn(async move {
             let interval = std::time::Duration::from_secs(interval_secs);
             loop {
-                let result = durability::check(api.clone(), reference.clone()).await;
+                let result =
+                    durability::check_with_options(api.clone(), reference.clone(), opts.clone())
+                        .await;
                 let _ = watchlist_tx.send(result);
                 tokio::select! {
                     _ = tokio::time::sleep(interval) => {}

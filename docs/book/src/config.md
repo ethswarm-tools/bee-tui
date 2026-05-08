@@ -139,6 +139,40 @@ Two facets:
   one-line tile showing `BZZ ≈ $X.XXXX` and `gas: B base + T tip = N
   gwei`. Off by default — fresh installs make no outbound traffic.
 
+### `[durability]` — chunk-graph walker tuning (optional)
+
+```toml
+[durability]
+swarmscan_check  = true                                          # default false
+swarmscan_url    = "https://api.swarmscan.io/v1/chunks/{ref}"   # default
+```
+
+Off by default — fresh installs make no outbound traffic to a
+third-party indexer. When `swarmscan_check = true`, every
+completed `:durability-check` (single-shot or via the
+`:watch-ref` daemon) probes `swarmscan_url` for an independent
+"does the network see this ref?" answer. The literal `{ref}`
+substring in the URL template is replaced with the hex-encoded
+reference at request time; the probe times out after 5 s.
+
+The result lands in `DurabilityResult.swarmscan_seen` and shows
+up in:
+
+- The verb's summary line: `swarmscan: seen` /
+  `swarmscan: NOT seen` (or omitted when the probe was skipped or
+  errored).
+- The S13 Watchlist row detail: ` · scan: seen` /
+  ` · scan: NOT seen`.
+- `--once durability-check`'s JSON: `swarmscan_seen` field
+  (`true` / `false` / `null`).
+
+A `NOT seen` answer doesn't flip the `is_healthy()` flag — it's
+an independent signal, useful for catching cases where the local
+node returns a chunk from cache that no peer in the network
+actually still has. Pair with `[alerts].webhook_url` to ping on
+gate transitions and use `swarmscan_seen` as a manual sanity
+check.
+
 ### `[alerts]` — webhook ping when a health gate flips (optional)
 
 ```toml
