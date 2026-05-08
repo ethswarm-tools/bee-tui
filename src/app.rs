@@ -28,9 +28,10 @@ use crate::{
         swap::Swap,
         tags::Tags,
         warmup::Warmup,
+        watchlist::Watchlist,
     },
     config::Config,
-    log_capture,
+    durability, log_capture,
     manifest_walker::{self, InspectResult},
     pprof_bundle, stamp_preview,
     state::State,
@@ -116,6 +117,13 @@ pub struct App {
     /// the App drains this on every Tick into `command_status`.
     cmd_status_tx: mpsc::UnboundedSender<CommandStatus>,
     cmd_status_rx: mpsc::UnboundedReceiver<CommandStatus>,
+    /// Async-result channel for durability-check completions. Each
+    /// result is forwarded to the S13 Watchlist screen on the next
+    /// Tick. Sibling to `cmd_status_tx` rather than overloading it
+    /// because the Watchlist row carries structured data, not a
+    /// formatted `CommandStatus` string.
+    durability_tx: mpsc::UnboundedSender<crate::durability::DurabilityResult>,
+    durability_rx: mpsc::UnboundedReceiver<crate::durability::DurabilityResult>,
 }
 
 /// Window during which a second `q` press is interpreted as confirming
@@ -144,6 +152,7 @@ const SCREEN_NAMES: &[&str] = &[
     "Tags",
     "Pins",
     "Manifest",
+    "Watchlist",
 ];
 
 /// Catalog of every `:command` verb with a short description. Drives
@@ -178,6 +187,11 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     ),
     ("manifest", "<ref> — open Mantaray tree browser at a reference"),
     ("inspect", "<ref> — what is this? auto-detects manifest vs raw chunk"),
+    (
+        "durability-check",
+        "<ref> — walk chunk graph, report total / lost / errors",
+    ),
+    ("watchlist", "S13 Watchlist — durability-check history"),
     ("hash", "<path> — Swarm reference of a local file/dir (offline)"),
     ("cid", "<ref> [manifest|feed] — encode reference as CID"),
     ("depth-table", "Print canonical depth → capacity table"),
@@ -275,6 +289,7 @@ impl App {
     ) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         let (cmd_status_tx, cmd_status_rx) = mpsc::unbounded_channel();
+        let (durability_tx, durability_rx) = mpsc::unbounded_channel();
         let config = Config::new()?;
         // Install the theme first so any tracing emitted during the
         // rest of `new` already reflects the operator's choice.
@@ -431,6 +446,8 @@ impl App {
             bee_log_rx,
             cmd_status_tx,
             cmd_status_rx,
+            durability_tx,
+            durability_rx,
         })
     }
 
@@ -883,6 +900,9 @@ impl App {
             "inspect" => {
                 self.command_status = Some(self.run_inspect(trimmed));
             }
+            "durability-check" => {
+                self.command_status = Some(self.run_durability_check(trimmed));
+            }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
@@ -1239,6 +1259,56 @@ impl App {
             let _ = tx.send(status);
         });
         CommandStatus::Info(format!("inspecting {label} — result will replace this line"))
+    }
+
+    /// `:durability-check <ref>` — walk the chunk graph rooted at
+    /// `<ref>` and record the result on the S13 Watchlist screen.
+    /// Async; the immediate command-status shows "in flight", the
+    /// final summary lands when the walk completes.
+    ///
+    /// On manifest references the walk is recursive (root + every
+    /// fork's `self_address`); on raw chunks it's just the single
+    /// fetch. Either way, the cockpit jumps to S13 so the operator
+    /// sees the running history while the new check completes.
+    fn run_durability_check(&mut self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let ref_arg = match parts.as_slice() {
+            [_, r, ..] => *r,
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :durability-check <ref>  (32-byte hex reference)".into(),
+                );
+            }
+        };
+        let reference = match bee::swarm::Reference::from_hex(ref_arg.trim()) {
+            Ok(r) => r,
+            Err(e) => {
+                return CommandStatus::Err(format!("durability-check: bad ref: {e}"));
+            }
+        };
+        // Jump to S13 so the operator sees the existing history while
+        // the new walk completes.
+        if let Some(idx) = SCREEN_NAMES.iter().position(|n| *n == "Watchlist") {
+            self.current_screen = idx;
+        }
+        let api = self.api.clone();
+        let tx = self.cmd_status_tx.clone();
+        let watchlist_tx = self.durability_tx.clone();
+        let label = short_hex(ref_arg, 8);
+        let label_for_task = label.clone();
+        tokio::spawn(async move {
+            let result = durability::check(api, reference).await;
+            let summary = result.summary();
+            let _ = watchlist_tx.send(result);
+            let _ = tx.send(if summary.contains("UNHEALTHY") {
+                CommandStatus::Err(summary)
+            } else {
+                CommandStatus::Info(summary)
+            });
+        });
+        CommandStatus::Info(format!(
+            "durability-check {label_for_task} in flight — see S13 Watchlist for the running history"
+        ))
     }
 
     /// `:pss-target <overlay>` — Bee's `/pss/send` accepts at most a
@@ -1680,6 +1750,24 @@ impl App {
                     // because we keep the loop draining.
                     while let Ok(status) = self.cmd_status_rx.try_recv() {
                         self.command_status = Some(status);
+                    }
+                    // Drain durability-check completions into the
+                    // S13 Watchlist screen. Late results are still
+                    // recorded — operators want to see every check
+                    // they fired, not just the most recent.
+                    while let Ok(result) = self.durability_rx.try_recv() {
+                        if let Some(idx) =
+                            SCREEN_NAMES.iter().position(|n| *n == "Watchlist")
+                        {
+                            if let Some(wl) = self
+                                .screens
+                                .get_mut(idx)
+                                .and_then(|s| s.as_any_mut())
+                                .and_then(|a| a.downcast_mut::<Watchlist>())
+                            {
+                                wl.record(result);
+                            }
+                        }
                     }
                 }
                 Action::Quit => self.should_quit = true,
@@ -2132,6 +2220,11 @@ fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)
             (":manifest <ref>", "open a manifest at a reference"),
             (":inspect <ref>", "what is this? auto-detects manifest"),
         ],
+        // 11: Watchlist — durability-check history.
+        11 => &[
+            ("↑↓ / j k", "move row selection"),
+            (":durability-check <ref>", "walk chunk graph + record"),
+        ],
         _ => &[],
     }
 }
@@ -2161,6 +2254,7 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
     let tags = Tags::new(watch.tags());
     let pins = Pins::new(api.clone(), watch.pins());
     let manifest = Manifest::new(api.clone());
+    let watchlist = Watchlist::new();
     vec![
         Box::new(health),
         Box::new(stamps),
@@ -2173,6 +2267,7 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
         Box::new(tags),
         Box::new(pins),
         Box::new(manifest),
+        Box::new(watchlist),
     ]
 }
 

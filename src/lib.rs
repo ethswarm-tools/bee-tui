@@ -17,6 +17,7 @@ pub mod bee_supervisor;
 pub mod cli;
 pub mod components;
 pub mod config;
+pub mod durability;
 pub mod errors;
 pub mod log_capture;
 pub mod logging;
