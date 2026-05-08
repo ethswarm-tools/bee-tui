@@ -11,6 +11,127 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.2.0] - 2026-05-08
+
+The "audit cockpit" release. Two new screens (S12 Manifests, S13
+Watchlist), seven new verbs, and a Cockpit log tab — all read-only,
+all PLAN-clean. bee-tui evolves from "inspects the node" to
+"inspects the node *and* the data."
+
+Five batches shipped over a single development cycle (commits
+`05b44b4` … `0a0e975`):
+
+- **Batch A** — five pure-local utility verbs that never hit the
+  Bee API.
+- **Batch B** — Cockpit log tab + per-peer reserve-state in the S6
+  drill (with outlier coloring against `bee-scripts/bad-status.sh`).
+- **Batch C** — S12 Manifests screen + `:manifest` / `:inspect`
+  verbs (the v1.2 flagship).
+- **Batch D** — `:diagnose --pprof[=N]` to bundle Bee's CPU profile
+  + execution trace.
+- **Batch E** — `:durability-check` + S13 Watchlist screen.
+
+### Added — utility verbs (Batch A)
+
+- **`:hash <path>`** — Swarm reference of a local file or directory,
+  computed offline. Mirrors `swarm-cli hash`. Single files stream
+  through bee-rs's `FileChunker`; directories use `hash_directory`.
+- **`:cid <ref> [manifest|feed]`** — encode a 32-byte reference as a
+  multibase CIDv1 string. Defaults to `manifest`; encrypted (64-byte)
+  refs are rejected with a clear error.
+- **`:depth-table`** — print the canonical depth → effective-bytes
+  table to a temp file (the cockpit's command bar is too narrow for
+  18 rows).
+- **`:gsoc-mine <overlay> <id>`** — pure CPU work that finds a
+  `PrivateKey` whose SOC at `(identifier, owner)` lands in the
+  target neighborhood. Matches bee-js `gsocMine`.
+- **`:pss-target <overlay>`** — derive Bee's max-target prefix
+  (the first 4 hex chars). Mirrors bee-js
+  `Utils.makeMaxTarget`.
+
+### Added — UX wins (Batch B)
+
+- **Cockpit log tab.** A 7th tab in the bottom log pane that surfaces
+  cockpit-internal tracing events (everything bee-tui emits that
+  isn't `bee::http`). Today these go to `bee-tui.log` on disk;
+  operators had to leave the cockpit to read them. Bounded at 500
+  entries; rendered as `TS LEVEL TARGET  message` with the
+  `bee_tui::` prefix trimmed.
+- **Per-peer reserve-state in S6 drill.** Drill fan-out grows from
+  four to six parallel calls so each peer row surfaces
+  `storage_radius / reserve_size / pullsync_rate / batch_commitment`
+  alongside the existing balance / cheques / settlement / ping. The
+  `batch_commitment` cell paints red when |peer − local| / local
+  > 5%, mirroring the outlier filter in `bee-scripts/bad-status.sh`
+  so operators reading both tools see the same warnings.
+
+### Added — S12 Manifests + universal `:inspect` (Batch C)
+
+- **S12 Manifests screen — Mantaray tree browser.** New 11th screen
+  for browsing any reference as a Mantaray manifest tree. Tree
+  rendering is flat: each row is `(depth, glyph, label, content-type,
+  target-ref, state-hint)`. `↑↓` navigate, `Enter` toggles a fork's
+  expand state — kicks an async fetch when the child isn't loaded.
+  Per-fork load state machine (`Idle / Loading / Loaded / Error`)
+  surfaces "loading…" + "error: …" inline so the operator sees what's
+  in flight.
+- **`:manifest <ref>`** — fetch the chunk + open S12 with the tree
+  rooted on `<ref>`.
+- **`:inspect <ref>`** — universal "what is this thing?" verb. Fetches
+  one chunk and tries `MantarayNode::unmarshal`. On manifest, jumps
+  to S12; on raw chunk, prints "raw chunk · X bytes · not a manifest"
+  to the command-status row.
+- **`Component::as_any_mut`** trait extension. Optional downcast hook
+  so verbs like `:manifest` can reach the concrete `Manifest` screen
+  type and call its load() method without rebuilding the screens
+  vector. Default returns `None`; opt-in per screen.
+- **bee-rs gap closed caller-side.** Bee-rs 1.6 has `MantarayNode` +
+  `unmarshal` but no recursive-load API. The new `manifest_walker`
+  module implements lazy fork-loading on top of the chunk-download
+  primitive. When 1.7 ships `load_recursively` we can swap to it
+  transparently.
+
+### Added — pprof bundle (Batch D)
+
+- **`:diagnose --pprof[=N]`** — extends the existing `:diagnose` verb
+  with an optional pprof bundle. Spawns parallel fetches of
+  `/debug/pprof/profile?seconds=N` (CPU profile) and
+  `/debug/pprof/trace?seconds=N` (execution trace) and writes each
+  alongside the snapshot text in a fresh `bee-tui-diagnostic-<ts>/`
+  directory. Default sampling window is 60s; explicit values clamp
+  to `[1, 600]`.
+- 404 fallback. When Bee's debug API isn't enabled, the helper
+  surfaces a clear "add `--debug-api-enable=true` to your Bee
+  start args" hint instead of a cryptic HTTP error.
+- No tar dependency. The bundle is a self-contained directory; the
+  operator runs `tar -czf` themselves to ship a support bundle.
+
+### Added — durability check + S13 Watchlist (Batch E)
+
+- **`:durability-check <ref>`** — walks the chunk graph rooted at
+  `<ref>` and records the result. Mantaray refs walk recursively
+  (root + every fork's `self_address`); raw refs are a single fetch.
+  Distinguishes `chunks_lost` (a 404 = data truly gone) from
+  `chunks_errors` (any other failure = retry). Bounded by
+  `MAX_CHUNKS_PER_WALK = 10000` so very large manifests give a
+  partial answer rather than pinning the cockpit.
+- **S13 Watchlist screen.** New 12th screen. History of every
+  `:durability-check` invocation as a row with status (OK /
+  UNHEALTHY) · kind (manifest | chunk) · ref · detail-line · age.
+  Bounded ring of 50 entries; newest first. Header shows healthy
+  vs unhealthy counts.
+- **`:watchlist`** — jump straight to S13.
+
+### Notes
+
+- **Test count**: 343 lib + ~80 insta integration tests; clippy +
+  fmt clean.
+- **bee-rs dependency**: still 1.6 (no bump required).
+- **Semver**: every addition is additive — no breaking changes
+  to the v1.0-committed surface (`view_for` / `compute_*_view` pure
+  fns, `bee_tui::watch::*` snapshot shapes, CLI flags, `[ui]`
+  config schema).
+
 ## [1.1.0] - 2026-05-08
 
 Large feature release. Three operator-tiers of cockpit polish on top
