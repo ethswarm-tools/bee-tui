@@ -33,6 +33,7 @@ use crate::{
     state::State,
     theme,
     tui::{Event, Tui},
+    utility_verbs,
     watch::{BeeWatch, HealthSnapshot, RefreshProfile},
 };
 
@@ -161,6 +162,14 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     (
         "probe-upload",
         "<batch> — single 4 KiB chunk, end-to-end probe",
+    ),
+    ("hash", "<path> — Swarm reference of a local file/dir (offline)"),
+    ("cid", "<ref> [manifest|feed] — encode reference as CID"),
+    ("depth-table", "Print canonical depth → capacity table"),
+    ("gsoc-mine", "<overlay> <id> — mine a GSOC signer (CPU work)"),
+    (
+        "pss-target",
+        "<overlay> — first 4 hex chars (Bee's max prefix)",
     ),
     ("diagnose", "Export full snapshot to a file"),
     ("pins-check", "Bulk integrity walk to a file"),
@@ -809,6 +818,21 @@ impl App {
             "probe-upload" => {
                 self.command_status = Some(self.run_probe_upload(trimmed));
             }
+            "hash" => {
+                self.command_status = Some(self.run_hash(trimmed));
+            }
+            "cid" => {
+                self.command_status = Some(self.run_cid(trimmed));
+            }
+            "depth-table" => {
+                self.command_status = Some(self.run_depth_table());
+            }
+            "gsoc-mine" => {
+                self.command_status = Some(self.run_gsoc_mine(trimmed));
+            }
+            "pss-target" => {
+                self.command_status = Some(self.run_pss_target(trimmed));
+            }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
@@ -844,7 +868,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :probe-upload, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :probe-upload, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
                 )));
             }
         }
@@ -1009,6 +1033,103 @@ impl App {
         CommandStatus::Info(format!(
             "probe-upload to batch {batch_short} in flight — result will replace this line"
         ))
+    }
+
+    /// `:hash <path>` — Swarm reference of a local file or directory,
+    /// computed offline. Useful before paying for an upload to confirm
+    /// the content's address-of-record matches what the dApp already
+    /// committed to (the swarm-cli `hash` workflow).
+    fn run_hash(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let path = match parts.as_slice() {
+            [_, p, ..] => *p,
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :hash <path>  (file or directory; computed locally)".into(),
+                );
+            }
+        };
+        match utility_verbs::hash_path(path) {
+            Ok(r) => CommandStatus::Info(format!("hash {path}: {r}")),
+            Err(e) => CommandStatus::Err(format!("hash failed: {e}")),
+        }
+    }
+
+    /// `:cid <ref> [manifest|feed]` — re-encode a 32-byte Swarm ref as
+    /// a multibase CID string for ENS / IPFS-gateway integration. Kind
+    /// defaults to manifest.
+    fn run_cid(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (ref_hex, kind_arg) = match parts.as_slice() {
+            [_, r, k, ..] => (*r, Some(*k)),
+            [_, r] => (*r, None),
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :cid <ref> [manifest|feed]  (default manifest)".into(),
+                );
+            }
+        };
+        let kind = match utility_verbs::parse_cid_kind(kind_arg) {
+            Ok(k) => k,
+            Err(e) => return CommandStatus::Err(e),
+        };
+        match utility_verbs::cid_for_ref(ref_hex, kind) {
+            Ok(cid) => CommandStatus::Info(format!("cid: {cid}")),
+            Err(e) => CommandStatus::Err(format!("cid failed: {e}")),
+        }
+    }
+
+    /// `:depth-table` — print the canonical depth → effective-bytes
+    /// table the rest of the cockpit's economics math is anchored on.
+    /// Result lands in the temp dir as a one-shot file because the
+    /// command bar can't render an 18-row table.
+    fn run_depth_table(&self) -> CommandStatus {
+        let body = utility_verbs::depth_table();
+        let path = std::env::temp_dir().join("bee-tui-depth-table.txt");
+        match std::fs::write(&path, &body) {
+            Ok(()) => CommandStatus::Info(format!("depth table → {}", path.display())),
+            Err(e) => CommandStatus::Err(format!("depth-table write failed: {e}")),
+        }
+    }
+
+    /// `:gsoc-mine <overlay> <identifier>` — pure CPU work that finds a
+    /// `PrivateKey` whose SOC at `(identifier, owner)` lands close to
+    /// the supplied overlay. Blocks the event loop briefly (≤ a few
+    /// seconds typical) — acceptable for an interactive verb.
+    fn run_gsoc_mine(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (overlay, ident) = match parts.as_slice() {
+            [_, o, i, ..] => (*o, *i),
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :gsoc-mine <overlay-hex> <identifier>  (CPU work, no network)".into(),
+                );
+            }
+        };
+        match utility_verbs::gsoc_mine_for(overlay, ident) {
+            Ok(out) => CommandStatus::Info(out.replace('\n', " · ")),
+            Err(e) => CommandStatus::Err(format!("gsoc-mine failed: {e}")),
+        }
+    }
+
+    /// `:pss-target <overlay>` — Bee's `/pss/send` accepts at most a
+    /// 4-hex-char target prefix. This verb extracts those four chars
+    /// from a full overlay so dApp authors don't have to re-derive
+    /// the rule.
+    fn run_pss_target(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let overlay = match parts.as_slice() {
+            [_, o, ..] => *o,
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :pss-target <overlay-hex>  (returns first 4 hex chars)".into(),
+                );
+            }
+        };
+        match utility_verbs::pss_target_for(overlay) {
+            Ok(prefix) => CommandStatus::Info(format!("pss target prefix: {prefix}")),
+            Err(e) => CommandStatus::Err(format!("pss-target failed: {e}")),
+        }
     }
 
     /// `:buy-suggest <size> <duration>` — inverse of buy-preview.
