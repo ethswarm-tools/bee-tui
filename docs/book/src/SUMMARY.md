@@ -34,6 +34,7 @@
 
 - [Keymap cheatsheet](./reference/keys.md)
 - [Theme & accessibility](./reference/theme.md)
+- [Prometheus metrics](./reference/metrics.md)
 - [Operator FAQ](./reference/faq.md)
 
 # Internals

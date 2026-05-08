@@ -252,6 +252,39 @@ impl App {
             rx
         });
 
+        // Optional Prometheus `/metrics` endpoint. Off by default;
+        // when `[metrics].enabled = true` we spawn the server under
+        // `root_cancel` so it dies with the cockpit. Failures here
+        // are non-fatal — surface a tracing error and keep going,
+        // since a port-conflict shouldn't block the operator from
+        // using the cockpit itself.
+        if config.metrics.enabled {
+            match config.metrics.addr.parse::<std::net::SocketAddr>() {
+                Ok(bind_addr) => {
+                    let render_fn = build_metrics_render_fn(watch.clone(), log_capture::handle());
+                    let cancel = root_cancel.child_token();
+                    match crate::metrics_server::spawn(bind_addr, render_fn, cancel).await {
+                        Ok(actual) => {
+                            eprintln!(
+                                "bee-tui: metrics endpoint serving /metrics on http://{actual}"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "metrics: failed to start endpoint on {bind_addr}: {e}"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "metrics: invalid [metrics].addr {:?}: {e}",
+                        config.metrics.addr
+                    );
+                }
+            }
+        }
+
         Ok(Self {
             tick_rate,
             frame_rate,
@@ -1464,6 +1497,49 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
         Box::new(api_health),
         Box::new(tags),
     ]
+}
+
+/// Build the closure the metrics HTTP handler invokes on each
+/// scrape. Captures cloned `BeeWatch` receivers (cheap — they're
+/// `Arc`-backed) plus the log-capture handle, then re-reads the
+/// latest snapshot of each on every call. Returns an `Arc<Fn>`
+/// matching `metrics_server::RenderFn`.
+fn build_metrics_render_fn(
+    watch: BeeWatch,
+    log_capture: Option<log_capture::LogCapture>,
+) -> crate::metrics_server::RenderFn {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    Arc::new(move || {
+        let health = watch.health().borrow().clone();
+        let stamps = watch.stamps().borrow().clone();
+        let swap = watch.swap().borrow().clone();
+        let lottery = watch.lottery().borrow().clone();
+        let topology = watch.topology().borrow().clone();
+        let network = watch.network().borrow().clone();
+        let transactions = watch.transactions().borrow().clone();
+        let recent = log_capture
+            .as_ref()
+            .map(|c| c.snapshot())
+            .unwrap_or_default();
+        let call_stats = crate::components::api_health::call_stats_for(&recent);
+        let now_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let inputs = crate::metrics::MetricsInputs {
+            bee_tui_version: env!("CARGO_PKG_VERSION"),
+            health: &health,
+            stamps: &stamps,
+            swap: &swap,
+            lottery: &lottery,
+            topology: &topology,
+            network: &network,
+            transactions: &transactions,
+            call_stats: &call_stats,
+            now_unix,
+        };
+        crate::metrics::render(&inputs)
+    })
 }
 
 fn format_gate_line(g: &Gate) -> String {

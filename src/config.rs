@@ -70,6 +70,12 @@ pub struct Config {
     /// behavior of connecting to an already-running Bee.
     #[serde(default)]
     pub bee: Option<BeeConfig>,
+    /// `[metrics]` section — when present and `enabled = true`,
+    /// bee-tui exposes a Prometheus `/metrics` endpoint on the
+    /// configured address. Default off because exposing an HTTP
+    /// listener should be an explicit operator opt-in.
+    #[serde(default)]
+    pub metrics: MetricsConfig,
 }
 
 /// `[bee]` table from `config.toml`. Both fields are required so a
@@ -124,6 +130,34 @@ fn default_rotate_size_mb() -> u64 {
 }
 fn default_keep_files() -> u32 {
     5
+}
+
+/// `[metrics]` table from `config.toml`. Off by default — a
+/// Prometheus endpoint is a network-facing surface, even if it
+/// binds to localhost, so we make it a deliberate opt-in.
+#[derive(Clone, Debug, Deserialize)]
+pub struct MetricsConfig {
+    /// Master switch. `false` skips spawning the HTTP server
+    /// entirely.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bind address. Defaults to localhost; an operator who
+    /// genuinely wants `0.0.0.0` exposure has to type it.
+    #[serde(default = "default_metrics_addr")]
+    pub addr: String,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            addr: default_metrics_addr(),
+        }
+    }
+}
+
+fn default_metrics_addr() -> String {
+    "127.0.0.1:9101".into()
 }
 
 /// `[ui]` table from `config.toml`. Every field has a sensible

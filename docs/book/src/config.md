@@ -104,6 +104,21 @@ CLI flags `--bee-bin` and `--bee-config` override the
 `[bee]` block. Both must be set together; setting only one
 errors at startup.
 
+### `[metrics]` — Prometheus scrape endpoint (optional)
+
+```toml
+[metrics]
+enabled = true
+addr    = "127.0.0.1:9101"   # default; only opt into 0.0.0.0 if you mean it
+```
+
+Off by default. When enabled, bee-tui serves Prometheus
+exposition-format gauges on the configured address — the unique
+synthesised metrics (worst-bucket per batch, depth-vs-radius gap,
+predicted TTL, pending-tx age, bee-tui's own request percentiles)
+that Bee's own `/metrics` doesn't expose. See the [Prometheus
+metrics reference](./reference/metrics.md) for the full list.
+
 ### CLI overrides
 
 Three command-line flags override the config file:
