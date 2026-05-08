@@ -214,6 +214,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
         "<path> <batch> — upload a single local file, return Swarm ref",
     ),
     (
+        "upload-collection",
+        "<dir> <batch> — recursive directory upload, return Swarm ref",
+    ),
+    (
         "manifest",
         "<ref> — open Mantaray tree browser at a reference",
     ),
@@ -952,6 +956,9 @@ impl App {
             "upload-file" => {
                 self.command_status = Some(self.run_upload_file(trimmed));
             }
+            "upload-collection" => {
+                self.command_status = Some(self.run_upload_collection(trimmed));
+            }
             "hash" => {
                 self.command_status = Some(self.run_hash(trimmed));
             }
@@ -1011,7 +1018,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
                 )));
             }
         }
@@ -1270,6 +1277,100 @@ impl App {
 
         CommandStatus::Info(format!(
             "upload-file ({file_size}B) to batch {batch_short} in flight — result will replace this line"
+        ))
+    }
+
+    /// `:upload-collection <dir> <batch-prefix>` — recursive
+    /// directory upload via `POST /bzz` (tar). Hidden files /
+    /// dirs (`.git`, `.env`, …) and symlinks are skipped; an
+    /// `index.html` at the root auto-becomes the collection's
+    /// default index. Caps: 256 MiB total, 10k entries — same
+    /// reasoning as `:upload-file`'s 256-MiB single-file ceiling
+    /// (keeps the cockpit's event loop responsive).
+    fn run_upload_collection(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (dir_str, prefix) = match parts.as_slice() {
+            [_, d, b, ..] => (*d, *b),
+            _ => {
+                return CommandStatus::Err("usage: :upload-collection <dir> <batch-prefix>".into());
+            }
+        };
+        let dir = std::path::PathBuf::from(dir_str);
+        let walked = match crate::uploads::walk_dir(&dir) {
+            Ok(w) => w,
+            Err(e) => return CommandStatus::Err(format!("walk {dir_str}: {e}")),
+        };
+        if walked.entries.is_empty() {
+            return CommandStatus::Err(format!(
+                "{dir_str} contains no uploadable files (after skipping hidden + symlinks)"
+            ));
+        }
+        let stamps = self.watch.stamps().borrow().clone();
+        let batch = match stamp_preview::match_batch_prefix(&stamps.batches, prefix) {
+            Ok(b) => b.clone(),
+            Err(e) => return CommandStatus::Err(e),
+        };
+        if !batch.usable {
+            return CommandStatus::Err(format!(
+                "batch {} is not usable yet (waiting on chain confirmation) — pick another",
+                short_hex(&batch.batch_id.to_hex(), 8),
+            ));
+        }
+        if batch.batch_ttl <= 0 {
+            return CommandStatus::Err(format!(
+                "batch {} is expired — pick another",
+                short_hex(&batch.batch_id.to_hex(), 8),
+            ));
+        }
+
+        let api = self.api.clone();
+        let tx = self.cmd_status_tx.clone();
+        let batch_id = batch.batch_id;
+        let batch_short = short_hex(&batch.batch_id.to_hex(), 8);
+        let task_short = batch_short.clone();
+        let total_bytes = walked.total_bytes;
+        let entry_count = walked.entries.len();
+        let entries = walked.entries;
+        let default_index = walked.default_index.clone();
+        let dir_str_owned = dir_str.to_string();
+        let default_index_for_msg = default_index.clone();
+        tokio::spawn(async move {
+            let opts = bee::api::CollectionUploadOptions {
+                index_document: default_index,
+                ..Default::default()
+            };
+            let started = Instant::now();
+            let result = api
+                .bee()
+                .file()
+                .upload_collection_entries(&batch_id, &entries, Some(&opts))
+                .await;
+            let elapsed_ms = started.elapsed().as_millis();
+            let status = match result {
+                Ok(res) => {
+                    let idx = default_index_for_msg
+                        .as_deref()
+                        .map(|i| format!(" · index={i}"))
+                        .unwrap_or_default();
+                    CommandStatus::Info(format!(
+                        "upload-collection OK in {elapsed_ms}ms — {entry_count} files, {total_bytes}B → ref {} (batch {task_short}){idx}",
+                        res.reference.to_hex(),
+                    ))
+                }
+                Err(e) => CommandStatus::Err(format!(
+                    "upload-collection FAILED after {elapsed_ms}ms — {dir_str_owned} → batch {task_short}: {e}"
+                )),
+            };
+            let _ = tx.send(status);
+        });
+
+        let idx_note = walked
+            .default_index
+            .as_deref()
+            .map(|i| format!(" · default index={i}"))
+            .unwrap_or_default();
+        CommandStatus::Info(format!(
+            "upload-collection {entry_count} files ({total_bytes}B){idx_note} to batch {batch_short} in flight — result will replace this line"
         ))
     }
 

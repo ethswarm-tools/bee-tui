@@ -33,6 +33,7 @@ pub mod stamp_preview;
 pub mod state;
 pub mod theme;
 pub mod tui;
+pub mod uploads;
 pub mod utility_verbs;
 pub mod version_check;
 pub mod watch;

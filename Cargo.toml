@@ -53,6 +53,7 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter", "serde"] }
 
 [dev-dependencies]
 insta = { version = "1.41", features = ["filters"] }
+tempfile = "3.10"
 
 [build-dependencies]
 anyhow = "1.0.90"

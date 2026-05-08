@@ -138,6 +138,7 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         "inspect" => once_inspect(args).await,
         "durability-check" => once_durability_check(args).await,
         "upload-file" => once_upload_file(args).await,
+        "upload-collection" => once_upload_collection(args).await,
 
         // ---- Stamp-economics verbs (one-shot fetch of chain state +
         //      stamps list, then pure math).
@@ -156,7 +157,7 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         other => OnceResult::usage(
             other,
             format!(
-                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, price, basefee, inspect, durability-check, upload-file, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
+                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, price, basefee, inspect, durability-check, upload-file, upload-collection, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
             ),
         ),
     }
@@ -517,6 +518,94 @@ fn upload_content_type(path: &std::path::Path) -> String {
         _ => "",
     }
     .to_string()
+}
+
+/// `--once upload-collection <dir> <batch-prefix>` — recursive
+/// directory upload via tar `POST /bzz`. Hidden + symlinked entries
+/// are skipped; an `index.html` at the root auto-becomes the
+/// collection's default index. Caps: 256 MiB total, 10k entries.
+/// JSON output includes `reference`, `entry_count`, `total_bytes`,
+/// `default_index` so a snapshot-publish workflow has everything
+/// it needs to pin the ref or post the URL.
+async fn once_upload_collection(args: &[String]) -> OnceResult {
+    let (dir_str, prefix) = match (args.first(), args.get(1)) {
+        (Some(d), Some(b)) => (d.as_str(), b.as_str()),
+        _ => {
+            return OnceResult::usage(
+                "upload-collection",
+                "usage: --once upload-collection <dir> <batch-prefix>",
+            );
+        }
+    };
+    let dir = std::path::PathBuf::from(dir_str);
+    let walked = match crate::uploads::walk_dir(&dir) {
+        Ok(w) => w,
+        Err(e) => return OnceResult::usage("upload-collection", format!("walk {dir_str}: {e}")),
+    };
+    if walked.entries.is_empty() {
+        return OnceResult::usage(
+            "upload-collection",
+            format!("{dir_str} contains no uploadable files"),
+        );
+    }
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let batches = match api.bee().postage().get_postage_batches().await {
+        Ok(b) => b,
+        Err(e) => return OnceResult::error("upload-collection", format!("/stamps failed: {e}")),
+    };
+    let batch = match stamp_preview::match_batch_prefix(&batches, prefix) {
+        Ok(b) => b.clone(),
+        Err(e) => return OnceResult::usage("upload-collection", e),
+    };
+    if !batch.usable {
+        return OnceResult::error(
+            "upload-collection",
+            format!(
+                "batch {} is not usable yet (waiting on chain confirmation)",
+                batch.batch_id.to_hex(),
+            ),
+        );
+    }
+    if batch.batch_ttl <= 0 {
+        return OnceResult::error(
+            "upload-collection",
+            format!("batch {} is expired", batch.batch_id.to_hex()),
+        );
+    }
+    let total_bytes = walked.total_bytes;
+    let entry_count = walked.entries.len();
+    let default_index = walked.default_index.clone();
+    let opts = bee::api::CollectionUploadOptions {
+        index_document: default_index.clone(),
+        ..Default::default()
+    };
+    let result = api
+        .bee()
+        .file()
+        .upload_collection_entries(&batch.batch_id, &walked.entries, Some(&opts))
+        .await;
+    match result {
+        Ok(res) => OnceResult::ok_with_data(
+            "upload-collection",
+            format!(
+                "uploaded {entry_count} files ({total_bytes}B) → ref {} (batch {})",
+                res.reference.to_hex(),
+                &batch.batch_id.to_hex()[..8],
+            ),
+            json!({
+                "dir": dir_str,
+                "entry_count": entry_count,
+                "total_bytes": total_bytes,
+                "reference": res.reference.to_hex(),
+                "batch_id": batch.batch_id.to_hex(),
+                "default_index": default_index,
+            }),
+        ),
+        Err(e) => OnceResult::error("upload-collection", format!("upload failed: {e}")),
+    }
 }
 
 /// `--once buy-preview <depth> <amount-plur>` — predict cost / TTL

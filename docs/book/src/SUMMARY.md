@@ -31,6 +31,7 @@
 - [Stamp dry-run previews](./commands/stamp-previews.md)
 - [`:probe-upload`](./commands/probe-upload.md)
 - [`:upload-file`](./commands/upload-file.md)
+- [`:upload-collection`](./commands/upload-collection.md)
 - [`:context` (multi-node)](./commands/context.md)
 
 # Reference
