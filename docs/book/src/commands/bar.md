@@ -64,6 +64,7 @@ target screen, but faster on a 10-screen carousel.
 | `:upload-file <path> <batch>` | [upload-file](./upload-file.md) | Upload a single local file via `POST /bzz`, return Swarm reference |
 | `:upload-collection <dir> <batch>` | [upload-collection](./upload-collection.md) | Recursive directory upload as a Swarm collection (tar `POST /bzz`); auto-detects `index.html` |
 | `:feed-probe <owner> <topic>` | [feed-probe](./feed-probe.md) | Latest update for a feed (read-only lookup) |
+| `:feed-timeline <owner> <topic> [N]` | [S14 — Feed Timeline](../screens/s14-feed-timeline.md) | Walk a feed's history (newest first), open S14 |
 | `:context <name>` (alias `:ctx`) | [context](./context.md) | Switch to a different node profile from your config |
 | `:context` | [context](./context.md) | List configured profiles (no switch) |
 | `:quit` (alias `:q`) | — | Exit the cockpit |
@@ -118,4 +119,5 @@ works end-to-end).
 - [`:upload-file`](./upload-file.md)
 - [`:upload-collection`](./upload-collection.md)
 - [`:feed-probe`](./feed-probe.md)
+- [S14 — Feed Timeline](../screens/s14-feed-timeline.md)
 - [`:context`](./context.md)

@@ -17,6 +17,7 @@ use crate::{
     components::{
         Component,
         api_health::ApiHealth,
+        feed_timeline::FeedTimeline,
         health::{Gate, GateStatus, Health},
         log_pane::{BeeLogLine, LogPane, LogTab},
         lottery::Lottery,
@@ -124,6 +125,11 @@ pub struct App {
     /// formatted `CommandStatus` string.
     durability_tx: mpsc::UnboundedSender<crate::durability::DurabilityResult>,
     durability_rx: mpsc::UnboundedReceiver<crate::durability::DurabilityResult>,
+    /// Async-result channel for `:feed-timeline` walks. Each
+    /// completed walk arrives as a `FeedTimelineMessage` and is
+    /// forwarded to the S14 screen on the next Tick.
+    feed_timeline_tx: mpsc::UnboundedSender<FeedTimelineMessage>,
+    feed_timeline_rx: mpsc::UnboundedReceiver<FeedTimelineMessage>,
     /// Per-gate transition tracker for the optional webhook alerter.
     /// On every Tick we feed it the latest gates; it returns the
     /// transitions worth pinging on (debounced per-gate). When
@@ -145,6 +151,15 @@ pub enum CommandStatus {
     Err(String),
 }
 
+/// Result variants that flow from `:feed-timeline`'s background
+/// walk into the S14 screen. Drained by the Tick handler the same
+/// way `cmd_status_rx` and `durability_rx` are.
+#[derive(Debug, Clone)]
+pub enum FeedTimelineMessage {
+    Loaded(crate::feed_timeline::Timeline),
+    Failed(String),
+}
+
 /// Names the top-level screens. Index matches position in
 /// [`App::screens`].
 const SCREEN_NAMES: &[&str] = &[
@@ -160,6 +175,7 @@ const SCREEN_NAMES: &[&str] = &[
     "Pins",
     "Manifest",
     "Watchlist",
+    "FeedTimeline",
 ];
 
 /// Catalog of every `:command` verb with a short description. Drives
@@ -220,6 +236,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     (
         "feed-probe",
         "<owner> <topic> — latest update for a feed (read-only lookup)",
+    ),
+    (
+        "feed-timeline",
+        "<owner> <topic> [N] — walk a feed's history, open S14",
     ),
     (
         "manifest",
@@ -338,6 +358,7 @@ impl App {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         let (cmd_status_tx, cmd_status_rx) = mpsc::unbounded_channel();
         let (durability_tx, durability_rx) = mpsc::unbounded_channel();
+        let (feed_timeline_tx, feed_timeline_rx) = mpsc::unbounded_channel();
         let config = Config::new()?;
         // Install the theme first so any tracing emitted during the
         // rest of `new` already reflects the operator's choice.
@@ -510,6 +531,8 @@ impl App {
             cmd_status_rx,
             durability_tx,
             durability_rx,
+            feed_timeline_tx,
+            feed_timeline_rx,
             alert_state: crate::alerts::AlertState::new(config_alerts_debounce),
         })
     }
@@ -966,6 +989,9 @@ impl App {
             "feed-probe" => {
                 self.command_status = Some(self.run_feed_probe(trimmed));
             }
+            "feed-timeline" => {
+                self.command_status = Some(self.run_feed_timeline(trimmed));
+            }
             "hash" => {
                 self.command_status = Some(self.run_hash(trimmed));
             }
@@ -1025,7 +1051,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :feed-probe, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :feed-probe, :feed-timeline, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
                 )));
             }
         }
@@ -1418,6 +1444,69 @@ impl App {
         });
         CommandStatus::Info(format!(
             "feed-probe owner={owner_short} in flight — result will replace this line (first lookup can take 30-60s)"
+        ))
+    }
+
+    /// `:feed-timeline <owner> <topic> [N]` — walk the feed's
+    /// history (newest first) and surface the entries on the S14
+    /// screen. The walk runs async (10s of seconds for a fresh feed
+    /// before the latest-index probe completes); the screen shows a
+    /// spinner until the result lands. The optional `[N]` clamps the
+    /// number of entries fetched (default 50, hard max 1000).
+    fn run_feed_timeline(&mut self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (owner_str, topic_str, n_arg) = match parts.as_slice() {
+            [_, o, t] => (*o, *t, None),
+            [_, o, t, n, ..] => (*o, *t, Some(*n)),
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :feed-timeline <owner> <topic> [N]  (default 50, hard max 1000)".into(),
+                );
+            }
+        };
+        let parsed = match crate::feed_probe::parse_args(owner_str, topic_str) {
+            Ok(p) => p,
+            Err(e) => return CommandStatus::Err(e),
+        };
+        let max_entries = match n_arg {
+            None => crate::feed_timeline::DEFAULT_MAX_ENTRIES,
+            Some(s) => match s.parse::<u64>() {
+                Ok(n) if n > 0 => n,
+                _ => return CommandStatus::Err(format!("invalid N: {s:?}")),
+            },
+        };
+        // Switch to S14 + reset the screen state synchronously so the
+        // operator sees the spinner immediately. The result lands via
+        // feed_timeline_rx on a future tick.
+        if let Some(idx) = SCREEN_NAMES.iter().position(|n| *n == "FeedTimeline") {
+            self.current_screen = idx;
+            if let Some(ft) = self
+                .screens
+                .get_mut(idx)
+                .and_then(|s| s.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FeedTimeline>())
+            {
+                let label = format!(
+                    "owner=0x{} · topic={} · N={max_entries}",
+                    short_hex(&parsed.owner.to_hex(), 8),
+                    short_hex(&parsed.topic.to_hex(), 8),
+                );
+                ft.set_loading(label);
+            }
+        }
+        let api = self.api.clone();
+        let tx = self.feed_timeline_tx.clone();
+        tokio::spawn(async move {
+            let msg = match crate::feed_timeline::walk(api, parsed.owner, parsed.topic, max_entries)
+                .await
+            {
+                Ok(t) => FeedTimelineMessage::Loaded(t),
+                Err(e) => FeedTimelineMessage::Failed(e),
+            };
+            let _ = tx.send(msg);
+        });
+        CommandStatus::Info(format!(
+            "feed-timeline N={max_entries} in flight — switching to S14 (first lookup can take 30-60s)"
         ))
     }
 
@@ -2275,6 +2364,25 @@ impl App {
                             }
                         }
                     }
+                    // Drain feed-timeline walk completions into S14.
+                    // Newest message wins — operator can fire a fresh
+                    // :feed-timeline mid-walk and the in-flight result
+                    // will overwrite this immediately.
+                    while let Ok(msg) = self.feed_timeline_rx.try_recv() {
+                        if let Some(idx) = SCREEN_NAMES.iter().position(|n| *n == "FeedTimeline") {
+                            if let Some(ft) = self
+                                .screens
+                                .get_mut(idx)
+                                .and_then(|s| s.as_any_mut())
+                                .and_then(|a| a.downcast_mut::<FeedTimeline>())
+                            {
+                                match msg {
+                                    FeedTimelineMessage::Loaded(t) => ft.set_timeline(t),
+                                    FeedTimelineMessage::Failed(e) => ft.set_error(e),
+                                }
+                            }
+                        }
+                    }
                     // Webhook health-gate alerts. Cheap when not
                     // configured (no clones, no work) — only computes
                     // gates and diffs when [alerts].webhook_url is set.
@@ -2735,6 +2843,15 @@ fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)
             ("↑↓ / j k", "move row selection"),
             (":durability-check <ref>", "walk chunk graph + record"),
         ],
+        // 12: Feed Timeline — feed history walker.
+        12 => &[
+            ("↑↓ / j k", "move row selection"),
+            ("PgUp / PgDn", "jump 10 rows"),
+            (
+                ":feed-timeline <owner> <topic> [N]",
+                "load history (default 50)",
+            ),
+        ],
         _ => &[],
     }
 }
@@ -2772,6 +2889,7 @@ fn build_screens(
     let pins = Pins::new(api.clone(), watch.pins());
     let manifest = Manifest::new(api.clone());
     let watchlist = Watchlist::new();
+    let feed_timeline = FeedTimeline::new();
     vec![
         Box::new(health),
         Box::new(stamps),
@@ -2785,6 +2903,7 @@ fn build_screens(
         Box::new(pins),
         Box::new(manifest),
         Box::new(watchlist),
+        Box::new(feed_timeline),
     ]
 }
 

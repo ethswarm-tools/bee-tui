@@ -21,6 +21,7 @@
 - [S9 — Tags / uploads](./screens/s9-tags.md)
 - [S10 — Command log](./screens/s10-log.md)
 - [S11 — Pins](./screens/s11-pins.md)
+- [S14 — Feed Timeline](./screens/s14-feed-timeline.md)
 
 # Commands
 
@@ -33,6 +34,7 @@
 - [`:upload-file`](./commands/upload-file.md)
 - [`:upload-collection`](./commands/upload-collection.md)
 - [`:feed-probe`](./commands/feed-probe.md)
+- [`:feed-timeline`](./screens/s14-feed-timeline.md)
 - [`:context` (multi-node)](./commands/context.md)
 
 # Reference

@@ -37,6 +37,7 @@ use crate::config_doctor;
 use crate::durability;
 use crate::economics_oracle;
 use crate::feed_probe;
+use crate::feed_timeline;
 use crate::manifest_walker::{self, InspectResult};
 use crate::stamp_preview;
 use crate::utility_verbs;
@@ -141,6 +142,7 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         "upload-file" => once_upload_file(args).await,
         "upload-collection" => once_upload_collection(args).await,
         "feed-probe" => once_feed_probe(args).await,
+        "feed-timeline" => once_feed_timeline(args).await,
 
         // ---- Stamp-economics verbs (one-shot fetch of chain state +
         //      stamps list, then pure math).
@@ -159,7 +161,7 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         other => OnceResult::usage(
             other,
             format!(
-                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, price, basefee, inspect, durability-check, upload-file, upload-collection, feed-probe, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
+                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, price, basefee, inspect, durability-check, upload-file, upload-collection, feed-probe, feed-timeline, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
             ),
         ),
     }
@@ -645,6 +647,67 @@ async fn once_feed_probe(args: &[String]) -> OnceResult {
         "reference": result.reference_hex,
     });
     OnceResult::ok_with_data("feed-probe", result.summary(), data)
+}
+
+/// `--once feed-timeline <owner> <topic> [N]` — walk a feed's
+/// history and emit `{ owner, topic, latest_index, entries: [{...}] }`.
+/// CI gate: a workflow can fetch the latest N entries and assert
+/// `entries[0].index` strictly advanced compared to the previous run.
+async fn once_feed_timeline(args: &[String]) -> OnceResult {
+    let (owner_str, topic_str) = match (args.first(), args.get(1)) {
+        (Some(o), Some(t)) => (o.as_str(), t.as_str()),
+        _ => {
+            return OnceResult::usage(
+                "feed-timeline",
+                "usage: --once feed-timeline <owner> <topic> [N]",
+            );
+        }
+    };
+    let max_entries = match args.get(2) {
+        None => feed_timeline::DEFAULT_MAX_ENTRIES,
+        Some(s) => match s.parse::<u64>() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                return OnceResult::usage("feed-timeline", format!("invalid N: {s:?}"));
+            }
+        },
+    };
+    let parsed = match feed_probe::parse_args(owner_str, topic_str) {
+        Ok(p) => p,
+        Err(e) => return OnceResult::usage("feed-timeline", e),
+    };
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let timeline = match feed_timeline::walk(api, parsed.owner, parsed.topic, max_entries).await {
+        Ok(t) => t,
+        Err(e) => {
+            return OnceResult::error("feed-timeline", format!("feed-timeline failed: {e}"));
+        }
+    };
+    let entries_json: Vec<serde_json::Value> = timeline
+        .entries
+        .iter()
+        .map(|e| {
+            json!({
+                "index": e.index,
+                "timestamp_unix": e.timestamp_unix,
+                "payload_bytes": e.payload_bytes,
+                "reference": e.reference_hex,
+                "error": e.error,
+            })
+        })
+        .collect();
+    let data = json!({
+        "owner": timeline.owner_hex,
+        "topic": timeline.topic_hex,
+        "latest_index": timeline.latest_index,
+        "index_next": timeline.index_next,
+        "reached_requested": timeline.reached_requested,
+        "entries": entries_json,
+    });
+    OnceResult::ok_with_data("feed-timeline", timeline.summary(), data)
 }
 
 /// `--once buy-preview <depth> <amount-plur>` — predict cost / TTL
