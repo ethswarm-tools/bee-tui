@@ -240,8 +240,11 @@ fn default_swarmscan_url() -> String {
 /// installs don't write any pubsub messages to disk. Setting
 /// `history_file` to a path turns on append-on-arrival JSONL
 /// logging of every delivered PSS / GSOC frame, useful for
-/// offline analysis of overnight subscriptions.
-#[derive(Clone, Debug, Default, Deserialize)]
+/// offline analysis of overnight subscriptions. When the history
+/// file is enabled, rotation keeps disk usage bounded — the active
+/// file rolls over to `<path>.1` once it crosses `rotate_size_mb`,
+/// and only the most-recent `keep_files` rotations are retained.
+#[derive(Clone, Debug, Deserialize)]
 pub struct PubsubConfig {
     /// Path to a JSONL file that bee-tui appends to whenever a
     /// pubsub frame arrives. The file is created with mode 0600
@@ -251,6 +254,34 @@ pub struct PubsubConfig {
     /// data field uses.
     #[serde(default)]
     pub history_file: Option<PathBuf>,
+    /// Active history file rolls over once it reaches this many
+    /// MiB. Default 64 MiB. Zero disables rotation (file grows
+    /// unbounded — operator's responsibility to truncate).
+    #[serde(default = "default_pubsub_rotate_size_mb")]
+    pub rotate_size_mb: u64,
+    /// How many rotated history files (`<path>.1` .. `<path>.N`)
+    /// to retain. Default 5. At the 64 MiB default that's a
+    /// ~320 MiB ceiling; older rotations are unlinked.
+    #[serde(default = "default_pubsub_keep_files")]
+    pub keep_files: u32,
+}
+
+impl Default for PubsubConfig {
+    fn default() -> Self {
+        Self {
+            history_file: None,
+            rotate_size_mb: default_pubsub_rotate_size_mb(),
+            keep_files: default_pubsub_keep_files(),
+        }
+    }
+}
+
+fn default_pubsub_rotate_size_mb() -> u64 {
+    64
+}
+
+fn default_pubsub_keep_files() -> u32 {
+    5
 }
 
 /// `[alerts]` table from `config.toml`. Off by default — without a

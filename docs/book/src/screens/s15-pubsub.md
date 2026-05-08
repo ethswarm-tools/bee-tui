@@ -86,17 +86,54 @@ Sub-IDs are reported by the `:pubsub-pss` / `:pubsub-gsoc`
 fires on quit, so operators don't need to remember to issue
 `:pubsub-stop` before exiting.
 
+## Filtering the timeline
+
+```text
+:pubsub-filter <substring>          # show only matching rows
+:pubsub-filter-clear                # remove the active filter
+```
+
+Case-insensitive substring match against the channel hex OR the
+smart-preview of the payload. The underlying ring still receives
+every message — filtering is presentation-only, so clearing the
+filter restores the full view without re-subscribing.
+
+## Persisting + replaying history (v1.8 / v1.9)
+
+Set `[pubsub].history_file` in `config.toml` to write every
+delivered frame to a JSONL file:
+
+```toml
+[pubsub]
+history_file = "/var/lib/bee-tui/pubsub.jsonl"
+rotate_size_mb = 64        # roll over at 64 MiB (default; 0 disables)
+keep_files     = 5         # retain .1 .. .5 (default)
+```
+
+Files are created with mode `0600` (owner-only). When the active
+file crosses `rotate_size_mb`, it's renamed to `<path>.1` (older
+rotations shift to `.2` .. `.N`; oldest beyond `keep_files` is
+unlinked) and a fresh empty file takes its place.
+
+To browse a past session without re-subscribing:
+
+```text
+:pubsub-replay <path>
+```
+
+Loads the file back into the S15 ring (oldest → newest, capped at
+500 entries). Bad lines are skipped with a warn log; replay does
+not start any watchers.
+
 ## What it doesn't do
 
-- **No history.** WebSocket subscriptions only deliver messages
-  sent *after* the subscription opens. There's no "tail since
-  T-30s" — start the sub before the publisher does.
+- **No live "tail since T-30s".** WebSocket subscriptions only
+  deliver messages sent *after* the subscription opens — start the
+  sub before the publisher does. (Past sessions can be loaded via
+  `:pubsub-replay`; live ones cannot be rewound.)
 - **No write side.** Sending PSS / GSOC requires a stamp + private
   key, both outside the cockpit's current write surface. Use
   bee-cli or a dApp for that.
 - **No `--once` mode.** A live tail doesn't fit one-shot exit
   semantics; if you want to gate on "did this topic see N
   messages in T seconds", script it with a separate tool.
-- **No filter / search.** The full timeline scrolls; `c` clears
-  it. A search/filter overlay is an obvious follow-up if
-  operators ask for one.

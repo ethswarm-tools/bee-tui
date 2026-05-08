@@ -304,6 +304,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
         "pubsub-filter-clear",
         "remove the active S15 substring filter",
     ),
+    (
+        "pubsub-replay",
+        "<path> — load a pubsub history JSONL into the S15 timeline",
+    ),
     ("watchlist", "S13 Watchlist — durability-check history"),
     (
         "hash",
@@ -417,13 +421,17 @@ impl App {
         // fatal — the live tail keeps working without persistence —
         // so we log a warning and keep going.
         let pubsub_history = match config.pubsub.history_file.as_deref() {
-            Some(path) => match crate::pubsub::open_history_writer(path).await {
-                Ok(w) => w,
-                Err(e) => {
-                    tracing::warn!(target: "bee_tui::pubsub", "history file disabled: {e}");
-                    None
+            Some(path) => {
+                let rotate_bytes = config.pubsub.rotate_size_mb.saturating_mul(1024 * 1024);
+                let keep = config.pubsub.keep_files;
+                match crate::pubsub::open_history_writer(path, rotate_bytes, keep).await {
+                    Ok(w) => w,
+                    Err(e) => {
+                        tracing::warn!(target: "bee_tui::pubsub", "history file disabled: {e}");
+                        None
+                    }
                 }
-            },
+            }
             None => None,
         };
         // Install the theme first so any tracing emitted during the
@@ -1111,6 +1119,9 @@ impl App {
             "pubsub-filter-clear" => {
                 self.command_status = Some(self.run_pubsub_filter_clear());
             }
+            "pubsub-replay" => {
+                self.command_status = Some(self.run_pubsub_replay(trimmed));
+            }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
@@ -1146,7 +1157,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :feed-probe, :feed-timeline, :watch-ref, :watch-ref-stop, :pubsub-pss, :pubsub-gsoc, :pubsub-stop, :pubsub-filter, :pubsub-filter-clear, :grantees-list, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :feed-probe, :feed-timeline, :watch-ref, :watch-ref-stop, :pubsub-pss, :pubsub-gsoc, :pubsub-stop, :pubsub-filter, :pubsub-filter-clear, :pubsub-replay, :grantees-list, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
                 )));
             }
         }
@@ -2151,6 +2162,41 @@ impl App {
             }
         }
         CommandStatus::Info("pubsub-filter-clear: filter removed".into())
+    }
+
+    /// `:pubsub-replay <path>` — load a previously-written pubsub
+    /// history JSONL file and push its messages onto the S15 timeline
+    /// so the operator can browse a past session without an active
+    /// subscription. Caps at MAX_MESSAGES; bad lines are skipped with
+    /// a warn log. Replay does not start any watchers.
+    fn run_pubsub_replay(&mut self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let path_str = match parts.as_slice() {
+            [_, p, ..] => *p,
+            _ => return CommandStatus::Err("usage: :pubsub-replay <path>".into()),
+        };
+        let path = std::path::PathBuf::from(path_str);
+        self.jump_to_pubsub_screen();
+        let tx = self.pubsub_msg_tx.clone();
+        let status_tx = self.cmd_status_tx.clone();
+        tokio::spawn(async move {
+            match crate::pubsub::replay_history_file(&path).await {
+                Ok(msgs) => {
+                    let n = msgs.len();
+                    // Push oldest → newest so record() ends with newest at front.
+                    for m in msgs {
+                        let _ = tx.send(m);
+                    }
+                    let _ = status_tx.send(CommandStatus::Info(format!(
+                        "pubsub-replay: loaded {n} message(s)"
+                    )));
+                }
+                Err(e) => {
+                    let _ = status_tx.send(CommandStatus::Err(format!("pubsub-replay: {e}")));
+                }
+            }
+        });
+        CommandStatus::Info(format!("pubsub-replay: loading {path_str}…"))
     }
 
     /// `:pss-target <overlay>` — Bee's `/pss/send` accepts at most a
