@@ -31,6 +31,7 @@ pub mod metrics;
 pub mod metrics_server;
 pub mod once;
 pub mod pprof_bundle;
+pub mod pubsub;
 pub mod stamp_preview;
 pub mod state;
 pub mod theme;

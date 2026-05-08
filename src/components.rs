@@ -16,6 +16,7 @@ pub mod manifest;
 pub mod network;
 pub mod peers;
 pub mod pins;
+pub mod pubsub;
 pub mod scroll;
 pub mod stamps;
 pub mod swap;

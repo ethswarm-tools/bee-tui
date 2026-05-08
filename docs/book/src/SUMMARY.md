@@ -22,6 +22,7 @@
 - [S10 — Command log](./screens/s10-log.md)
 - [S11 — Pins](./screens/s11-pins.md)
 - [S14 — Feed Timeline](./screens/s14-feed-timeline.md)
+- [S15 — Pubsub watch](./screens/s15-pubsub.md)
 
 # Commands
 
@@ -36,6 +37,7 @@
 - [`:feed-probe`](./commands/feed-probe.md)
 - [`:feed-timeline`](./screens/s14-feed-timeline.md)
 - [`:watch-ref` daemon mode](./commands/watch-ref.md)
+- [`:pubsub-pss` / `:pubsub-gsoc`](./screens/s15-pubsub.md)
 - [`:context` (multi-node)](./commands/context.md)
 
 # Reference

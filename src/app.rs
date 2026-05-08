@@ -25,6 +25,7 @@ use crate::{
         network::Network,
         peers::Peers,
         pins::Pins,
+        pubsub::Pubsub,
         stamps::Stamps,
         swap::Swap,
         tags::Tags,
@@ -134,6 +135,15 @@ pub struct App {
     /// entry owns a `CancellationToken` whose `cancel()` stops the
     /// daemon's tokio task on the next iteration boundary.
     watch_refs: std::collections::HashMap<String, CancellationToken>,
+    /// Active pubsub subscriptions (PSS / GSOC) keyed by sub-id.
+    /// Each entry's `CancellationToken` stops both the websocket
+    /// recv loop and the forwarding task that pushes messages onto
+    /// `pubsub_msg_tx`.
+    pubsub_subs: std::collections::HashMap<String, CancellationToken>,
+    /// Async-message channel feeding the S15 Pubsub screen with
+    /// every PSS / GSOC frame the active subscriptions deliver.
+    pubsub_msg_tx: mpsc::UnboundedSender<crate::pubsub::PubsubMessage>,
+    pubsub_msg_rx: mpsc::UnboundedReceiver<crate::pubsub::PubsubMessage>,
     /// Per-gate transition tracker for the optional webhook alerter.
     /// On every Tick we feed it the latest gates; it returns the
     /// transitions worth pinging on (debounced per-gate). When
@@ -180,6 +190,7 @@ const SCREEN_NAMES: &[&str] = &[
     "Manifest",
     "Watchlist",
     "FeedTimeline",
+    "Pubsub",
 ];
 
 /// Catalog of every `:command` verb with a short description. Drives
@@ -264,6 +275,18 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     (
         "watch-ref-stop",
         "[ref] — stop one :watch-ref daemon (or all if no arg)",
+    ),
+    (
+        "pubsub-pss",
+        "<topic> — subscribe to PSS messages on a topic, surface in S15",
+    ),
+    (
+        "pubsub-gsoc",
+        "<owner> <identifier> — subscribe to a GSOC SOC, surface in S15",
+    ),
+    (
+        "pubsub-stop",
+        "[sub-id] — stop one pubsub subscription (or all if no arg)",
     ),
     ("watchlist", "S13 Watchlist — durability-check history"),
     (
@@ -371,6 +394,7 @@ impl App {
         let (cmd_status_tx, cmd_status_rx) = mpsc::unbounded_channel();
         let (durability_tx, durability_rx) = mpsc::unbounded_channel();
         let (feed_timeline_tx, feed_timeline_rx) = mpsc::unbounded_channel();
+        let (pubsub_msg_tx, pubsub_msg_rx) = mpsc::unbounded_channel();
         let config = Config::new()?;
         // Install the theme first so any tracing emitted during the
         // rest of `new` already reflects the operator's choice.
@@ -546,6 +570,9 @@ impl App {
             feed_timeline_tx,
             feed_timeline_rx,
             watch_refs: std::collections::HashMap::new(),
+            pubsub_subs: std::collections::HashMap::new(),
+            pubsub_msg_tx,
+            pubsub_msg_rx,
             alert_state: crate::alerts::AlertState::new(config_alerts_debounce),
         })
     }
@@ -1035,6 +1062,15 @@ impl App {
             "watch-ref-stop" => {
                 self.command_status = Some(self.run_watch_ref_stop(trimmed));
             }
+            "pubsub-pss" => {
+                self.command_status = Some(self.run_pubsub_pss(trimmed));
+            }
+            "pubsub-gsoc" => {
+                self.command_status = Some(self.run_pubsub_gsoc(trimmed));
+            }
+            "pubsub-stop" => {
+                self.command_status = Some(self.run_pubsub_stop(trimmed));
+            }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
@@ -1070,7 +1106,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :feed-probe, :feed-timeline, :watch-ref, :watch-ref-stop, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :feed-probe, :feed-timeline, :watch-ref, :watch-ref-stop, :pubsub-pss, :pubsub-gsoc, :pubsub-stop, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
                 )));
             }
         }
@@ -1843,6 +1879,126 @@ impl App {
         }
     }
 
+    /// `:pubsub-pss <topic>` — open a PSS subscription on `<topic>`
+    /// and surface every received message on the S15 Pubsub screen.
+    /// Topic accepts the same forms as `:feed-probe`: 64-hex literal
+    /// or arbitrary string (keccak256-hashed via
+    /// `Topic::from_string`). Re-issuing for an already-watched
+    /// topic refuses with a clear error so duplicate sockets don't
+    /// silently pile up — operator must `:pubsub-stop <sub-id>` first.
+    fn run_pubsub_pss(&mut self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let topic_str = match parts.as_slice() {
+            [_, t, ..] => *t,
+            _ => return CommandStatus::Err("usage: :pubsub-pss <topic>".into()),
+        };
+        // Reuse :feed-probe's topic parser (string OR 64-hex literal).
+        let parsed = match crate::feed_probe::parse_args(
+            "0x0000000000000000000000000000000000000000",
+            topic_str,
+        ) {
+            Ok(p) => p,
+            Err(e) => return CommandStatus::Err(format!("pubsub-pss: {e}")),
+        };
+        let topic = parsed.topic;
+        let sub_id = crate::pubsub::pss_sub_id(&topic);
+        if self.pubsub_subs.contains_key(&sub_id) {
+            return CommandStatus::Err(format!(
+                "pubsub-pss: already subscribed to {sub_id} (use :pubsub-stop {sub_id} first)"
+            ));
+        }
+        let cancel = self.root_cancel.child_token();
+        self.pubsub_subs.insert(sub_id.clone(), cancel.clone());
+        self.jump_to_pubsub_screen();
+        let api = self.api.clone();
+        let tx = self.pubsub_msg_tx.clone();
+        let status_tx = self.cmd_status_tx.clone();
+        let sub_id_for_task = sub_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::pubsub::spawn_pss_watcher(api, topic, cancel, tx).await {
+                let _ = status_tx.send(CommandStatus::Err(format!(
+                    "pubsub-pss {sub_id_for_task}: {e}"
+                )));
+            }
+        });
+        CommandStatus::Info(format!("pubsub-pss subscribed: {sub_id}"))
+    }
+
+    /// `:pubsub-gsoc <owner> <identifier>` — open a GSOC subscription
+    /// on the SOC keyed by `(owner, identifier)`. Both args accept
+    /// `0x`-prefixed or bare hex (40 chars for owner, 64 chars for
+    /// identifier).
+    fn run_pubsub_gsoc(&mut self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (owner_str, id_str) = match parts.as_slice() {
+            [_, o, i, ..] => (*o, *i),
+            _ => return CommandStatus::Err("usage: :pubsub-gsoc <owner> <identifier>".into()),
+        };
+        let owner = match bee::swarm::EthAddress::from_hex(owner_str.trim()) {
+            Ok(o) => o,
+            Err(e) => return CommandStatus::Err(format!("pubsub-gsoc: bad owner: {e}")),
+        };
+        let identifier = match bee::swarm::Identifier::from_hex(id_str.trim()) {
+            Ok(i) => i,
+            Err(e) => return CommandStatus::Err(format!("pubsub-gsoc: bad identifier: {e}")),
+        };
+        let sub_id = crate::pubsub::gsoc_sub_id(&owner, &identifier);
+        if self.pubsub_subs.contains_key(&sub_id) {
+            return CommandStatus::Err(format!(
+                "pubsub-gsoc: already subscribed to {sub_id} (use :pubsub-stop first)"
+            ));
+        }
+        let cancel = self.root_cancel.child_token();
+        self.pubsub_subs.insert(sub_id.clone(), cancel.clone());
+        self.jump_to_pubsub_screen();
+        let api = self.api.clone();
+        let tx = self.pubsub_msg_tx.clone();
+        let status_tx = self.cmd_status_tx.clone();
+        let sub_id_for_task = sub_id.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                crate::pubsub::spawn_gsoc_watcher(api, owner, identifier, cancel, tx).await
+            {
+                let _ = status_tx.send(CommandStatus::Err(format!(
+                    "pubsub-gsoc {sub_id_for_task}: {e}"
+                )));
+            }
+        });
+        CommandStatus::Info(format!("pubsub-gsoc subscribed: {sub_id}"))
+    }
+
+    /// `:pubsub-stop [sub-id]` — cancel pubsub subscriptions. With
+    /// no arg, cancels every active subscription; with a `<sub-id>`
+    /// arg (`pss:...` or `gsoc:...`), cancels just that one.
+    fn run_pubsub_stop(&mut self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        match parts.as_slice() {
+            [_] => {
+                let n = self.pubsub_subs.len();
+                for (_, c) in self.pubsub_subs.drain() {
+                    c.cancel();
+                }
+                CommandStatus::Info(format!("pubsub-stop: cancelled {n} subscription(s)"))
+            }
+            [_, id, ..] => match self.pubsub_subs.remove(*id) {
+                Some(c) => {
+                    c.cancel();
+                    CommandStatus::Info(format!("pubsub-stop: cancelled {id}"))
+                }
+                None => CommandStatus::Err(format!("pubsub-stop: no active subscription {id}")),
+            },
+            _ => CommandStatus::Err("usage: :pubsub-stop [sub-id]".into()),
+        }
+    }
+
+    /// Helper used by :pubsub-pss / :pubsub-gsoc to jump to S15 so
+    /// the operator sees their incoming messages immediately.
+    fn jump_to_pubsub_screen(&mut self) {
+        if let Some(idx) = SCREEN_NAMES.iter().position(|n| *n == "Pubsub") {
+            self.current_screen = idx;
+        }
+    }
+
     /// `:pss-target <overlay>` — Bee's `/pss/send` accepts at most a
     /// 4-hex-char target prefix. This verb extracts those four chars
     /// from a full overlay so dApp authors don't have to re-derive
@@ -2508,6 +2664,26 @@ impl App {
                             }
                         }
                     }
+                    // Drain pubsub messages into S15 + sync the
+                    // active-subs count so the header reflects
+                    // start/stop verb activity even on a quiet topic.
+                    let mut buffered: Vec<crate::pubsub::PubsubMessage> = Vec::new();
+                    while let Ok(msg) = self.pubsub_msg_rx.try_recv() {
+                        buffered.push(msg);
+                    }
+                    if let Some(idx) = SCREEN_NAMES.iter().position(|n| *n == "Pubsub") {
+                        if let Some(ps) = self
+                            .screens
+                            .get_mut(idx)
+                            .and_then(|s| s.as_any_mut())
+                            .and_then(|a| a.downcast_mut::<Pubsub>())
+                        {
+                            for m in buffered {
+                                ps.record(m);
+                            }
+                            ps.set_active_count(self.pubsub_subs.len());
+                        }
+                    }
                     // Webhook health-gate alerts. Cheap when not
                     // configured (no clones, no work) — only computes
                     // gates and diffs when [alerts].webhook_url is set.
@@ -2977,6 +3153,15 @@ fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)
                 "load history (default 50)",
             ),
         ],
+        // 13: Pubsub watch — live PSS / GSOC tail.
+        13 => &[
+            ("↑↓ / j k", "move row selection"),
+            ("PgUp / PgDn", "jump 10 rows"),
+            ("c", "clear timeline"),
+            (":pubsub-pss <topic>", "subscribe to a PSS topic"),
+            (":pubsub-gsoc <owner> <id>", "subscribe to a GSOC SOC"),
+            (":pubsub-stop [sub-id]", "stop one (or all) subscriptions"),
+        ],
         _ => &[],
     }
 }
@@ -3015,6 +3200,7 @@ fn build_screens(
     let manifest = Manifest::new(api.clone());
     let watchlist = Watchlist::new();
     let feed_timeline = FeedTimeline::new();
+    let pubsub_screen = Pubsub::new();
     vec![
         Box::new(health),
         Box::new(stamps),
@@ -3029,6 +3215,7 @@ fn build_screens(
         Box::new(manifest),
         Box::new(watchlist),
         Box::new(feed_timeline),
+        Box::new(pubsub_screen),
     ]
 }
 

@@ -67,6 +67,9 @@ target screen, but faster on a 10-screen carousel.
 | `:feed-timeline <owner> <topic> [N]` | [S14 — Feed Timeline](../screens/s14-feed-timeline.md) | Walk a feed's history (newest first), open S14 |
 | `:watch-ref <ref> [interval]` | [watch-ref](./watch-ref.md) | Re-run `:durability-check` on `<ref>` periodically (default 60 s) |
 | `:watch-ref-stop [ref]` | [watch-ref](./watch-ref.md) | Cancel one (or all) active `:watch-ref` daemons |
+| `:pubsub-pss <topic>` | [S15 — Pubsub](../screens/s15-pubsub.md) | Subscribe to a PSS topic, surface frames in S15 |
+| `:pubsub-gsoc <owner> <id>` | [S15 — Pubsub](../screens/s15-pubsub.md) | Subscribe to a GSOC SOC, surface frames in S15 |
+| `:pubsub-stop [sub-id]` | [S15 — Pubsub](../screens/s15-pubsub.md) | Cancel one (or all) active pubsub subscriptions |
 | `:context <name>` (alias `:ctx`) | [context](./context.md) | Switch to a different node profile from your config |
 | `:context` | [context](./context.md) | List configured profiles (no switch) |
 | `:quit` (alias `:q`) | — | Exit the cockpit |
@@ -122,4 +125,5 @@ works end-to-end).
 - [`:upload-collection`](./upload-collection.md)
 - [`:feed-probe`](./feed-probe.md)
 - [S14 — Feed Timeline](../screens/s14-feed-timeline.md)
+- [S15 — Pubsub watch](../screens/s15-pubsub.md)
 - [`:context`](./context.md)
