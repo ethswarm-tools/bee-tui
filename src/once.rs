@@ -36,6 +36,7 @@ use crate::config::Config;
 use crate::config_doctor;
 use crate::durability;
 use crate::economics_oracle;
+use crate::feed_probe;
 use crate::manifest_walker::{self, InspectResult};
 use crate::stamp_preview;
 use crate::utility_verbs;
@@ -139,6 +140,7 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         "durability-check" => once_durability_check(args).await,
         "upload-file" => once_upload_file(args).await,
         "upload-collection" => once_upload_collection(args).await,
+        "feed-probe" => once_feed_probe(args).await,
 
         // ---- Stamp-economics verbs (one-shot fetch of chain state +
         //      stamps list, then pure math).
@@ -157,7 +159,7 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         other => OnceResult::usage(
             other,
             format!(
-                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, price, basefee, inspect, durability-check, upload-file, upload-collection, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
+                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, price, basefee, inspect, durability-check, upload-file, upload-collection, feed-probe, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
             ),
         ),
     }
@@ -606,6 +608,43 @@ async fn once_upload_collection(args: &[String]) -> OnceResult {
         ),
         Err(e) => OnceResult::error("upload-collection", format!("upload failed: {e}")),
     }
+}
+
+/// `--once feed-probe <owner> <topic>` — fetch the latest update of
+/// a feed and emit `{ owner, topic, index, timestamp_unix, payload_bytes,
+/// reference }`. CI-friendly: a snapshot-publish workflow can poll a
+/// well-known feed and gate on its index advancing.
+async fn once_feed_probe(args: &[String]) -> OnceResult {
+    let (owner_str, topic_str) = match (args.first(), args.get(1)) {
+        (Some(o), Some(t)) => (o.as_str(), t.as_str()),
+        _ => {
+            return OnceResult::usage("feed-probe", "usage: --once feed-probe <owner> <topic>");
+        }
+    };
+    let parsed = match feed_probe::parse_args(owner_str, topic_str) {
+        Ok(p) => p,
+        Err(e) => return OnceResult::usage("feed-probe", e),
+    };
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let result = match feed_probe::probe(api, parsed).await {
+        Ok(r) => r,
+        Err(e) => return OnceResult::error("feed-probe", format!("feed-probe failed: {e}")),
+    };
+    let data = json!({
+        "owner": result.owner_hex,
+        "topic": result.topic_hex,
+        "topic_was_string": result.topic_was_string,
+        "topic_string": result.topic_string,
+        "index": result.index,
+        "index_next": result.index_next,
+        "timestamp_unix": result.timestamp_unix,
+        "payload_bytes": result.payload_bytes,
+        "reference": result.reference_hex,
+    });
+    OnceResult::ok_with_data("feed-probe", result.summary(), data)
 }
 
 /// `--once buy-preview <depth> <amount-plur>` — predict cost / TTL

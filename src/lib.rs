@@ -22,6 +22,7 @@ pub mod config_doctor;
 pub mod durability;
 pub mod economics_oracle;
 pub mod errors;
+pub mod feed_probe;
 pub mod log_capture;
 pub mod logging;
 pub mod manifest_walker;

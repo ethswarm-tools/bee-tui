@@ -32,6 +32,7 @@
 - [`:probe-upload`](./commands/probe-upload.md)
 - [`:upload-file`](./commands/upload-file.md)
 - [`:upload-collection`](./commands/upload-collection.md)
+- [`:feed-probe`](./commands/feed-probe.md)
 - [`:context` (multi-node)](./commands/context.md)
 
 # Reference

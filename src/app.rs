@@ -218,6 +218,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
         "<dir> <batch> — recursive directory upload, return Swarm ref",
     ),
     (
+        "feed-probe",
+        "<owner> <topic> — latest update for a feed (read-only lookup)",
+    ),
+    (
         "manifest",
         "<ref> — open Mantaray tree browser at a reference",
     ),
@@ -959,6 +963,9 @@ impl App {
             "upload-collection" => {
                 self.command_status = Some(self.run_upload_collection(trimmed));
             }
+            "feed-probe" => {
+                self.command_status = Some(self.run_feed_probe(trimmed));
+            }
             "hash" => {
                 self.command_status = Some(self.run_hash(trimmed));
             }
@@ -1018,7 +1025,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :upload-collection, :feed-probe, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
                 )));
             }
         }
@@ -1371,6 +1378,46 @@ impl App {
             .unwrap_or_default();
         CommandStatus::Info(format!(
             "upload-collection {entry_count} files ({total_bytes}B){idx_note} to batch {batch_short} in flight — result will replace this line"
+        ))
+    }
+
+    /// `:feed-probe <owner> <topic>` — fetch the latest update of a
+    /// feed and surface its index, timestamp, and (when the payload
+    /// is reference-shaped) the embedded Swarm reference. Async via
+    /// `cmd_status_tx` because /feeds lookups can take 30-60s on a
+    /// fresh feed (Bee's first lookup walks epoch indices).
+    fn run_feed_probe(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (owner_str, topic_str) = match parts.as_slice() {
+            [_, o, t, ..] => (*o, *t),
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :feed-probe <owner> <topic>  (topic = 64-hex or arbitrary string)"
+                        .into(),
+                );
+            }
+        };
+        let parsed = match crate::feed_probe::parse_args(owner_str, topic_str) {
+            Ok(p) => p,
+            Err(e) => return CommandStatus::Err(e),
+        };
+        let owner_short = short_hex(&parsed.owner.to_hex(), 8);
+        let api = self.api.clone();
+        let tx = self.cmd_status_tx.clone();
+        tokio::spawn(async move {
+            let started = Instant::now();
+            let status = match crate::feed_probe::probe(api, parsed).await {
+                Ok(r) => CommandStatus::Info(format!(
+                    "{} ({}ms)",
+                    r.summary(),
+                    started.elapsed().as_millis()
+                )),
+                Err(e) => CommandStatus::Err(format!("feed-probe failed: {e}")),
+            };
+            let _ = tx.send(status);
+        });
+        CommandStatus::Info(format!(
+            "feed-probe owner={owner_short} in flight — result will replace this line (first lookup can take 30-60s)"
         ))
     }
 

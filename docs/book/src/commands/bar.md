@@ -63,6 +63,7 @@ target screen, but faster on a 10-screen carousel.
 | `:probe-upload <batch>` | [probe-upload](./probe-upload.md) | Upload one synthetic 4 KiB chunk; report end-to-end latency |
 | `:upload-file <path> <batch>` | [upload-file](./upload-file.md) | Upload a single local file via `POST /bzz`, return Swarm reference |
 | `:upload-collection <dir> <batch>` | [upload-collection](./upload-collection.md) | Recursive directory upload as a Swarm collection (tar `POST /bzz`); auto-detects `index.html` |
+| `:feed-probe <owner> <topic>` | [feed-probe](./feed-probe.md) | Latest update for a feed (read-only lookup) |
 | `:context <name>` (alias `:ctx`) | [context](./context.md) | Switch to a different node profile from your config |
 | `:context` | [context](./context.md) | List configured profiles (no switch) |
 | `:quit` (alias `:q`) | — | Exit the cockpit |
@@ -116,4 +117,5 @@ works end-to-end).
 - [`:probe-upload`](./probe-upload.md)
 - [`:upload-file`](./upload-file.md)
 - [`:upload-collection`](./upload-collection.md)
+- [`:feed-probe`](./feed-probe.md)
 - [`:context`](./context.md)
