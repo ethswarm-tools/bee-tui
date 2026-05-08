@@ -71,10 +71,11 @@ screen-specific keys.
 | Key | Effect |
 |---|---|
 | `↑↓` / `j k` | Move cursor through the Mantaray tree |
-| `↵` | Expand / load the cursored fork |
-| `Esc` | Collapse the cursored fork |
-| `c` | Copy the reference under the cursor to the `selected:` line |
-| `p` | Print `/bzz/<root>/<path>` to the log pane |
+| `↵` | Toggle expand / load the cursored fork (lazy fetch) |
+
+The cursored row's reference (target hex, or fork self-address)
+is rendered on a `selected:` detail line above the footer for
+terminal-native click-drag copy — there's no explicit copy key.
 
 ### S13 — Watchlist
 

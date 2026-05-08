@@ -21,6 +21,8 @@
 - [S9 — Tags / uploads](./screens/s9-tags.md)
 - [S10 — Command log pane](./screens/s10-log.md)
 - [S11 — Pins](./screens/s11-pins.md)
+- [S12 — Manifests](./screens/s12-manifests.md)
+- [S13 — Durability Watchlist](./screens/s13-watchlist.md)
 - [S14 — Feed Timeline](./screens/s14-feed-timeline.md)
 - [S15 — Pubsub watch](./screens/s15-pubsub.md)
 
@@ -37,6 +39,7 @@
 - [`:feed-probe`](./commands/feed-probe.md)
 - [`:watch-ref` daemon mode](./commands/watch-ref.md)
 - [`:context` (multi-node)](./commands/context.md)
+- [`--once` CI mode](./commands/once.md)
 
 # Reference
 
