@@ -37,7 +37,7 @@ use crate::{
     state::State,
     theme,
     tui::{Event, Tui},
-    utility_verbs,
+    utility_verbs, version_check,
     watch::{BeeWatch, HealthSnapshot, RefreshProfile},
 };
 
@@ -184,6 +184,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     (
         "plan-batch",
         "<batch> [usage-thr] [ttl-thr] [extra-depth] — unified topup+dilute plan",
+    ),
+    (
+        "check-version",
+        "compare running Bee version with GitHub's latest release",
     ),
     (
         "probe-upload",
@@ -883,6 +887,9 @@ impl App {
             "plan-batch" => {
                 self.command_status = Some(self.run_plan_batch(trimmed));
             }
+            "check-version" => {
+                self.command_status = Some(self.run_check_version());
+            }
             "probe-upload" => {
                 self.command_status = Some(self.run_probe_upload(trimmed));
             }
@@ -1336,6 +1343,33 @@ impl App {
             Ok(prefix) => CommandStatus::Info(format!("pss target prefix: {prefix}")),
             Err(e) => CommandStatus::Err(format!("pss-target failed: {e}")),
         }
+    }
+
+    /// `:check-version` — fire a GitHub `releases/latest` lookup for
+    /// `ethersphere/bee` and pair the result with the version the
+    /// local Bee reported on `/health`. Both fetches happen in the
+    /// spawned task (`/health` for the running version, GitHub for
+    /// the latest); the watch hub's `HealthSnapshot` carries
+    /// `/status` data, not the structured Bee version, so we hit
+    /// `/health` explicitly here.
+    fn run_check_version(&self) -> CommandStatus {
+        let api = self.api.clone();
+        let tx = self.cmd_status_tx.clone();
+        tokio::spawn(async move {
+            let running = api
+                .bee()
+                .debug()
+                .health()
+                .await
+                .ok()
+                .map(|h| h.version);
+            let status = match version_check::check_latest(running).await {
+                Ok(v) => CommandStatus::Info(v.summary()),
+                Err(e) => CommandStatus::Err(format!("check-version failed: {e}")),
+            };
+            let _ = tx.send(status);
+        });
+        CommandStatus::Info("check-version: querying github.com/ethersphere/bee…".into())
     }
 
     /// `:plan-batch <batch-prefix> [usage-thr] [ttl-thr] [extra-depth]` —

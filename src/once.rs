@@ -37,6 +37,7 @@ use crate::durability;
 use crate::manifest_walker::{self, InspectResult};
 use crate::stamp_preview;
 use crate::utility_verbs;
+use crate::version_check;
 
 /// Top-level result that's printed (as text or JSON) and converted to
 /// an exit code.
@@ -143,12 +144,13 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         "dilute-preview" => once_dilute_preview(args).await,
         "extend-preview" => once_extend_preview(args).await,
         "plan-batch" => once_plan_batch(args).await,
+        "check-version" => once_check_version().await,
 
         // ---- Catch-all. --------------------------------------------
         other => OnceResult::usage(
             other,
             format!(
-                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, inspect, durability-check, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
+                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, inspect, durability-check, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
             ),
         ),
     }
@@ -622,6 +624,41 @@ async fn once_extend_preview(args: &[String]) -> OnceResult {
             }),
         ),
         Err(e) => OnceResult::error("extend-preview", e),
+    }
+}
+
+/// `--once check-version` — pair the running Bee's `/health.version`
+/// with GitHub's `releases/latest` for `ethersphere/bee`. Exits `1`
+/// when version drift is detected so a CI job can gate on
+/// "this node has fallen behind upstream".
+async fn once_check_version() -> OnceResult {
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let running = api
+        .bee()
+        .debug()
+        .health()
+        .await
+        .ok()
+        .map(|h| h.version);
+    match version_check::check_latest(running).await {
+        Ok(v) => {
+            let data = json!({
+                "running": v.running,
+                "latest_tag": v.latest_tag,
+                "latest_published_at": v.latest_published_at,
+                "latest_html_url": v.latest_html_url,
+                "drift_detected": v.drift_detected,
+            });
+            if v.drift_detected {
+                OnceResult::unhealthy("check-version", v.summary(), data)
+            } else {
+                OnceResult::ok_with_data("check-version", v.summary(), data)
+            }
+        }
+        Err(e) => OnceResult::error("check-version", e),
     }
 }
 
