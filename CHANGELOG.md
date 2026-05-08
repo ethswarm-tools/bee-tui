@@ -11,6 +11,51 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.8.0] - 2026-05-08
+
+The "polish + read-side ACT" release. Three small features
+extend the v1.7 surfaces — pubsub gets a filter and an optional
+JSONL history-file writer; ACT grantee lists become readable from
+the cockpit (cockpit + `--once`).
+
+### Added — uploads / ACT
+
+- **`:grantees-list <ref>`** — read-only `GET /grantee/{ref}`
+  fetch. Cockpit shows `count` + first 3 grantee public keys
+  (with truncation suffix); `--once grantees-list` emits the full
+  array as JSON for CI pipelines that want to assert a known
+  builder is still on the list before treating an upload as
+  published. The read-side foundation for a future S16 ACT
+  Grantees screen with create / patch.
+
+### Added — pubsub polish
+
+- **`[pubsub].history_file`** — opt-in JSONL writer that
+  appends every delivered PSS / GSOC frame to a file as it
+  arrives. Off by default (no surprise disk writes); when set,
+  the file is opened with mode `0600` so payloads aren't
+  world-readable on multi-user hosts. Each line is one JSON
+  object with `received_unix`, `kind`, `channel`, `size`, and
+  `payload_hex`. Useful for offline analysis of overnight
+  subscriptions.
+- **`:pubsub-filter <substring>`** + **`:pubsub-filter-clear`** —
+  case-insensitive substring filter on the S15 timeline. Matches
+  against channel hex or smart-preview content; the underlying
+  ring still receives every message (filtering is
+  presentation-only) so clearing the filter restores the full
+  history.
+
+### Internals
+
+- New `[pubsub]` config section + `crate::pubsub::HistoryWriter` /
+  `open_history_writer` / `append_history` plumbing. Watchers
+  serialise their appends through a shared `tokio::sync::Mutex`
+  so JSONL stays well-formed under concurrent delivery.
+- New `Pubsub::matches_filter` (pure, 4 unit tests) + the screen
+  pre-collects filtered rows before render so the cursor lines
+  up with what's actually visible.
+- 411 lib tests + integration suite passing.
+
 ## [1.7.0] - 2026-05-08
 
 The "pubsub + cross-check" release. Two features land: pubsub
