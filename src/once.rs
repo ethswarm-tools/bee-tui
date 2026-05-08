@@ -33,6 +33,7 @@ use serde_json::{Value, json};
 
 use crate::api::ApiClient;
 use crate::config::Config;
+use crate::config_doctor;
 use crate::durability;
 use crate::manifest_walker::{self, InspectResult};
 use crate::stamp_preview;
@@ -145,12 +146,13 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         "extend-preview" => once_extend_preview(args).await,
         "plan-batch" => once_plan_batch(args).await,
         "check-version" => once_check_version().await,
+        "config-doctor" => once_config_doctor(args),
 
         // ---- Catch-all. --------------------------------------------
         other => OnceResult::usage(
             other,
             format!(
-                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, inspect, durability-check, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
+                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, inspect, durability-check, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
             ),
         ),
     }
@@ -624,6 +626,39 @@ async fn once_extend_preview(args: &[String]) -> OnceResult {
             }),
         ),
         Err(e) => OnceResult::error("extend-preview", e),
+    }
+}
+
+/// `--once config-doctor [path]` — audit a bee.yaml for deprecated
+/// keys. With `[path]` argument explicit; without it, falls back to
+/// the active node profile's `[bee].config` from bee-tui's
+/// config.toml. Read-only. Exits `1` when any finding fires.
+fn once_config_doctor(args: &[String]) -> OnceResult {
+    let path: std::path::PathBuf = match args.first() {
+        Some(p) => std::path::PathBuf::from(p),
+        None => match Config::new().ok().and_then(|c| c.bee.map(|b| b.config)) {
+            Some(p) => p,
+            None => {
+                return OnceResult::usage(
+                    "config-doctor",
+                    "usage: --once config-doctor <path-to-bee.yaml>  (or set [bee].config in bee-tui's config.toml)",
+                );
+            }
+        },
+    };
+    let report = match config_doctor::audit(&path) {
+        Ok(r) => r,
+        Err(e) => return OnceResult::error("config-doctor", e),
+    };
+    let data = json!({
+        "config_path": report.config_path.display().to_string(),
+        "findings": report.findings.len(),
+        "report": report.render(),
+    });
+    if report.is_clean() {
+        OnceResult::ok_with_data("config-doctor", report.summary(), data)
+    } else {
+        OnceResult::unhealthy("config-doctor", report.summary(), data)
     }
 }
 

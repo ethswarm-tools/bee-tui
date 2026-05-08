@@ -31,7 +31,7 @@ use crate::{
         watchlist::Watchlist,
     },
     config::Config,
-    durability, log_capture,
+    config_doctor, durability, log_capture,
     manifest_walker::{self, InspectResult},
     pprof_bundle, stamp_preview,
     state::State,
@@ -188,6 +188,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     (
         "check-version",
         "compare running Bee version with GitHub's latest release",
+    ),
+    (
+        "config-doctor",
+        "audit bee.yaml for deprecated keys (read-only, never modifies)",
     ),
     (
         "probe-upload",
@@ -890,6 +894,9 @@ impl App {
             "check-version" => {
                 self.command_status = Some(self.run_check_version());
             }
+            "config-doctor" => {
+                self.command_status = Some(self.run_config_doctor());
+            }
             "probe-upload" => {
                 self.command_status = Some(self.run_probe_upload(trimmed));
             }
@@ -1343,6 +1350,45 @@ impl App {
             Ok(prefix) => CommandStatus::Info(format!("pss target prefix: {prefix}")),
             Err(e) => CommandStatus::Err(format!("pss-target failed: {e}")),
         }
+    }
+
+    /// `:config-doctor` — audit the operator's `bee.yaml` against
+    /// the deprecation list ported from swarm-desktop's
+    /// `migration.ts`. Read-only — the cockpit never modifies the
+    /// operator's config. Report lands as a temp file the operator
+    /// can review and apply by hand.
+    fn run_config_doctor(&self) -> CommandStatus {
+        let path = match self
+            .config
+            .bee
+            .as_ref()
+            .map(|b| b.config.clone())
+        {
+            Some(p) => p,
+            None => {
+                return CommandStatus::Err(
+                    "config-doctor: no [bee].config in config.toml (or pass --bee-config) — point bee-tui at the bee.yaml you want audited"
+                        .into(),
+                );
+            }
+        };
+        let report = match config_doctor::audit(&path) {
+            Ok(r) => r,
+            Err(e) => return CommandStatus::Err(format!("config-doctor: {e}")),
+        };
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let out_path = std::env::temp_dir().join(format!("bee-tui-config-doctor-{secs}.txt"));
+        if let Err(e) = std::fs::write(&out_path, report.render()) {
+            return CommandStatus::Err(format!("config-doctor write {}: {e}", out_path.display()));
+        }
+        CommandStatus::Info(format!(
+            "{} → {}",
+            report.summary(),
+            out_path.display()
+        ))
     }
 
     /// `:check-version` — fire a GitHub `releases/latest` lookup for
