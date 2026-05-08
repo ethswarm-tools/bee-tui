@@ -20,6 +20,7 @@ pub mod config;
 pub mod errors;
 pub mod log_capture;
 pub mod logging;
+pub mod manifest_walker;
 pub mod metrics;
 pub mod metrics_server;
 pub mod stamp_preview;

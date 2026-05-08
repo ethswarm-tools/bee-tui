@@ -11,6 +11,7 @@ pub mod api_health;
 pub mod health;
 pub mod log_pane;
 pub mod lottery;
+pub mod manifest;
 pub mod network;
 pub mod peers;
 pub mod pins;
@@ -131,4 +132,12 @@ pub trait Component {
     ///
     /// * [`color_eyre::Result<()>`] - An Ok result or an error.
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()>;
+
+    /// Downcast hook so the App can reach a concrete screen type
+    /// (e.g. to call `Manifest::load(reference)` from the command bar).
+    /// Default returns `None` so screens that don't need it can ignore
+    /// this method.
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        None
+    }
 }

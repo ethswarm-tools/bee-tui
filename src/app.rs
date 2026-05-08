@@ -20,6 +20,7 @@ use crate::{
         health::{Gate, GateStatus, Health},
         log_pane::{BeeLogLine, LogPane, LogTab},
         lottery::Lottery,
+        manifest::Manifest,
         network::Network,
         peers::Peers,
         pins::Pins,
@@ -29,7 +30,9 @@ use crate::{
         warmup::Warmup,
     },
     config::Config,
-    log_capture, stamp_preview,
+    log_capture,
+    manifest_walker::{self, InspectResult},
+    stamp_preview,
     state::State,
     theme,
     tui::{Event, Tui},
@@ -130,7 +133,17 @@ pub enum CommandStatus {
 /// Names the top-level screens. Index matches position in
 /// [`App::screens`].
 const SCREEN_NAMES: &[&str] = &[
-    "Health", "Stamps", "Swap", "Lottery", "Peers", "Network", "Warmup", "API", "Tags", "Pins",
+    "Health",
+    "Stamps",
+    "Swap",
+    "Lottery",
+    "Peers",
+    "Network",
+    "Warmup",
+    "API",
+    "Tags",
+    "Pins",
+    "Manifest",
 ];
 
 /// Catalog of every `:command` verb with a short description. Drives
@@ -163,6 +176,8 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
         "probe-upload",
         "<batch> — single 4 KiB chunk, end-to-end probe",
     ),
+    ("manifest", "<ref> — open Mantaray tree browser at a reference"),
+    ("inspect", "<ref> — what is this? auto-detects manifest vs raw chunk"),
     ("hash", "<path> — Swarm reference of a local file/dir (offline)"),
     ("cid", "<ref> [manifest|feed] — encode reference as CID"),
     ("depth-table", "Print canonical depth → capacity table"),
@@ -836,6 +851,12 @@ impl App {
             "pss-target" => {
                 self.command_status = Some(self.run_pss_target(trimmed));
             }
+            "manifest" => {
+                self.command_status = Some(self.run_manifest(trimmed));
+            }
+            "inspect" => {
+                self.command_status = Some(self.run_inspect(trimmed));
+            }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
@@ -871,7 +892,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :probe-upload, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :probe-upload, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
                 )));
             }
         }
@@ -1113,6 +1134,85 @@ impl App {
             Ok(out) => CommandStatus::Info(out.replace('\n', " · ")),
             Err(e) => CommandStatus::Err(format!("gsoc-mine failed: {e}")),
         }
+    }
+
+    /// `:manifest <ref>` — fetch the chunk + open S12 with a tree
+    /// browser rooted on it. Async; the load lands on the screen via
+    /// its own mpsc fetch channel, not via `cmd_status_tx`.
+    fn run_manifest(&mut self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let ref_arg = match parts.as_slice() {
+            [_, r, ..] => *r,
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :manifest <ref>  (32-byte hex reference)".into(),
+                );
+            }
+        };
+        let reference = match bee::swarm::Reference::from_hex(ref_arg.trim()) {
+            Ok(r) => r,
+            Err(e) => return CommandStatus::Err(format!("manifest: bad ref: {e}")),
+        };
+        // Find the Manifest screen and ask it to load. Index lookup
+        // by SCREEN_NAMES so future re-orders don't bit-rot.
+        let idx = match SCREEN_NAMES.iter().position(|n| *n == "Manifest") {
+            Some(i) => i,
+            None => {
+                return CommandStatus::Err("internal: Manifest screen not registered".into());
+            }
+        };
+        let screen = self
+            .screens
+            .get_mut(idx)
+            .and_then(|s| s.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Manifest>());
+        let Some(manifest) = screen else {
+            return CommandStatus::Err("internal: failed to access Manifest screen".into());
+        };
+        manifest.load(reference);
+        self.current_screen = idx;
+        CommandStatus::Info(format!("loading manifest {}", short_hex(ref_arg, 8)))
+    }
+
+    /// `:inspect <ref>` — universal "what is this thing?" verb.
+    /// Fetches one chunk and tries `MantarayNode::unmarshal` to
+    /// distinguish manifest from raw. On manifest, jumps to S12 with
+    /// the tree opened; on raw, prints a one-line summary to the
+    /// command-status row. Result delivered via the async cmd-status
+    /// channel.
+    fn run_inspect(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let ref_arg = match parts.as_slice() {
+            [_, r, ..] => *r,
+            _ => {
+                return CommandStatus::Err("usage: :inspect <ref>  (32-byte hex reference)".into());
+            }
+        };
+        let reference = match bee::swarm::Reference::from_hex(ref_arg.trim()) {
+            Ok(r) => r,
+            Err(e) => return CommandStatus::Err(format!("inspect: bad ref: {e}")),
+        };
+        let api = self.api.clone();
+        let tx = self.cmd_status_tx.clone();
+        let label = short_hex(ref_arg, 8);
+        let label_for_task = label.clone();
+        tokio::spawn(async move {
+            let result = manifest_walker::inspect(api, reference).await;
+            let status = match result {
+                InspectResult::Manifest { node, bytes_len } => CommandStatus::Info(format!(
+                    "inspect {label_for_task}: manifest · {bytes_len} bytes · {} forks (jump to :manifest {label_for_task})",
+                    node.forks.len(),
+                )),
+                InspectResult::RawChunk { bytes_len } => CommandStatus::Info(format!(
+                    "inspect {label_for_task}: raw chunk · {bytes_len} bytes · not a manifest"
+                )),
+                InspectResult::Error(e) => {
+                    CommandStatus::Err(format!("inspect {label_for_task} failed: {e}"))
+                }
+            };
+            let _ = tx.send(status);
+        });
+        CommandStatus::Info(format!("inspecting {label} — result will replace this line"))
     }
 
     /// `:pss-target <overlay>` — Bee's `/pss/send` accepts at most a
@@ -1947,6 +2047,13 @@ fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)
             ("c", "integrity-check every unchecked pin"),
             ("s", "cycle sort: ref order / bad first / by size"),
         ],
+        // 10: Manifest — Mantaray tree browser.
+        10 => &[
+            ("↑↓ / j k", "move row selection"),
+            ("Enter", "expand / collapse fork (loads child chunk)"),
+            (":manifest <ref>", "open a manifest at a reference"),
+            (":inspect <ref>", "what is this? auto-detects manifest"),
+        ],
         _ => &[],
     }
 }
@@ -1975,6 +2082,7 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
     );
     let tags = Tags::new(watch.tags());
     let pins = Pins::new(api.clone(), watch.pins());
+    let manifest = Manifest::new(api.clone());
     vec![
         Box::new(health),
         Box::new(stamps),
@@ -1986,6 +2094,7 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
         Box::new(api_health),
         Box::new(tags),
         Box::new(pins),
+        Box::new(manifest),
     ]
 }
 
