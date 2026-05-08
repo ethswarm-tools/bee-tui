@@ -177,6 +177,10 @@ pub struct LogPane {
     /// non-zero, new entries arriving auto-bump the offset to keep
     /// the visible window stable. Reset to 0 on tab switch.
     scroll_offset: usize,
+    /// Horizontal scroll offset in characters. Bee log lines often
+    /// run past the pane width; this lets the operator pan right to
+    /// see the truncated tail. Reset on tab switch.
+    h_scroll_offset: u16,
 }
 
 impl LogPane {
@@ -189,6 +193,7 @@ impl LogPane {
             height: initial_height.clamp(LOG_PANE_MIN_HEIGHT, LOG_PANE_MAX_HEIGHT),
             spawn_active: false,
             scroll_offset: 0,
+            h_scroll_offset: 0,
         }
     }
 
@@ -215,6 +220,7 @@ impl LogPane {
         let i = (self.active_tab.index() + 1) % LogTab::ALL.len();
         self.active_tab = LogTab::from_index(i);
         self.scroll_offset = 0;
+        self.h_scroll_offset = 0;
         self.active_tab
     }
 
@@ -224,6 +230,7 @@ impl LogPane {
         let i = (self.active_tab.index() + len - 1) % len;
         self.active_tab = LogTab::from_index(i);
         self.scroll_offset = 0;
+        self.h_scroll_offset = 0;
         self.active_tab
     }
 
@@ -242,9 +249,39 @@ impl LogPane {
     }
 
     /// Snap back to auto-tail mode (scroll_offset = 0). The pane
-    /// resumes following new entries as they arrive.
+    /// resumes following new entries as they arrive. Also resets
+    /// horizontal pan because operators usually want both axes
+    /// reset together when "going back to live."
     pub fn resume_tail(&mut self) {
         self.scroll_offset = 0;
+        self.h_scroll_offset = 0;
+    }
+
+    /// Pan the active tab right by `cols` characters. Bee log lines
+    /// often run past the pane width; ratatui truncates them at the
+    /// right edge by default so we add a horizontal scroll to let
+    /// operators read the tail.
+    pub fn scroll_right(&mut self, cols: u16) {
+        self.h_scroll_offset = self.h_scroll_offset.saturating_add(cols);
+    }
+
+    /// Pan the active tab left by `cols` characters. Saturates at 0
+    /// (the natural left edge).
+    pub fn scroll_left(&mut self, cols: u16) {
+        self.h_scroll_offset = self.h_scroll_offset.saturating_sub(cols);
+    }
+
+    /// Reset horizontal pan to the left edge without touching the
+    /// vertical scroll. Used when operators want the line start
+    /// back without leaving the historical window.
+    pub fn reset_h_scroll(&mut self) {
+        self.h_scroll_offset = 0;
+    }
+
+    /// Current horizontal scroll offset. Exposed for tests + the
+    /// title-strip indicator.
+    pub fn h_scroll_offset(&self) -> u16 {
+        self.h_scroll_offset
     }
 
     /// `true` when the pane is auto-tailing (the default state).
@@ -348,6 +385,7 @@ impl Component for LogPane {
             active,
             &self.bee_buffers,
             self.scroll_offset,
+            self.h_scroll_offset,
             t,
         ));
         let inner = block.inner(area);
@@ -377,7 +415,16 @@ impl Component for LogPane {
             lines
         };
 
-        frame.render_widget(Paragraph::new(visible), content_area);
+        // Vertical position is already encoded by the visible
+        // window slice; use ratatui's scroll() for the horizontal
+        // axis only. (Mixing scroll() with our slice-windowed
+        // visible vec works because the slice is what we want to
+        // render — scroll() merely shifts each rendered line left
+        // by `h_scroll_offset` columns.)
+        frame.render_widget(
+            Paragraph::new(visible).scroll((0, self.h_scroll_offset)),
+            content_area,
+        );
         Ok(())
     }
 }
@@ -401,6 +448,7 @@ fn tab_title_line<'a>(
     active: LogTab,
     bufs: &BeeLogBuffers,
     scroll_offset: usize,
+    h_scroll_offset: u16,
     t: &theme::Theme,
 ) -> Line<'a> {
     let mut spans: Vec<Span> = Vec::with_capacity(LogTab::ALL.len() * 2 + 2);
@@ -429,6 +477,15 @@ fn tab_title_line<'a>(
     if scroll_offset > 0 {
         spans.push(Span::styled(
             format!(" paused {scroll_offset} ↑ "),
+            Style::default().fg(t.warn).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if h_scroll_offset > 0 {
+        // Sibling indicator to "paused N ↑" — surfaces horizontal
+        // pan state so an operator who walked away and came back
+        // sees why their log lines look chopped on the left.
+        spans.push(Span::styled(
+            format!(" → {h_scroll_offset} "),
             Style::default().fg(t.warn).add_modifier(Modifier::BOLD),
         ));
     }
@@ -796,5 +853,60 @@ mod tests {
     #[test]
     fn path_only_handles_root_only() {
         assert_eq!(path_only("http://localhost:1633"), "http://localhost:1633");
+    }
+
+    #[test]
+    fn h_scroll_starts_at_zero() {
+        let pane = LogPane::new(None, LogTab::SelfHttp, LOG_PANE_MIN_HEIGHT);
+        assert_eq!(pane.h_scroll_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_right_then_left_returns_to_zero() {
+        let mut pane = LogPane::new(None, LogTab::SelfHttp, LOG_PANE_MIN_HEIGHT);
+        pane.scroll_right(8);
+        pane.scroll_right(8);
+        assert_eq!(pane.h_scroll_offset(), 16);
+        pane.scroll_left(16);
+        assert_eq!(pane.h_scroll_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_left_saturates_at_zero() {
+        let mut pane = LogPane::new(None, LogTab::SelfHttp, LOG_PANE_MIN_HEIGHT);
+        pane.scroll_left(100);
+        assert_eq!(pane.h_scroll_offset(), 0);
+    }
+
+    #[test]
+    fn switching_tabs_resets_h_scroll() {
+        let mut pane = LogPane::new(None, LogTab::Errors, LOG_PANE_MIN_HEIGHT);
+        pane.scroll_right(40);
+        assert_eq!(pane.h_scroll_offset(), 40);
+        pane.next_tab();
+        assert_eq!(pane.h_scroll_offset(), 0);
+        pane.scroll_right(20);
+        pane.prev_tab();
+        assert_eq!(pane.h_scroll_offset(), 0);
+    }
+
+    #[test]
+    fn resume_tail_resets_both_axes() {
+        let mut pane = LogPane::new(None, LogTab::SelfHttp, LOG_PANE_MIN_HEIGHT);
+        pane.scroll_up(5);
+        pane.scroll_right(24);
+        pane.resume_tail();
+        assert_eq!(pane.scroll_offset(), 0);
+        assert_eq!(pane.h_scroll_offset(), 0);
+    }
+
+    #[test]
+    fn reset_h_scroll_only_touches_horizontal() {
+        let mut pane = LogPane::new(None, LogTab::SelfHttp, LOG_PANE_MIN_HEIGHT);
+        pane.scroll_up(7);
+        pane.scroll_right(16);
+        pane.reset_h_scroll();
+        assert_eq!(pane.scroll_offset(), 7);
+        assert_eq!(pane.h_scroll_offset(), 0);
     }
 }

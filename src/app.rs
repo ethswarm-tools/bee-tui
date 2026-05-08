@@ -538,6 +538,19 @@ impl App {
                     self.log_pane.resume_tail();
                     return Ok(());
                 }
+                // Horizontal pan for long Bee log lines. 8 chars per
+                // keystroke feels live without making the operator
+                // hold the key; `Shift+End` resets both axes via
+                // resume_tail() so there's no separate "back to
+                // left edge" binding.
+                crossterm::event::KeyCode::Left => {
+                    self.log_pane.scroll_left(8);
+                    return Ok(());
+                }
+                crossterm::event::KeyCode::Right => {
+                    self.log_pane.scroll_right(8);
+                    return Ok(());
+                }
                 _ => {}
             }
         }
@@ -1465,7 +1478,8 @@ fn draw_help_overlay(
         ("+ / -", "grow / shrink log pane"),
         ("Shift+↑/↓", "scroll log pane (1 line); pauses auto-tail"),
         ("Shift+PgUp/PgDn", "scroll log pane (10 lines)"),
-        ("Shift+End", "resume auto-tail"),
+        ("Shift+←/→", "pan log pane horizontally (8 cols)"),
+        ("Shift+End", "resume auto-tail + reset horizontal pan"),
         ("?", "toggle this help"),
         (":", "open command bar"),
         ("qq", "quit (double-tap; or :q)"),
