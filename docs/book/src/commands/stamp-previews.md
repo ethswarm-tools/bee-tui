@@ -11,12 +11,20 @@ fresh buy and need the BZZ cost / TTL impact ahead of time.
 | `:dilute-preview` | `<batch-prefix> <new-depth>` | new capacity, halved TTL, depth delta (cost is always 0 BZZ — dilute redistributes the existing balance) |
 | `:extend-preview` | `<batch-prefix> <duration>` | per-chunk PLUR + BZZ cost to gain that much TTL |
 | `:buy-preview` | `<depth> <amount-plur-per-chunk>` | TTL, capacity, and BZZ cost of a hypothetical fresh batch |
+| `:buy-suggest` | `<size> <duration>` | minimum `(depth, amount)` that covers the target — the inverse of `:buy-preview` |
 
 `<batch-prefix>` is the 8-character hex shown in the S2 table
 (trailing `…` is allowed; bee-tui strips it). Ambiguous prefixes
 print the matches and ask for a longer prefix.
 
 `<duration>` accepts `30d`, `12h`, `90m`, `45s`, or plain seconds.
+
+`<size>` (for `:buy-suggest`) accepts `5GiB`, `2TiB`, `512MiB`,
+`100MB`, `4096B`, or just plain bytes. Single-letter shorthands
+(`5G`, `2T`, `100M`, `4K`) default to **binary** (powers of two)
+because Bee batch capacities are always `2^depth × 4 KiB`. Decimal
+suffixes (`GB`, `MB`) get the SI 1000-based interpretation if you
+explicitly use them.
 
 `<amount-plur-per-chunk>` is the per-chunk PLUR amount — the same
 field stored on the batch. 1 BZZ = 10¹⁶ PLUR; for reference the
@@ -49,6 +57,20 @@ on a depth-20 batch).
   capacity 16.0 GiB, TTL 47d 12h, cost 41.9430 BZZ
 ```
 
+```text
+:buy-suggest 5GiB 30d
+→ buy-suggest 5.0 GiB / 30d  0h: depth=21 amount=518400000000 PLUR/chunk
+  → capacity 8.0 GiB, TTL 30d  0h, cost 21.7268 BZZ
+```
+
+`:buy-suggest` is the inverse of `:buy-preview`. Operators usually
+think *"I want 5 GiB for 30d"* — not *"depth=21, amount=5.18e11"*.
+The suggester rounds depth up to the next power of two (so the
+actual capacity is always ≥ your target, with the headroom shown
+verbatim) and rounds duration up in chain blocks (so actual TTL ≥
+your target). Pass the suggested numbers to the real `bee postage
+buy` / `swarm-cli stamp buy` if you want to execute.
+
 ## Why dry-run, not buy?
 
 bee-tui is **read-only by design** (PLAN principle 3). Previews
@@ -74,6 +96,11 @@ dilute(d → d+k):
   new_ttl    = old_ttl / 2^k
   new_cap    = capacity × 2^k
   cost       = 0
+
+buy-suggest (target_bytes, target_secs):
+  chunks_needed = ceil(target_bytes / 4096)
+  depth         = max(17, ceil(log2(chunks_needed)))   # round up; clamp to Bee minimum
+  amount        = ceil(target_secs / 5) × current_price # round up in blocks
 ```
 
 `current_price` comes from S1's `/chain-state` poll — if the

@@ -155,6 +155,41 @@ impl BuyPreview {
     }
 }
 
+/// Output of `:buy-suggest` — the inverse of `:buy-preview`.
+/// Operator supplies a *target* (size + duration); we return the
+/// minimum (depth, amount) that meets it. Capacity rounds *up* to
+/// the next power-of-two depth (Bee batches are sized in
+/// `2^depth × 4 KiB` increments) so the headroom is operator-
+/// visible. Amount is the per-chunk PLUR that buys at least the
+/// requested duration at the current chain price.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BuySuggestion {
+    pub target_bytes: u128,
+    pub target_seconds: i64,
+    pub depth: u8,
+    pub amount_plur: BigInt,
+    /// Actual capacity at the chosen depth (≥ `target_bytes`).
+    pub capacity_bytes: u128,
+    /// Actual TTL at the chosen amount (≥ `target_seconds`).
+    pub ttl_seconds: i64,
+    pub cost_bzz: f64,
+}
+
+impl BuySuggestion {
+    pub fn summary(&self) -> String {
+        format!(
+            "buy-suggest {} / {}: depth={} amount={} PLUR/chunk → capacity {}, TTL {}, cost {:.4} BZZ",
+            format_bytes(self.target_bytes),
+            format_ttl_seconds(self.target_seconds),
+            self.depth,
+            self.amount_plur,
+            format_bytes(self.capacity_bytes),
+            format_ttl_seconds(self.ttl_seconds),
+            self.cost_bzz,
+        )
+    }
+}
+
 /// Theoretical capacity in bytes for a depth, before bucket skew.
 /// `2^depth × 4 KiB`.
 pub fn theoretical_capacity_bytes(depth: u8) -> u128 {
@@ -331,6 +366,72 @@ pub fn buy_preview(
     })
 }
 
+/// Inverse of [`buy_preview`]: operator says "I want X bytes for Y
+/// seconds", we return the minimum `(depth, amount)` pair that
+/// covers it.
+///
+/// Depth rounds *up* to the next power of two so the actual
+/// capacity is ≥ target_bytes (the alternative — exactly fit —
+/// would silently truncate the operator's stated need). Amount
+/// rounds *up* in blocks so the actual TTL is ≥ target_seconds.
+///
+/// Errors if the chain price isn't loaded yet or if the target
+/// exceeds Bee's depth ceiling (41).
+pub fn buy_suggest(
+    target_bytes: u128,
+    target_seconds: i64,
+    chain_state: &ChainState,
+) -> Result<BuySuggestion, String> {
+    if target_bytes == 0 {
+        return Err("target size must be positive".into());
+    }
+    if target_seconds <= 0 {
+        return Err("target duration must be positive".into());
+    }
+    if chain_state.current_price <= BigInt::from(0) {
+        return Err("chain price not loaded yet — try again in a moment".into());
+    }
+
+    // chunks_needed = ceil(target_bytes / 4096)
+    let chunks_needed = target_bytes.div_ceil(4096);
+    // depth = ceil(log2(chunks_needed)), clamped to Bee's [17, 41]
+    // bounds. depth=17 is Bee's minimum useful batch size; depth>41
+    // exceeds the contract's enforced ceiling.
+    let raw_depth = if chunks_needed <= 1 {
+        0
+    } else {
+        // ceil(log2(n)) — using leading_zeros for a portable answer.
+        128 - (chunks_needed - 1).leading_zeros()
+    };
+    if raw_depth > 41 {
+        return Err(format!(
+            "target {} exceeds Bee's max batch capacity (depth 41 ≈ 8 PiB)",
+            format_bytes(target_bytes)
+        ));
+    }
+    let depth: u8 = raw_depth.max(17) as u8;
+    let capacity_bytes = theoretical_capacity_bytes(depth);
+
+    // ttl_blocks_needed = ceil(target_seconds / blocktime)
+    let target_blocks =
+        target_seconds.saturating_add(GNOSIS_BLOCK_TIME_SECS - 1) / GNOSIS_BLOCK_TIME_SECS;
+    let amount = BigInt::from(target_blocks) * &chain_state.current_price;
+
+    // Actual TTL the chosen amount yields, given ceil rounding.
+    let ttl_seconds = ttl_seconds(&amount, &chain_state.current_price, GNOSIS_BLOCK_TIME_SECS);
+    let cost = cost_bzz(&amount, depth);
+
+    Ok(BuySuggestion {
+        target_bytes,
+        target_seconds,
+        depth,
+        amount_plur: amount,
+        capacity_bytes,
+        ttl_seconds,
+        cost_bzz: cost,
+    })
+}
+
 fn short_batch_id(batch: &PostageBatch) -> String {
     let hex = batch.batch_id.to_hex();
     if hex.len() > 8 {
@@ -338,6 +439,67 @@ fn short_batch_id(batch: &PostageBatch) -> String {
     } else {
         hex
     }
+}
+
+/// Parse a human-readable size into bytes. Accepts plain integers
+/// (`4096` = bytes), binary suffixes (`5GiB`, `2TiB`, `512MiB`),
+/// and decimal suffixes (`5GB`, `1TB`, `500MB`). Single-letter
+/// shorthands (`5G`, `2T`, `100M`, `4K`) default to **binary**
+/// because operators reasoning about Bee's depth=2^N chunk counts
+/// always think in powers of two. Suffix matching is
+/// case-insensitive.
+///
+/// Used by `:buy-suggest` so operators can type sizes the way they
+/// do in chat ("5 GiB for 30d") rather than hand-converting to
+/// raw bytes.
+pub fn parse_size_bytes(s: &str) -> Result<u128, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("size cannot be empty".into());
+    }
+    // Strip any internal whitespace between the number and the unit
+    // ("5 GiB" → "5GiB") so we don't reject a perfectly clear input.
+    let compact: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    let (num_part, mul) = split_size(&compact)
+        .ok_or_else(|| format!("invalid size {s:?} (try 5GiB, 2TiB, 500MiB, 4096)"))?;
+    let n: u128 = num_part
+        .parse()
+        .map_err(|_| format!("invalid size {s:?} (numeric part {num_part:?} unparseable)"))?;
+    if n == 0 {
+        return Err("size must be positive".into());
+    }
+    n.checked_mul(mul).ok_or_else(|| {
+        format!("size {s:?} overflowed u128 — that's larger than any plausible Bee batch")
+    })
+}
+
+/// Split a compact size string into (digits, multiplier). Returns
+/// `None` on unrecognised suffix.
+fn split_size(s: &str) -> Option<(&str, u128)> {
+    // Find first non-digit char; everything before is the number,
+    // everything after (lowercased) is the unit.
+    let split = s
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_digit())
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let unit_lower = unit.to_ascii_lowercase();
+    let mul: u128 = match unit_lower.as_str() {
+        "" | "b" => 1,
+        "k" | "kib" => 1024,
+        "kb" => 1_000,
+        "m" | "mib" => 1024u128.pow(2),
+        "mb" => 1_000u128.pow(2),
+        "g" | "gib" => 1024u128.pow(3),
+        "gb" => 1_000u128.pow(3),
+        "t" | "tib" => 1024u128.pow(4),
+        "tb" => 1_000u128.pow(4),
+        "p" | "pib" => 1024u128.pow(5),
+        "pb" => 1_000u128.pow(5),
+        _ => return None,
+    };
+    Some((num, mul))
 }
 
 /// Parse a duration written like `30d` / `12h` / `90m` / `45s` /
@@ -589,6 +751,113 @@ mod tests {
     #[test]
     fn buy_preview_rejects_zero_amount() {
         assert!(buy_preview(22, BigInt::from(0), &chain(1)).is_err());
+    }
+
+    #[test]
+    fn parse_size_plain_integer_is_bytes() {
+        assert_eq!(parse_size_bytes("4096").unwrap(), 4096);
+        assert!(parse_size_bytes("0").is_err());
+        assert!(parse_size_bytes("").is_err());
+    }
+
+    #[test]
+    fn parse_size_binary_suffixes() {
+        assert_eq!(parse_size_bytes("1KiB").unwrap(), 1024);
+        assert_eq!(parse_size_bytes("1MiB").unwrap(), 1024u128.pow(2));
+        assert_eq!(parse_size_bytes("1GiB").unwrap(), 1024u128.pow(3));
+        assert_eq!(parse_size_bytes("1TiB").unwrap(), 1024u128.pow(4));
+        // Single-letter shorthand defaults to binary (operator-friendly
+        // for power-of-two batch reasoning).
+        assert_eq!(parse_size_bytes("1G").unwrap(), 1024u128.pow(3));
+        assert_eq!(parse_size_bytes("4K").unwrap(), 4096);
+    }
+
+    #[test]
+    fn parse_size_decimal_suffixes() {
+        assert_eq!(parse_size_bytes("1KB").unwrap(), 1_000);
+        assert_eq!(parse_size_bytes("1MB").unwrap(), 1_000_000);
+        assert_eq!(parse_size_bytes("1GB").unwrap(), 1_000_000_000);
+    }
+
+    #[test]
+    fn parse_size_handles_whitespace_and_case() {
+        assert_eq!(parse_size_bytes(" 5 GiB ").unwrap(), 5 * 1024u128.pow(3));
+        assert_eq!(parse_size_bytes("5gib").unwrap(), 5 * 1024u128.pow(3));
+        assert_eq!(parse_size_bytes("2 TIB").unwrap(), 2 * 1024u128.pow(4));
+    }
+
+    #[test]
+    fn parse_size_rejects_unknown_unit() {
+        assert!(parse_size_bytes("5xyz").is_err());
+        assert!(parse_size_bytes("abc").is_err());
+    }
+
+    #[test]
+    fn buy_suggest_typical_5gib_30d() {
+        // 5 GiB needs ceil(log2(5*256K)) = ceil(20.32) = 21 → 8 GiB.
+        // 30d at 5s blocktime = 30*86400/5 = 518_400 blocks.
+        // amount = 518_400 * 1 = 518_400 PLUR/chunk (price=1).
+        // TTL at amount=518_400, price=1, blocktime=5 → 2_592_000s = 30d.
+        let s = buy_suggest(5 * 1024u128.pow(3), 30 * 86_400, &chain(1)).unwrap();
+        assert_eq!(s.depth, 21);
+        assert_eq!(s.capacity_bytes, 8 * 1024u128.pow(3));
+        assert_eq!(s.amount_plur, BigInt::from(518_400u32));
+        assert_eq!(s.ttl_seconds, 30 * 86_400);
+    }
+
+    #[test]
+    fn buy_suggest_4gib_exact_uses_depth_20() {
+        // 4 GiB exactly = 2^20 chunks * 4096 → depth 20 fits exactly.
+        let s = buy_suggest(4 * 1024u128.pow(3), 86_400, &chain(1)).unwrap();
+        assert_eq!(s.depth, 20);
+        assert_eq!(s.capacity_bytes, 4 * 1024u128.pow(3));
+    }
+
+    #[test]
+    fn buy_suggest_tiny_target_clamps_to_min_depth_17() {
+        // 1 chunk's worth → ceil(log2(1)) = 0 → clamp to 17.
+        let s = buy_suggest(4096, 86_400, &chain(1)).unwrap();
+        assert_eq!(s.depth, 17);
+        assert!(s.capacity_bytes >= 4096);
+    }
+
+    #[test]
+    fn buy_suggest_rejects_above_max_depth() {
+        // depth 42 ≈ 16 PiB; explicitly refused.
+        let huge = 16 * 1024u128.pow(5); // 16 PiB
+        assert!(buy_suggest(huge, 86_400, &chain(1)).is_err());
+    }
+
+    #[test]
+    fn buy_suggest_rounds_duration_up_in_blocks() {
+        // 7 seconds at 5s blocktime → 2 blocks (ceil), not 1.
+        // amount = 2 * 1 = 2; TTL = 2 * 5 = 10s ≥ 7.
+        let s = buy_suggest(4096, 7, &chain(1)).unwrap();
+        assert_eq!(s.amount_plur, BigInt::from(2u32));
+        assert_eq!(s.ttl_seconds, 10);
+    }
+
+    #[test]
+    fn buy_suggest_rejects_zero_or_negative_inputs() {
+        assert!(buy_suggest(0, 86_400, &chain(1)).is_err());
+        assert!(buy_suggest(4096, 0, &chain(1)).is_err());
+        assert!(buy_suggest(4096, -5, &chain(1)).is_err());
+    }
+
+    #[test]
+    fn buy_suggest_rejects_zero_chain_price() {
+        assert!(buy_suggest(4096, 86_400, &chain(0)).is_err());
+    }
+
+    #[test]
+    fn buy_suggest_summary_is_compact() {
+        let s = buy_suggest(5 * 1024u128.pow(3), 30 * 86_400, &chain(1)).unwrap();
+        let line = s.summary();
+        assert!(line.starts_with("buy-suggest"));
+        assert!(line.contains("5.0 GiB"));
+        assert!(line.contains("30d  0h"));
+        assert!(line.contains("depth=21"));
+        assert!(!line.contains('\n'));
     }
 
     #[test]

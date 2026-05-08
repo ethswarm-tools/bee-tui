@@ -59,6 +59,7 @@ target screen, but faster on a 10-screen carousel.
 | `:dilute-preview <batch> <new-depth>` | [stamp-previews](./stamp-previews.md) | Predict capacity / TTL change of diluting a batch |
 | `:extend-preview <batch> <duration>` | [stamp-previews](./stamp-previews.md) | Predict cost to gain N days/hours of TTL |
 | `:buy-preview <depth> <amount>` | [stamp-previews](./stamp-previews.md) | Predict TTL / capacity / cost of a hypothetical fresh buy |
+| `:buy-suggest <size> <duration>` | [stamp-previews](./stamp-previews.md) | Suggest the minimum (depth, amount) to cover a target |
 | `:probe-upload <batch>` | [probe-upload](./probe-upload.md) | Upload one synthetic 4 KiB chunk; report end-to-end latency |
 | `:context <name>` (alias `:ctx`) | [context](./context.md) | Switch to a different node profile from your config |
 | `:context` | [context](./context.md) | List configured profiles (no switch) |

@@ -693,6 +693,9 @@ impl App {
             "buy-preview" => {
                 self.command_status = Some(self.run_buy_preview(trimmed));
             }
+            "buy-suggest" => {
+                self.command_status = Some(self.run_buy_suggest(trimmed));
+            }
             "probe-upload" => {
                 self.command_status = Some(self.run_probe_upload(trimmed));
             }
@@ -731,7 +734,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :probe-upload, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :probe-upload, :context, :quit)"
                 )));
             }
         }
@@ -896,6 +899,39 @@ impl App {
         CommandStatus::Info(format!(
             "probe-upload to batch {batch_short} in flight — result will replace this line"
         ))
+    }
+
+    /// `:buy-suggest <size> <duration>` — inverse of buy-preview.
+    /// Operator says "I want X bytes for Y seconds", we return the
+    /// minimum `(depth, amount)` that covers it. Depth rounds up
+    /// to the next power of two so the headroom is operator-visible;
+    /// duration rounds up in chain blocks.
+    fn run_buy_suggest(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (size_str, duration_str) = match parts.as_slice() {
+            [_, size, duration, ..] => (*size, *duration),
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :buy-suggest <size> <duration>  (e.g. 5GiB 30d, 100MiB 12h)".into(),
+                );
+            }
+        };
+        let target_bytes = match stamp_preview::parse_size_bytes(size_str) {
+            Ok(b) => b,
+            Err(e) => return CommandStatus::Err(e),
+        };
+        let target_seconds = match stamp_preview::parse_duration_seconds(duration_str) {
+            Ok(s) => s,
+            Err(e) => return CommandStatus::Err(e),
+        };
+        let chain = match self.health_rx.borrow().chain_state.clone() {
+            Some(c) => c,
+            None => return CommandStatus::Err("chain state not loaded yet".into()),
+        };
+        match stamp_preview::buy_suggest(target_bytes, target_seconds, &chain) {
+            Ok(s) => CommandStatus::Info(s.summary()),
+            Err(e) => CommandStatus::Err(e),
+        }
     }
 
     /// `:buy-preview <depth> <amount-plur>` — hypothetical fresh
