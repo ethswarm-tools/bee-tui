@@ -61,6 +61,7 @@ target screen, but faster on a 10-screen carousel.
 | `:buy-preview <depth> <amount>` | [stamp-previews](./stamp-previews.md) | Predict TTL / capacity / cost of a hypothetical fresh buy |
 | `:buy-suggest <size> <duration>` | [stamp-previews](./stamp-previews.md) | Suggest the minimum (depth, amount) to cover a target |
 | `:probe-upload <batch>` | [probe-upload](./probe-upload.md) | Upload one synthetic 4 KiB chunk; report end-to-end latency |
+| `:upload-file <path> <batch>` | [upload-file](./upload-file.md) | Upload a single local file via `POST /bzz`, return Swarm reference |
 | `:context <name>` (alias `:ctx`) | [context](./context.md) | Switch to a different node profile from your config |
 | `:context` | [context](./context.md) | List configured profiles (no switch) |
 | `:quit` (alias `:q`) | — | Exit the cockpit |
@@ -112,4 +113,5 @@ works end-to-end).
 - [`:loggers` / `:set-logger`](./loggers.md)
 - [Stamp dry-run previews](./stamp-previews.md)
 - [`:probe-upload`](./probe-upload.md)
+- [`:upload-file`](./upload-file.md)
 - [`:context`](./context.md)

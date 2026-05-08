@@ -209,6 +209,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
         "probe-upload",
         "<batch> — single 4 KiB chunk, end-to-end probe",
     ),
+    (
+        "upload-file",
+        "<path> <batch> — upload a single local file, return Swarm ref",
+    ),
     ("manifest", "<ref> — open Mantaray tree browser at a reference"),
     ("inspect", "<ref> — what is this? auto-detects manifest vs raw chunk"),
     (
@@ -933,6 +937,9 @@ impl App {
             "probe-upload" => {
                 self.command_status = Some(self.run_probe_upload(trimmed));
             }
+            "upload-file" => {
+                self.command_status = Some(self.run_upload_file(trimmed));
+            }
             "hash" => {
                 self.command_status = Some(self.run_hash(trimmed));
             }
@@ -992,7 +999,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :pins, :manifest, :inspect, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :buy-suggest, :plan-batch, :probe-upload, :upload-file, :hash, :cid, :depth-table, :gsoc-mine, :pss-target, :context, :quit)"
                 )));
             }
         }
@@ -1156,6 +1163,106 @@ impl App {
 
         CommandStatus::Info(format!(
             "probe-upload to batch {batch_short} in flight — result will replace this line"
+        ))
+    }
+
+    /// `:upload-file <path> <batch-prefix>` — upload a single local
+    /// file via `POST /bzz` and return the resulting Swarm reference.
+    /// Single-file scope only: directories error with a hint to use
+    /// the (yet-to-ship) collection mode. The 256 MiB ceiling protects
+    /// the cockpit from accidentally streaming a multi-GB file through
+    /// the event loop; operators with bigger uploads should use
+    /// swarm-cli where the upload runs out-of-process.
+    fn run_upload_file(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let (path_str, prefix) = match parts.as_slice() {
+            [_, p, b, ..] => (*p, *b),
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :upload-file <path> <batch-prefix>".into(),
+                );
+            }
+        };
+        let path = std::path::PathBuf::from(path_str);
+        let meta = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(e) => return CommandStatus::Err(format!("stat {path_str}: {e}")),
+        };
+        if meta.is_dir() {
+            return CommandStatus::Err(format!(
+                "{path_str} is a directory — :upload-file is single-file only (collection upload coming in a later release)"
+            ));
+        }
+        const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+        if meta.len() > MAX_FILE_BYTES {
+            return CommandStatus::Err(format!(
+                "{path_str} is {} — over the {}-MiB cockpit ceiling; use swarm-cli for larger uploads",
+                meta.len(),
+                MAX_FILE_BYTES / (1024 * 1024),
+            ));
+        }
+        let stamps = self.watch.stamps().borrow().clone();
+        let batch = match stamp_preview::match_batch_prefix(&stamps.batches, prefix) {
+            Ok(b) => b.clone(),
+            Err(e) => return CommandStatus::Err(e),
+        };
+        if !batch.usable {
+            return CommandStatus::Err(format!(
+                "batch {} is not usable yet (waiting on chain confirmation) — pick another",
+                short_hex(&batch.batch_id.to_hex(), 8),
+            ));
+        }
+        if batch.batch_ttl <= 0 {
+            return CommandStatus::Err(format!(
+                "batch {} is expired — pick another",
+                short_hex(&batch.batch_id.to_hex(), 8),
+            ));
+        }
+
+        let api = self.api.clone();
+        let tx = self.cmd_status_tx.clone();
+        let batch_id = batch.batch_id;
+        let batch_short = short_hex(&batch.batch_id.to_hex(), 8);
+        let task_short = batch_short.clone();
+        let file_size = meta.len();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let content_type = guess_content_type(&path);
+        tokio::spawn(async move {
+            let data = match tokio::fs::read(&path).await {
+                Ok(b) => b,
+                Err(e) => {
+                    let _ = tx.send(CommandStatus::Err(format!(
+                        "read {}: {e}",
+                        path.display()
+                    )));
+                    return;
+                }
+            };
+            let started = Instant::now();
+            let result = api
+                .bee()
+                .file()
+                .upload_file(&batch_id, data, &name, &content_type, None)
+                .await;
+            let elapsed_ms = started.elapsed().as_millis();
+            let status = match result {
+                Ok(res) => CommandStatus::Info(format!(
+                    "upload-file OK in {elapsed_ms}ms — {file_size}B → ref {} (batch {task_short})",
+                    res.reference.to_hex(),
+                )),
+                Err(e) => CommandStatus::Err(format!(
+                    "upload-file FAILED after {elapsed_ms}ms — batch {task_short}: {e}"
+                )),
+            };
+            let _ = tx.send(status);
+        });
+
+        CommandStatus::Info(format!(
+            "upload-file ({file_size}B) to batch {batch_short} in flight — result will replace this line"
         ))
     }
 
@@ -2574,6 +2681,37 @@ fn short_hex(hex: &str, len: usize) -> String {
     }
 }
 
+/// Best-effort MIME guess from the file extension. The cockpit's
+/// `:upload-file` is the only caller; bee-rs falls back to
+/// `application/octet-stream` if we hand it an empty string, but
+/// recognising the common types saves operators from a manual
+/// `--content-type` flag for typical web/document workflows.
+fn guess_content_type(path: &std::path::Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("html") | Some("htm") => "text/html",
+        Some("txt") | Some("md") => "text/plain",
+        Some("json") => "application/json",
+        Some("css") => "text/css",
+        Some("js") => "application/javascript",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("svg") => "image/svg+xml",
+        Some("webp") => "image/webp",
+        Some("pdf") => "application/pdf",
+        Some("zip") => "application/zip",
+        Some("tar") => "application/x-tar",
+        Some("gz") | Some("tgz") => "application/gzip",
+        Some("wasm") => "application/wasm",
+        _ => "",
+    }
+    .to_string()
+}
+
 /// Build the closure the metrics HTTP handler invokes on each
 /// scrape. Captures cloned `BeeWatch` receivers (cheap — they're
 /// `Arc`-backed) plus the log-capture handle, then re-reads the
@@ -2786,6 +2924,24 @@ mod tests {
         // Garbage after `=` falls through to None — operator gets the
         // sync diagnostic, not a panic on bad input.
         assert_eq!(parse_pprof_arg("diagnose --pprof=lol"), None);
+    }
+
+    #[test]
+    fn guess_content_type_known_extensions() {
+        let p = std::path::PathBuf::from;
+        assert_eq!(guess_content_type(&p("/tmp/x.html")), "text/html");
+        assert_eq!(guess_content_type(&p("/tmp/x.json")), "application/json");
+        assert_eq!(guess_content_type(&p("/tmp/x.PNG")), "image/png");
+        assert_eq!(guess_content_type(&p("/tmp/x.tar.gz")), "application/gzip");
+    }
+
+    #[test]
+    fn guess_content_type_unknown_returns_empty() {
+        let p = std::path::PathBuf::from;
+        // bee-rs treats empty as "use default application/octet-stream",
+        // so an unknown extension shouldn't produce a misleading guess.
+        assert_eq!(guess_content_type(&p("/tmp/x.unknownext")), "");
+        assert_eq!(guess_content_type(&p("/tmp/no-extension")), "");
     }
 
     #[test]

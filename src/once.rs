@@ -137,6 +137,7 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         "version-check" => once_version_check().await,
         "inspect" => once_inspect(args).await,
         "durability-check" => once_durability_check(args).await,
+        "upload-file" => once_upload_file(args).await,
 
         // ---- Stamp-economics verbs (one-shot fetch of chain state +
         //      stamps list, then pure math).
@@ -155,7 +156,7 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         other => OnceResult::usage(
             other,
             format!(
-                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, price, basefee, inspect, durability-check, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
+                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, check-version, config-doctor, price, basefee, inspect, durability-check, upload-file, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview, plan-batch"
             ),
         ),
     }
@@ -392,6 +393,135 @@ async fn once_inspect(args: &[String]) -> OnceResult {
         ),
         InspectResult::Error(e) => OnceResult::error("inspect", format!("inspect failed: {e}")),
     }
+}
+
+/// `--once upload-file <path> <batch-prefix>` — upload a single file
+/// via `POST /bzz` and emit `{"reference": ...}`. CI-friendly: the
+/// JSON output gives a workflow the swarm hash to publish without
+/// shelling out to the cockpit. 256-MiB cap matches the cockpit verb.
+async fn once_upload_file(args: &[String]) -> OnceResult {
+    let (path_str, prefix) = match (args.first(), args.get(1)) {
+        (Some(p), Some(b)) => (p.as_str(), b.as_str()),
+        _ => {
+            return OnceResult::usage(
+                "upload-file",
+                "usage: --once upload-file <path> <batch-prefix>",
+            );
+        }
+    };
+    let path = std::path::PathBuf::from(path_str);
+    let meta = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(e) => return OnceResult::usage("upload-file", format!("stat {path_str}: {e}")),
+    };
+    if meta.is_dir() {
+        return OnceResult::usage(
+            "upload-file",
+            format!("{path_str} is a directory; --once upload-file is single-file only"),
+        );
+    }
+    const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+    if meta.len() > MAX_FILE_BYTES {
+        return OnceResult::usage(
+            "upload-file",
+            format!(
+                "{path_str} is {} bytes — over the {}-MiB ceiling",
+                meta.len(),
+                MAX_FILE_BYTES / (1024 * 1024),
+            ),
+        );
+    }
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let batches = match api.bee().postage().get_postage_batches().await {
+        Ok(b) => b,
+        Err(e) => return OnceResult::error("upload-file", format!("/stamps failed: {e}")),
+    };
+    let batch = match stamp_preview::match_batch_prefix(&batches, prefix) {
+        Ok(b) => b.clone(),
+        Err(e) => return OnceResult::usage("upload-file", e),
+    };
+    if !batch.usable {
+        return OnceResult::error(
+            "upload-file",
+            format!(
+                "batch {} is not usable yet (waiting on chain confirmation)",
+                batch.batch_id.to_hex(),
+            ),
+        );
+    }
+    if batch.batch_ttl <= 0 {
+        return OnceResult::error(
+            "upload-file",
+            format!("batch {} is expired", batch.batch_id.to_hex()),
+        );
+    }
+    let data = match tokio::fs::read(&path).await {
+        Ok(b) => b,
+        Err(e) => return OnceResult::error("upload-file", format!("read {path_str}: {e}")),
+    };
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let content_type = upload_content_type(&path);
+    let result = api
+        .bee()
+        .file()
+        .upload_file(&batch.batch_id, data, &name, &content_type, None)
+        .await;
+    match result {
+        Ok(res) => OnceResult::ok_with_data(
+            "upload-file",
+            format!(
+                "uploaded {} bytes → ref {} (batch {})",
+                meta.len(),
+                res.reference.to_hex(),
+                &batch.batch_id.to_hex()[..8],
+            ),
+            json!({
+                "path": path_str,
+                "size": meta.len(),
+                "reference": res.reference.to_hex(),
+                "batch_id": batch.batch_id.to_hex(),
+                "name": name,
+                "content_type": if content_type.is_empty() { "application/octet-stream".to_string() } else { content_type },
+            }),
+        ),
+        Err(e) => OnceResult::error("upload-file", format!("upload failed: {e}")),
+    }
+}
+
+/// Best-effort MIME guess by extension. Empty string means "let
+/// bee-rs default to application/octet-stream". Mirrors the
+/// cockpit's `guess_content_type` so both verbs behave identically.
+fn upload_content_type(path: &std::path::Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("html") | Some("htm") => "text/html",
+        Some("txt") | Some("md") => "text/plain",
+        Some("json") => "application/json",
+        Some("css") => "text/css",
+        Some("js") => "application/javascript",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("svg") => "image/svg+xml",
+        Some("webp") => "image/webp",
+        Some("pdf") => "application/pdf",
+        Some("zip") => "application/zip",
+        Some("tar") => "application/x-tar",
+        Some("gz") | Some("tgz") => "application/gzip",
+        Some("wasm") => "application/wasm",
+        _ => "",
+    }
+    .to_string()
 }
 
 /// `--once buy-preview <depth> <amount-plur>` — predict cost / TTL
@@ -1002,5 +1132,15 @@ mod tests {
         let r = OnceResult::ok("hash", "hash X: abc");
         print_result(&r, true);
         print_result(&r, false);
+    }
+
+    #[test]
+    fn upload_content_type_known_extensions() {
+        let p = std::path::PathBuf::from;
+        assert_eq!(upload_content_type(&p("/tmp/x.html")), "text/html");
+        assert_eq!(upload_content_type(&p("/tmp/x.PNG")), "image/png");
+        assert_eq!(upload_content_type(&p("/tmp/x.tar.gz")), "application/gzip");
+        // Unknown extension falls back to empty (bee-rs uses application/octet-stream).
+        assert_eq!(upload_content_type(&p("/tmp/x.unknownext")), "");
     }
 }
