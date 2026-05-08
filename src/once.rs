@@ -35,6 +35,7 @@ use crate::api::ApiClient;
 use crate::config::Config;
 use crate::durability;
 use crate::manifest_walker::{self, InspectResult};
+use crate::stamp_preview;
 use crate::utility_verbs;
 
 /// Top-level result that's printed (as text or JSON) and converted to
@@ -134,11 +135,19 @@ async fn dispatch(verb: &str, args: &[String]) -> OnceResult {
         "inspect" => once_inspect(args).await,
         "durability-check" => once_durability_check(args).await,
 
+        // ---- Stamp-economics verbs (one-shot fetch of chain state +
+        //      stamps list, then pure math).
+        "buy-preview" => once_buy_preview(args).await,
+        "buy-suggest" => once_buy_suggest(args).await,
+        "topup-preview" => once_topup_preview(args).await,
+        "dilute-preview" => once_dilute_preview(args).await,
+        "extend-preview" => once_extend_preview(args).await,
+
         // ---- Catch-all. --------------------------------------------
         other => OnceResult::usage(
             other,
             format!(
-                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, inspect, durability-check"
+                "unknown --once verb {other:?}. Supported: hash, cid, depth-table, pss-target, gsoc-mine, readiness, version-check, inspect, durability-check, buy-preview, buy-suggest, topup-preview, dilute-preview, extend-preview"
             ),
         ),
     }
@@ -375,6 +384,264 @@ async fn once_inspect(args: &[String]) -> OnceResult {
         ),
         InspectResult::Error(e) => OnceResult::error("inspect", format!("inspect failed: {e}")),
     }
+}
+
+/// `--once buy-preview <depth> <amount-plur>` — predict cost / TTL
+/// / capacity for a fresh batch buy at the chain's current price.
+/// One-shot fetch of `/chainstate` so we get the actual price, not
+/// a cached snapshot.
+async fn once_buy_preview(args: &[String]) -> OnceResult {
+    let (depth_str, amount_str) = match (args.first(), args.get(1)) {
+        (Some(d), Some(a)) => (d.as_str(), a.as_str()),
+        _ => {
+            return OnceResult::usage(
+                "buy-preview",
+                "usage: --once buy-preview <depth> <amount-plur>",
+            );
+        }
+    };
+    let depth: u8 = match depth_str.parse() {
+        Ok(d) => d,
+        Err(_) => return OnceResult::usage("buy-preview", format!("invalid depth: {depth_str}")),
+    };
+    let amount = match stamp_preview::parse_plur_amount(amount_str) {
+        Ok(a) => a,
+        Err(e) => return OnceResult::usage("buy-preview", e),
+    };
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let chain = match api.bee().debug().chain_state().await {
+        Ok(c) => c,
+        Err(e) => {
+            return OnceResult::error("buy-preview", format!("/chainstate failed: {e}"));
+        }
+    };
+    match stamp_preview::buy_preview(depth, amount, &chain) {
+        Ok(p) => OnceResult::ok_with_data(
+            "buy-preview",
+            p.summary(),
+            json!({
+                "depth": p.depth,
+                "amount_plur": p.amount_plur.to_string(),
+                "ttl_seconds": p.ttl_seconds,
+                "cost_bzz": p.cost_bzz,
+            }),
+        ),
+        Err(e) => OnceResult::error("buy-preview", e),
+    }
+}
+
+/// `--once buy-suggest <size> <duration>` — inverse of buy-preview.
+/// Operator says "I want X bytes for Y seconds", we return the
+/// minimum `(depth, amount)` that covers it.
+async fn once_buy_suggest(args: &[String]) -> OnceResult {
+    let (size_str, duration_str) = match (args.first(), args.get(1)) {
+        (Some(s), Some(d)) => (s.as_str(), d.as_str()),
+        _ => {
+            return OnceResult::usage(
+                "buy-suggest",
+                "usage: --once buy-suggest <size> <duration>  (e.g. 5GiB 30d)",
+            );
+        }
+    };
+    let target_bytes = match stamp_preview::parse_size_bytes(size_str) {
+        Ok(b) => b,
+        Err(e) => return OnceResult::usage("buy-suggest", e),
+    };
+    let target_seconds = match stamp_preview::parse_duration_seconds(duration_str) {
+        Ok(s) => s,
+        Err(e) => return OnceResult::usage("buy-suggest", e),
+    };
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let chain = match api.bee().debug().chain_state().await {
+        Ok(c) => c,
+        Err(e) => {
+            return OnceResult::error("buy-suggest", format!("/chainstate failed: {e}"));
+        }
+    };
+    match stamp_preview::buy_suggest(target_bytes, target_seconds, &chain) {
+        Ok(p) => OnceResult::ok_with_data(
+            "buy-suggest",
+            p.summary(),
+            json!({
+                "target_bytes": p.target_bytes.to_string(),
+                "target_seconds": p.target_seconds,
+                "depth": p.depth,
+                "amount_plur": p.amount_plur.to_string(),
+                "capacity_bytes": p.capacity_bytes.to_string(),
+                "ttl_seconds": p.ttl_seconds,
+                "cost_bzz": p.cost_bzz,
+            }),
+        ),
+        Err(e) => OnceResult::error("buy-suggest", e),
+    }
+}
+
+/// `--once topup-preview <batch-prefix> <amount-plur>` — predict the
+/// effect of topping up an existing batch.
+async fn once_topup_preview(args: &[String]) -> OnceResult {
+    let (prefix, amount_str) = match (args.first(), args.get(1)) {
+        (Some(p), Some(a)) => (p.as_str(), a.as_str()),
+        _ => {
+            return OnceResult::usage(
+                "topup-preview",
+                "usage: --once topup-preview <batch-prefix> <amount-plur>",
+            );
+        }
+    };
+    let amount = match stamp_preview::parse_plur_amount(amount_str) {
+        Ok(a) => a,
+        Err(e) => return OnceResult::usage("topup-preview", e),
+    };
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let (batches, chain) = match fetch_stamps_and_chain(&api).await {
+        Ok(p) => p,
+        Err(e) => return OnceResult::error("topup-preview", e),
+    };
+    let batch = match stamp_preview::match_batch_prefix(&batches, prefix) {
+        Ok(b) => b.clone(),
+        Err(e) => return OnceResult::usage("topup-preview", e),
+    };
+    match stamp_preview::topup_preview(&batch, amount, &chain) {
+        Ok(p) => OnceResult::ok_with_data(
+            "topup-preview",
+            p.summary(),
+            json!({
+                "batch_id": batch.batch_id.to_hex(),
+                "current_depth": p.current_depth,
+                "current_ttl_seconds": p.current_ttl_seconds,
+                "delta_amount_plur": p.delta_amount.to_string(),
+                "extra_ttl_seconds": p.extra_ttl_seconds,
+                "new_ttl_seconds": p.new_ttl_seconds,
+                "cost_bzz": p.cost_bzz,
+            }),
+        ),
+        Err(e) => OnceResult::error("topup-preview", e),
+    }
+}
+
+/// `--once dilute-preview <batch-prefix> <new-depth>` — predict the
+/// effect of diluting an existing batch (each +1 depth halves
+/// per-chunk amount + TTL, doubles capacity).
+async fn once_dilute_preview(args: &[String]) -> OnceResult {
+    let (prefix, depth_str) = match (args.first(), args.get(1)) {
+        (Some(p), Some(d)) => (p.as_str(), d.as_str()),
+        _ => {
+            return OnceResult::usage(
+                "dilute-preview",
+                "usage: --once dilute-preview <batch-prefix> <new-depth>",
+            );
+        }
+    };
+    let new_depth: u8 = match depth_str.parse() {
+        Ok(d) => d,
+        Err(_) => {
+            return OnceResult::usage(
+                "dilute-preview",
+                format!("invalid depth: {depth_str}"),
+            );
+        }
+    };
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let batches = match api.bee().postage().get_postage_batches().await {
+        Ok(b) => b,
+        Err(e) => return OnceResult::error("dilute-preview", format!("/stamps failed: {e}")),
+    };
+    let batch = match stamp_preview::match_batch_prefix(&batches, prefix) {
+        Ok(b) => b.clone(),
+        Err(e) => return OnceResult::usage("dilute-preview", e),
+    };
+    match stamp_preview::dilute_preview(&batch, new_depth) {
+        Ok(p) => OnceResult::ok_with_data(
+            "dilute-preview",
+            p.summary(),
+            json!({
+                "batch_id": batch.batch_id.to_hex(),
+                "old_depth": p.old_depth,
+                "new_depth": p.new_depth,
+                "old_ttl_seconds": p.old_ttl_seconds,
+                "new_ttl_seconds": p.new_ttl_seconds,
+            }),
+        ),
+        Err(e) => OnceResult::error("dilute-preview", e),
+    }
+}
+
+/// `--once extend-preview <batch-prefix> <duration>` — predict the
+/// per-chunk amount + cost needed to extend the batch's TTL by the
+/// requested duration.
+async fn once_extend_preview(args: &[String]) -> OnceResult {
+    let (prefix, duration_str) = match (args.first(), args.get(1)) {
+        (Some(p), Some(d)) => (p.as_str(), d.as_str()),
+        _ => {
+            return OnceResult::usage(
+                "extend-preview",
+                "usage: --once extend-preview <batch-prefix> <duration>",
+            );
+        }
+    };
+    let extension_seconds = match stamp_preview::parse_duration_seconds(duration_str) {
+        Ok(s) => s,
+        Err(e) => return OnceResult::usage("extend-preview", e),
+    };
+    let api = match build_api() {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let (batches, chain) = match fetch_stamps_and_chain(&api).await {
+        Ok(p) => p,
+        Err(e) => return OnceResult::error("extend-preview", e),
+    };
+    let batch = match stamp_preview::match_batch_prefix(&batches, prefix) {
+        Ok(b) => b.clone(),
+        Err(e) => return OnceResult::usage("extend-preview", e),
+    };
+    match stamp_preview::extend_preview(&batch, extension_seconds, &chain) {
+        Ok(p) => OnceResult::ok_with_data(
+            "extend-preview",
+            p.summary(),
+            json!({
+                "batch_id": batch.batch_id.to_hex(),
+                "depth": p.depth,
+                "current_ttl_seconds": p.current_ttl_seconds,
+                "needed_amount_plur": p.needed_amount_plur.to_string(),
+                "cost_bzz": p.cost_bzz,
+                "new_ttl_seconds": p.new_ttl_seconds,
+            }),
+        ),
+        Err(e) => OnceResult::error("extend-preview", e),
+    }
+}
+
+/// Helper: one-shot parallel fetch of the postage batches list +
+/// chain state. Used by the topup/extend paths which need both.
+async fn fetch_stamps_and_chain(
+    api: &Arc<ApiClient>,
+) -> Result<
+    (
+        Vec<bee::postage::PostageBatch>,
+        bee::debug::ChainState,
+    ),
+    String,
+> {
+    let bee = api.bee();
+    let postage = bee.postage();
+    let debug = bee.debug();
+    let (batches, chain) = tokio::join!(postage.get_postage_batches(), debug.chain_state());
+    let batches = batches.map_err(|e| format!("/stamps failed: {e}"))?;
+    let chain = chain.map_err(|e| format!("/chainstate failed: {e}"))?;
+    Ok((batches, chain))
 }
 
 /// `--once durability-check <ref>` — same chunk-graph walk the
