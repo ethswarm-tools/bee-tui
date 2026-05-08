@@ -84,6 +84,13 @@ pub struct PendingTxRow {
     pub nonce: u64,
     pub hash_short: String,
     pub to_short: String,
+    /// Full transaction hash (with the `0x` prefix stripped). Rendered
+    /// on the row's continuation line so operators can click-drag to
+    /// copy without losing the table layout.
+    pub hash_full: String,
+    /// Full destination address (`0x` stripped). Same rationale as
+    /// `hash_full`.
+    pub to_full: String,
     /// RFC 3339 creation timestamp, rendered verbatim. Empty if Bee
     /// didn't supply one (very early Bee builds).
     pub created: String,
@@ -247,6 +254,8 @@ fn pending_rows(transactions: &TransactionsSnapshot) -> Vec<PendingTxRow> {
                 nonce: t.nonce,
                 hash_short: short_hex(&t.transaction_hash),
                 to_short: short_hex(&t.to),
+                hash_full: t.transaction_hash.trim_start_matches("0x").to_string(),
+                to_full: t.to.trim_start_matches("0x").to_string(),
                 created: t.created.clone(),
                 description: t.description.clone(),
                 age_seconds,
@@ -463,6 +472,15 @@ impl Component for ApiHealth {
                     Span::raw(format!("{:<15} ", r.to_short)),
                     Span::styled(format!("{age_str:<10} "), age_style),
                     Span::styled(truncate(&r.description, 30), Style::default().fg(t.dim)),
+                ]));
+                // Continuation line with full hash + to-address so
+                // operators can click-drag to copy. The columns above
+                // stay short to preserve the table layout.
+                pending_lines.push(Line::from(vec![
+                    Span::styled("        hash 0x", Style::default().fg(t.dim)),
+                    Span::styled(r.hash_full.clone(), Style::default().fg(t.info)),
+                    Span::styled("  to 0x", Style::default().fg(t.dim)),
+                    Span::styled(r.to_full.clone(), Style::default().fg(t.info)),
                 ]));
             }
             // Tooltip line — operators new to the screen don't know

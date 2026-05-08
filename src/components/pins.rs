@@ -375,6 +375,7 @@ impl Component for Pins {
         let chunks = Layout::vertical([
             Constraint::Length(3), // header
             Constraint::Min(0),    // body
+            Constraint::Length(1), // selected detail (full reference)
             Constraint::Length(1), // footer
         ])
         .split(area);
@@ -530,6 +531,19 @@ impl Component for Pins {
             );
         }
 
+        // Selected detail — full reference of the highlighted row,
+        // click-drag selectable so operators can copy without
+        // shrinking the column or sacrificing the table layout.
+        if !view.rows.is_empty() {
+            let i = self.selected.min(view.rows.len() - 1);
+            let row = &view.rows[i];
+            let detail = Line::from(vec![
+                Span::styled("  selected: ", Style::default().fg(t.dim)),
+                Span::styled(row.reference.to_hex(), Style::default().fg(t.info)),
+            ]);
+            frame.render_widget(Paragraph::new(detail), chunks[2]);
+        }
+
         // Footer
         let footer = Line::from(vec![
             Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
@@ -550,7 +564,7 @@ impl Component for Pins {
             Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
             Span::raw(" quit "),
         ]);
-        frame.render_widget(Paragraph::new(footer), chunks[2]);
+        frame.render_widget(Paragraph::new(footer), chunks[3]);
 
         Ok(())
     }

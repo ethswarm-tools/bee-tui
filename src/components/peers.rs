@@ -614,29 +614,33 @@ impl Component for Peers {
             Constraint::Length(3),  // header
             Constraint::Length(20), // bin strip (32 lines + header)
             Constraint::Min(0),     // peer table OR drill
+            Constraint::Length(1),  // selected detail (full overlay)
             Constraint::Length(1),  // footer
         ])
         .split(area);
 
         // Header
+        let t = theme::active();
         let mut header_l1 = vec![Span::styled(
             "PEERS / TOPOLOGY",
             Style::default().add_modifier(Modifier::BOLD),
         )];
         if let DrillState::Loaded { view } = &self.drill {
-            header_l1.push(Span::raw(format!(
-                "   · drill {}",
-                short_overlay(&view.peer_overlay)
-            )));
+            // Full peer overlay so operators can click-drag to copy
+            // for support threads / explorer lookups. The 64-char
+            // hex fits cleanly on this line for typical terminals.
+            header_l1.push(Span::raw("   · drill "));
+            header_l1.push(Span::styled(
+                view.peer_overlay.clone(),
+                Style::default().fg(t.info),
+            ));
         } else if let DrillState::Loading { peer, .. } = &self.drill {
-            header_l1.push(Span::raw(format!(
-                "   · drill {} (loading)",
-                short_overlay(peer)
-            )));
+            header_l1.push(Span::raw("   · drill "));
+            header_l1.push(Span::styled(peer.clone(), Style::default().fg(t.info)));
+            header_l1.push(Span::raw(" (loading)"));
         }
         let header_l1 = Line::from(header_l1);
         let mut header_l2 = Vec::new();
-        let t = theme::active();
         if let Some(err) = &self.snapshot.last_error {
             let (color, msg) = theme::classify_header_error(err);
             header_l2.push(Span::styled(msg, Style::default().fg(color)));
@@ -794,6 +798,21 @@ impl Component for Peers {
             }
         }
 
+        // Selected detail — full peer overlay of the highlighted
+        // table row, click-drag selectable. Suppressed during drill
+        // since the drill header already prints the full overlay.
+        if matches!(self.drill, DrillState::Idle) && !view.peers.is_empty() {
+            let i = self.selected.min(view.peers.len() - 1);
+            let row = &view.peers[i];
+            let detail = Line::from(vec![
+                Span::styled("  selected: ", Style::default().fg(t.dim)),
+                Span::styled(row.peer_full.clone(), Style::default().fg(t.info)),
+                Span::raw("  bin "),
+                Span::styled(row.bin.to_string(), Style::default().fg(t.dim)),
+            ]);
+            frame.render_widget(Paragraph::new(detail), chunks[3]);
+        }
+
         // Footer
         let footer = match &self.drill {
             DrillState::Idle => Line::from(vec![
@@ -828,7 +847,7 @@ impl Component for Peers {
                 Span::raw(" quit "),
             ]),
         };
-        frame.render_widget(Paragraph::new(footer), chunks[3]);
+        frame.render_widget(Paragraph::new(footer), chunks[4]);
 
         Ok(())
     }

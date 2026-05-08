@@ -610,6 +610,7 @@ impl Component for Stamps {
         let chunks = Layout::vertical([
             Constraint::Length(3), // header
             Constraint::Min(0),    // body (table or drill)
+            Constraint::Length(1), // selected detail (full IDs)
             Constraint::Length(1), // footer
         ])
         .split(area);
@@ -670,6 +671,28 @@ impl Component for Stamps {
             DrillState::Loaded { view, .. } => self.draw_drill(frame, chunks[1], view),
         }
 
+        // Selected detail — full batch ID + label of the highlighted
+        // row, rendered as a separate line so operators can click-
+        // drag to copy without entering drill mode. Only meaningful
+        // in table view; suppressed during drill since the drill
+        // header already prints the full ID.
+        if matches!(self.drill, DrillState::Idle) && !self.snapshot.batches.is_empty() {
+            let i = self.selected.min(self.snapshot.batches.len() - 1);
+            let b = &self.snapshot.batches[i];
+            let label = if b.label.is_empty() {
+                "(unlabeled)".to_string()
+            } else {
+                b.label.clone()
+            };
+            let detail = Line::from(vec![
+                Span::styled("  selected: ", Style::default().fg(t.dim)),
+                Span::styled(b.batch_id.to_hex(), Style::default().fg(t.info)),
+                Span::raw("  "),
+                Span::styled(label, Style::default().fg(t.dim)),
+            ]);
+            frame.render_widget(Paragraph::new(detail), chunks[2]);
+        }
+
         // Footer — keymap shifts in drill mode.
         let footer = match &self.drill {
             DrillState::Idle => Line::from(vec![
@@ -700,7 +723,7 @@ impl Component for Stamps {
                 Span::raw(" quit "),
             ]),
         };
-        frame.render_widget(Paragraph::new(footer), chunks[2]);
+        frame.render_widget(Paragraph::new(footer), chunks[3]);
 
         Ok(())
     }
