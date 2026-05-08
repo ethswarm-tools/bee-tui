@@ -403,10 +403,7 @@ impl Component for Manifest {
                 _ => "  (no copyable id on this row)".to_string(),
             };
             frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(
-                    detail,
-                    Style::default().fg(t.dim),
-                ))),
+                Paragraph::new(Line::from(Span::styled(detail, Style::default().fg(t.dim)))),
                 chunks[2],
             );
         }
@@ -585,8 +582,8 @@ fn parse_hex_32(s: &str) -> std::result::Result<[u8; 32], String> {
     }
     let mut out = [0u8; 32];
     for i in 0..32 {
-        out[i] = u8::from_str_radix(&cleaned[2 * i..2 * i + 2], 16)
-            .map_err(|e| format!("hex: {e}"))?;
+        out[i] =
+            u8::from_str_radix(&cleaned[2 * i..2 * i + 2], 16).map_err(|e| format!("hex: {e}"))?;
     }
     Ok(out)
 }
@@ -595,11 +592,7 @@ fn parse_hex_32(s: &str) -> std::result::Result<[u8; 32], String> {
 mod tests {
     use super::*;
 
-    fn empty_state() -> (
-        NodeState,
-        HashMap<[u8; 32], NodeState>,
-        HashSet<[u8; 32]>,
-    ) {
+    fn empty_state() -> (NodeState, HashMap<[u8; 32], NodeState>, HashSet<[u8; 32]>) {
         (NodeState::Idle, HashMap::new(), HashSet::new())
     }
 
@@ -607,7 +600,11 @@ mod tests {
     fn header_explains_no_load_yet() {
         let (root, loaded, expanded) = empty_state();
         let view = Manifest::view_for(None, &root, &loaded, &expanded);
-        assert!(view.header.contains("no manifest loaded"), "{}", view.header);
+        assert!(
+            view.header.contains("no manifest loaded"),
+            "{}",
+            view.header
+        );
         assert!(view.rows.is_empty());
     }
 

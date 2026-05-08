@@ -117,8 +117,8 @@ pub fn depth_table() -> String {
 pub fn gsoc_mine_for(overlay_hex: &str, identifier_str: &str) -> Result<String, String> {
     let overlay = parse_hex_32(overlay_hex)?;
     let id = Identifier::from_string(identifier_str);
-    let pk = gsoc_mine(&overlay, &id, GSOC_DEFAULT_PROXIMITY)
-        .map_err(|e| format!("gsoc_mine: {e}"))?;
+    let pk =
+        gsoc_mine(&overlay, &id, GSOC_DEFAULT_PROXIMITY).map_err(|e| format!("gsoc_mine: {e}"))?;
     Ok(format!(
         "private_key=0x{}\nproximity≥{} (default)",
         pk.to_hex(),

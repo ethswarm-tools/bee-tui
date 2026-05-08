@@ -14,8 +14,8 @@ use bee::debug::{Cheque, ChequebookBalance, LastCheque, Settlement, Settlements}
 use bee_tui::components::swap::Swap;
 use bee_tui::economics_oracle::{EconomicsSnapshot, GasInfo, XbzzPrice};
 use bee_tui::watch::SwapSnapshot;
-use std::time::SystemTime;
 use num_bigint::BigInt;
+use std::time::SystemTime;
 
 /// 1 BZZ = 10^16 PLUR.
 fn bzz(n: u64) -> BigInt {

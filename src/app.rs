@@ -213,17 +213,29 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
         "upload-file",
         "<path> <batch> — upload a single local file, return Swarm ref",
     ),
-    ("manifest", "<ref> — open Mantaray tree browser at a reference"),
-    ("inspect", "<ref> — what is this? auto-detects manifest vs raw chunk"),
+    (
+        "manifest",
+        "<ref> — open Mantaray tree browser at a reference",
+    ),
+    (
+        "inspect",
+        "<ref> — what is this? auto-detects manifest vs raw chunk",
+    ),
     (
         "durability-check",
         "<ref> — walk chunk graph, report total / lost / errors",
     ),
     ("watchlist", "S13 Watchlist — durability-check history"),
-    ("hash", "<path> — Swarm reference of a local file/dir (offline)"),
+    (
+        "hash",
+        "<path> — Swarm reference of a local file/dir (offline)",
+    ),
     ("cid", "<ref> [manifest|feed] — encode reference as CID"),
     ("depth-table", "Print canonical depth → capacity table"),
-    ("gsoc-mine", "<overlay> <id> — mine a GSOC signer (CPU work)"),
+    (
+        "gsoc-mine",
+        "<overlay> <id> — mine a GSOC signer (CPU work)",
+    ),
     (
         "pss-target",
         "<overlay> — first 4 hex chars (Bee's max prefix)",
@@ -1178,9 +1190,7 @@ impl App {
         let (path_str, prefix) = match parts.as_slice() {
             [_, p, b, ..] => (*p, *b),
             _ => {
-                return CommandStatus::Err(
-                    "usage: :upload-file <path> <batch-prefix>".into(),
-                );
+                return CommandStatus::Err("usage: :upload-file <path> <batch-prefix>".into());
             }
         };
         let path = std::path::PathBuf::from(path_str);
@@ -1235,10 +1245,7 @@ impl App {
             let data = match tokio::fs::read(&path).await {
                 Ok(b) => b,
                 Err(e) => {
-                    let _ = tx.send(CommandStatus::Err(format!(
-                        "read {}: {e}",
-                        path.display()
-                    )));
+                    let _ = tx.send(CommandStatus::Err(format!("read {}: {e}", path.display())));
                     return;
                 }
             };
@@ -1419,7 +1426,9 @@ impl App {
             };
             let _ = tx.send(status);
         });
-        CommandStatus::Info(format!("inspecting {label} — result will replace this line"))
+        CommandStatus::Info(format!(
+            "inspecting {label} — result will replace this line"
+        ))
     }
 
     /// `:durability-check <ref>` — walk the chunk graph rooted at
@@ -1539,12 +1548,7 @@ impl App {
     /// operator's config. Report lands as a temp file the operator
     /// can review and apply by hand.
     fn run_config_doctor(&self) -> CommandStatus {
-        let path = match self
-            .config
-            .bee
-            .as_ref()
-            .map(|b| b.config.clone())
-        {
+        let path = match self.config.bee.as_ref().map(|b| b.config.clone()) {
             Some(p) => p,
             None => {
                 return CommandStatus::Err(
@@ -1565,11 +1569,7 @@ impl App {
         if let Err(e) = std::fs::write(&out_path, report.render()) {
             return CommandStatus::Err(format!("config-doctor write {}: {e}", out_path.display()));
         }
-        CommandStatus::Info(format!(
-            "{} → {}",
-            report.summary(),
-            out_path.display()
-        ))
+        CommandStatus::Info(format!("{} → {}", report.summary(), out_path.display()))
     }
 
     /// `:check-version` — fire a GitHub `releases/latest` lookup for
@@ -1583,13 +1583,7 @@ impl App {
         let api = self.api.clone();
         let tx = self.cmd_status_tx.clone();
         tokio::spawn(async move {
-            let running = api
-                .bee()
-                .debug()
-                .health()
-                .await
-                .ok()
-                .map(|h| h.version);
+            let running = api.bee().debug().health().await.ok().map(|h| h.version);
             let status = match version_check::check_latest(running).await {
                 Ok(v) => CommandStatus::Info(v.summary()),
                 Err(e) => CommandStatus::Err(format!("check-version failed: {e}")),
@@ -1610,8 +1604,7 @@ impl App {
             [_, prefix, ..] => *prefix,
             _ => {
                 return CommandStatus::Err(
-                    "usage: :plan-batch <batch-prefix> [usage-thr] [ttl-thr] [extra-depth]"
-                        .into(),
+                    "usage: :plan-batch <batch-prefix> [usage-thr] [ttl-thr] [extra-depth]".into(),
                 );
             }
         };
@@ -1980,8 +1973,8 @@ impl App {
         let dir_for_task = dir.clone();
         let tx = self.cmd_status_tx.clone();
         tokio::spawn(async move {
-            let r = pprof_bundle::fetch_and_write(&base_url, auth_token, seconds, dir_for_task)
-                .await;
+            let r =
+                pprof_bundle::fetch_and_write(&base_url, auth_token, seconds, dir_for_task).await;
             let status = match r {
                 Ok(b) => CommandStatus::Info(b.summary()),
                 Err(e) => CommandStatus::Err(format!("diagnose --pprof failed: {e}")),
@@ -2123,9 +2116,7 @@ impl App {
                     // recorded — operators want to see every check
                     // they fired, not just the most recent.
                     while let Ok(result) = self.durability_rx.try_recv() {
-                        if let Some(idx) =
-                            SCREEN_NAMES.iter().position(|n| *n == "Watchlist")
-                        {
+                        if let Some(idx) = SCREEN_NAMES.iter().position(|n| *n == "Watchlist") {
                             if let Some(wl) = self
                                 .screens
                                 .get_mut(idx)

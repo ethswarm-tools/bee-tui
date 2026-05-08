@@ -80,10 +80,7 @@ impl DurabilityResult {
         } else {
             format!(
                 "durability-check UNHEALTHY in {}ms · {kind} · total {} · lost {} · errors {}{trunc}",
-                self.duration_ms,
-                self.chunks_total,
-                self.chunks_lost,
-                self.chunks_errors,
+                self.duration_ms, self.chunks_total, self.chunks_lost, self.chunks_errors,
             )
         }
     }

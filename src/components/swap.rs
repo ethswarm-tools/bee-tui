@@ -425,7 +425,10 @@ impl Component for Swap {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        let view = Self::view_for(&self.snapshot, self.market_rx.as_ref().map(|_| &self.market));
+        let view = Self::view_for(
+            &self.snapshot,
+            self.market_rx.as_ref().map(|_| &self.market),
+        );
 
         // Layout slots: header, optional market tile (3 rows when
         // present), chequebook card, tables, footer. Computing slots
@@ -492,18 +495,13 @@ impl Component for Swap {
             } else {
                 "  ".to_string()
             };
-            let mut lines = vec![
-                Line::from(vec![
-                    Span::raw(prefix.clone()),
-                    Span::styled(
-                        "Market  ",
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(tile.price_line.clone()),
-                    Span::raw("    "),
-                    Span::raw(tile.gas_line.clone()),
-                ]),
-            ];
+            let mut lines = vec![Line::from(vec![
+                Span::raw(prefix.clone()),
+                Span::styled("Market  ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(tile.price_line.clone()),
+                Span::raw("    "),
+                Span::raw(tile.gas_line.clone()),
+            ])];
             if let Some(why) = &tile.stale_why {
                 lines.push(Line::from(vec![
                     Span::raw("    └─ "),

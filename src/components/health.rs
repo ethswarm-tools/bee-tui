@@ -127,10 +127,7 @@ impl Health {
         gates
     }
 
-    fn gates_for_inner(
-        snap: &HealthSnapshot,
-        topology: Option<&TopologySnapshot>,
-    ) -> Vec<Gate> {
+    fn gates_for_inner(snap: &HealthSnapshot, topology: Option<&TopologySnapshot>) -> Vec<Gate> {
         let mut gates = Vec::with_capacity(10);
 
         // 1. API reachable -------------------------------------------------
@@ -376,8 +373,7 @@ fn stamp_ttl_gate(s: &crate::watch::StampsSnapshot) -> Gate {
     if s.last_update.is_none() {
         return unknown("Stamp TTL");
     }
-    let usable: Vec<&bee::postage::PostageBatch> =
-        s.batches.iter().filter(|b| b.usable).collect();
+    let usable: Vec<&bee::postage::PostageBatch> = s.batches.iter().filter(|b| b.usable).collect();
     if usable.is_empty() {
         return Gate {
             label: "Stamp TTL",

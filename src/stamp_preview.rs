@@ -324,11 +324,8 @@ pub fn plan_batch(
             });
         }
         let needed = ttl_threshold_seconds.saturating_sub(current_ttl).max(1);
-        let amount = amount_for_ttl_extension(
-            needed,
-            &chain_state.current_price,
-            GNOSIS_BLOCK_TIME_SECS,
-        );
+        let amount =
+            amount_for_ttl_extension(needed, &chain_state.current_price, GNOSIS_BLOCK_TIME_SECS);
         let cost = cost_bzz(&amount, batch.depth);
         return Ok(PlanPreview {
             batch_id_short: short_batch_id(batch),
@@ -419,8 +416,7 @@ pub fn plan_batch(
             // Topup first to a TTL high enough that post-dilute we
             // still clear the threshold. Required pre-dilute TTL is
             // `ttl_threshold × dilute_factor`. Topup buys the gap.
-            let target_pre_dilute_ttl =
-                ttl_threshold_seconds.saturating_mul(dilute_factor.max(1));
+            let target_pre_dilute_ttl = ttl_threshold_seconds.saturating_mul(dilute_factor.max(1));
             let needed = target_pre_dilute_ttl.saturating_sub(current_ttl).max(1);
             let amount = amount_for_ttl_extension(
                 needed,
@@ -444,8 +440,9 @@ pub fn plan_batch(
                     post_dilute_ttl_seconds: post_dilute_ttl,
                 },
                 total_cost_bzz: cost,
-                reason: "usage above threshold + post-dilute TTL would fall below — topup then dilute"
-                    .to_string(),
+                reason:
+                    "usage above threshold + post-dilute TTL would fall below — topup then dilute"
+                        .to_string(),
             })
         }
     }
@@ -1400,9 +1397,7 @@ mod tests {
     #[test]
     fn plan_batch_rejects_out_of_range_threshold() {
         let batch = mutable_batch(1_000_000, 22, 30 * 86_400, 0);
-        assert!(
-            plan_batch(&batch, &chain(1), 1.5, DEFAULT_TTL_THRESHOLD_SECONDS, 2).is_err()
-        );
+        assert!(plan_batch(&batch, &chain(1), 1.5, DEFAULT_TTL_THRESHOLD_SECONDS, 2).is_err());
         assert!(plan_batch(&batch, &chain(1), -0.1, 86400, 2).is_err());
     }
 

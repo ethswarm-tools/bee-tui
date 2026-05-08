@@ -192,9 +192,7 @@ fn once_cid(args: &[String]) -> OnceResult {
         Err(e) => return OnceResult::usage("cid", e),
     };
     match utility_verbs::cid_for_ref(ref_arg, kind) {
-        Ok(cid) => {
-            OnceResult::ok_with_data("cid", format!("cid: {cid}"), json!({ "cid": cid }))
-        }
+        Ok(cid) => OnceResult::ok_with_data("cid", format!("cid: {cid}"), json!({ "cid": cid })),
         Err(e) => OnceResult::error("cid", format!("cid failed: {e}")),
     }
 }
@@ -373,10 +371,7 @@ async fn once_inspect(args: &[String]) -> OnceResult {
     match manifest_walker::inspect(api, reference).await {
         InspectResult::Manifest { node, bytes_len } => OnceResult::ok_with_data(
             "inspect",
-            format!(
-                "manifest · {bytes_len} bytes · {} forks",
-                node.forks.len()
-            ),
+            format!("manifest · {bytes_len} bytes · {} forks", node.forks.len()),
             json!({
                 "kind": "manifest",
                 "bytes": bytes_len,
@@ -682,10 +677,7 @@ async fn once_dilute_preview(args: &[String]) -> OnceResult {
     let new_depth: u8 = match depth_str.parse() {
         Ok(d) => d,
         Err(_) => {
-            return OnceResult::usage(
-                "dilute-preview",
-                format!("invalid depth: {depth_str}"),
-            );
+            return OnceResult::usage("dilute-preview", format!("invalid depth: {depth_str}"));
         }
     };
     let api = match build_api() {
@@ -784,16 +776,10 @@ async fn once_price() -> OnceResult {
 /// on success — gas fluctuates, gating CI on a threshold should
 /// happen at the workflow level.
 async fn once_basefee() -> OnceResult {
-    let url = match Config::new()
-        .ok()
-        .and_then(|c| c.economics.gnosis_rpc_url)
-    {
+    let url = match Config::new().ok().and_then(|c| c.economics.gnosis_rpc_url) {
         Some(u) => u,
         None => {
-            return OnceResult::usage(
-                "basefee",
-                "set [economics].gnosis_rpc_url in config.toml",
-            );
+            return OnceResult::usage("basefee", "set [economics].gnosis_rpc_url in config.toml");
         }
     };
     match economics_oracle::fetch_gnosis_gas(&url).await {
@@ -853,13 +839,7 @@ async fn once_check_version() -> OnceResult {
         Ok(a) => a,
         Err(r) => return r,
     };
-    let running = api
-        .bee()
-        .debug()
-        .health()
-        .await
-        .ok()
-        .map(|h| h.version);
+    let running = api.bee().debug().health().await.ok().map(|h| h.version);
     match version_check::check_latest(running).await {
         Ok(v) => {
             let data = json!({
@@ -916,10 +896,7 @@ async fn once_plan_batch(args: &[String]) -> OnceResult {
         Some(s) => match s.parse::<u8>() {
             Ok(v) => v,
             Err(_) => {
-                return OnceResult::usage(
-                    "plan-batch",
-                    format!("invalid extra-depth {s:?}"),
-                );
+                return OnceResult::usage("plan-batch", format!("invalid extra-depth {s:?}"));
             }
         },
         None => stamp_preview::DEFAULT_EXTRA_DEPTH,
@@ -973,13 +950,7 @@ async fn once_plan_batch(args: &[String]) -> OnceResult {
 /// chain state. Used by the topup/extend paths which need both.
 async fn fetch_stamps_and_chain(
     api: &Arc<ApiClient>,
-) -> Result<
-    (
-        Vec<bee::postage::PostageBatch>,
-        bee::debug::ChainState,
-    ),
-    String,
-> {
+) -> Result<(Vec<bee::postage::PostageBatch>, bee::debug::ChainState), String> {
     let bee = api.bee();
     let postage = bee.postage();
     let debug = bee.debug();
@@ -995,10 +966,7 @@ async fn once_durability_check(args: &[String]) -> OnceResult {
     let ref_arg = match args.first() {
         Some(r) => r.as_str(),
         None => {
-            return OnceResult::usage(
-                "durability-check",
-                "usage: --once durability-check <ref>",
-            );
+            return OnceResult::usage("durability-check", "usage: --once durability-check <ref>");
         }
     };
     let reference = match bee::swarm::Reference::from_hex(ref_arg.trim()) {
@@ -1100,10 +1068,7 @@ mod tests {
 
     #[test]
     fn exit_codes_map_correctly() {
-        assert_eq!(
-            OnceStatus::Ok.exit_code(),
-            std::process::ExitCode::SUCCESS
-        );
+        assert_eq!(OnceStatus::Ok.exit_code(), std::process::ExitCode::SUCCESS);
         // UsageError vs Error vs Unhealthy all distinguishable. We
         // can't equality-test ExitCode::from(N) directly, but we can
         // exercise that the path doesn't panic.

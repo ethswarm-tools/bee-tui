@@ -45,7 +45,9 @@ use crate::api::ApiClient;
 use crate::theme;
 use crate::watch::TopologySnapshot;
 
-use bee::debug::{Balance, BinInfo, PeerCheques, PeerInfo, PeerStatus, Settlement, Status, Topology};
+use bee::debug::{
+    Balance, BinInfo, PeerCheques, PeerInfo, PeerStatus, Settlement, Status, Topology,
+};
 
 /// Kademlia bins per Bee build.
 pub const BIN_COUNT: usize = 32;
@@ -1028,17 +1030,9 @@ impl Peers {
         // would be flagged on by `bee-scripts/bad-status.sh`. These
         // surface together because they all derive from one row of
         // the bulk response.
-        lines.push(drill_field_line(
-            "storage radius ",
-            &view.storage_radius,
-            t,
-        ));
+        lines.push(drill_field_line("storage radius ", &view.storage_radius, t));
         lines.push(drill_field_line("reserve size   ", &view.reserve_size, t));
-        lines.push(drill_field_line(
-            "pullsync rate  ",
-            &view.pullsync_rate,
-            t,
-        ));
+        lines.push(drill_field_line("pullsync rate  ", &view.pullsync_rate, t));
         lines.push(drill_batch_commitment_line(
             "batch commit   ",
             &view.batch_commitment,

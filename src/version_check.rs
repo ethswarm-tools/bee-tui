@@ -126,7 +126,10 @@ fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
     let patch_raw = iter.next()?;
     // Patch may itself carry a non-digit suffix on weird build
     // strings; trim to the leading digits.
-    let patch_digits: String = patch_raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let patch_digits: String = patch_raw
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     let patch: u32 = patch_digits.parse().ok()?;
     Some((major, minor, patch))
 }
@@ -163,10 +166,7 @@ mod tests {
     #[test]
     fn drift_not_detected_when_versions_match() {
         assert!(!version_drift_detected("2.7.2", "v2.7.2"));
-        assert!(!version_drift_detected(
-            "2.7.2-bcaf69d-dirty",
-            "v2.7.2"
-        ));
+        assert!(!version_drift_detected("2.7.2-bcaf69d-dirty", "v2.7.2"));
     }
 
     #[test]

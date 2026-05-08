@@ -26,7 +26,10 @@ use crate::api::ApiClient;
 pub enum InspectResult {
     /// The chunk parsed as a Mantaray manifest. `node` is the parsed
     /// root; `bytes_len` is the raw chunk size for display.
-    Manifest { node: Box<MantarayNode>, bytes_len: usize },
+    Manifest {
+        node: Box<MantarayNode>,
+        bytes_len: usize,
+    },
     /// The chunk fetched but didn't parse as a manifest. We surface
     /// the size so the caller can display "raw, X bytes".
     RawChunk { bytes_len: usize },
@@ -38,10 +41,7 @@ pub enum InspectResult {
 /// Fetch a Mantaray chunk by reference and parse it. Returns the
 /// parsed node on success; on parse-failure surfaces the underlying
 /// error string ("mantaray: invalid version hash" etc).
-pub async fn load_node(
-    api: Arc<ApiClient>,
-    reference: Reference,
-) -> Result<MantarayNode, String> {
+pub async fn load_node(api: Arc<ApiClient>, reference: Reference) -> Result<MantarayNode, String> {
     let bytes = api
         .bee()
         .file()

@@ -107,10 +107,7 @@ pub async fn fetch_xbzz_price() -> Result<XbzzPrice, String> {
         .await
         .map_err(|e| format!("GET {TOKEN_SERVICE_URL}: {e}"))?;
     if !resp.status().is_success() {
-        return Err(format!(
-            "tokenservice returned HTTP {}",
-            resp.status()
-        ));
+        return Err(format!("tokenservice returned HTTP {}", resp.status()));
     }
     let body: TokenServicePayload = resp
         .json()
@@ -190,7 +187,10 @@ pub async fn fetch_gnosis_gas(rpc_url: &str) -> Result<GasInfo, String> {
     let base_fee_wei = match block.base_fee_per_gas {
         Some(hex) => parse_hex_u128(&hex)?,
         None => {
-            return Err("eth_getBlockByNumber didn't return baseFeePerGas — is this an EIP-1559 chain?".into());
+            return Err(
+                "eth_getBlockByNumber didn't return baseFeePerGas — is this an EIP-1559 chain?"
+                    .into(),
+            );
         }
     };
     let max_priority_fee_gwei = match tip_result {
@@ -343,8 +343,7 @@ mod tests {
 
     #[test]
     fn extract_first_numeric_returns_none_when_missing() {
-        let v: serde_json::Value =
-            serde_json::from_str(r#"{"a": "x", "b": ["y", "z"]}"#).unwrap();
+        let v: serde_json::Value = serde_json::from_str(r#"{"a": "x", "b": ["y", "z"]}"#).unwrap();
         assert_eq!(extract_first_numeric(&v), None);
     }
 

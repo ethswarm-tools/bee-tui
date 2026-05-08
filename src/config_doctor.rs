@@ -130,7 +130,10 @@ impl ConfigKeys {
         self.entries.iter().any(|(k, _)| k == key)
     }
     pub fn value(&self, key: &str) -> Option<&str> {
-        self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        self.entries
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -147,11 +150,7 @@ pub fn parse_top_level_keys(body: &str) -> ConfigKeys {
             continue;
         }
         // Strip trailing comment (after the first ` #` we see).
-        let line = raw
-            .find(" #")
-            .map(|i| &raw[..i])
-            .unwrap_or(raw)
-            .trim_end();
+        let line = raw.find(" #").map(|i| &raw[..i]).unwrap_or(raw).trim_end();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -163,7 +162,9 @@ pub fn parse_top_level_keys(body: &str) -> ConfigKeys {
         if key.is_empty() {
             continue;
         }
-        let value = rest[1..].trim().trim_matches(|c: char| c == '"' || c == '\'');
+        let value = rest[1..]
+            .trim()
+            .trim_matches(|c: char| c == '"' || c == '\'');
         entries.push((key, value.to_string()));
     }
     ConfigKeys { entries }
@@ -303,7 +304,10 @@ mod tests {
 
     fn ck(entries: &[(&str, &str)]) -> ConfigKeys {
         ConfigKeys {
-            entries: entries.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            entries: entries
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
         }
     }
 

@@ -152,10 +152,10 @@ impl Component for Watchlist {
             KeyCode::Up | KeyCode::Char('k') => {
                 self.selected = self.selected.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !self.rows.is_empty() && self.selected + 1 < self.rows.len() {
-                    self.selected += 1;
-                }
+            KeyCode::Down | KeyCode::Char('j')
+                if !self.rows.is_empty() && self.selected + 1 < self.rows.len() =>
+            {
+                self.selected += 1;
             }
             _ => {}
         }
@@ -182,10 +182,7 @@ impl Component for Watchlist {
             ))
         } else {
             Line::from(vec![
-                Span::styled(
-                    format!(" {} ", view.rows.len()),
-                    Style::default().fg(t.dim),
-                ),
+                Span::styled(format!(" {} ", view.rows.len()), Style::default().fg(t.dim)),
                 Span::raw("checks · "),
                 Span::styled(
                     format!("{} ", view.healthy_count),
@@ -230,10 +227,7 @@ impl Component for Watchlist {
                 };
                 lines.push(Line::from(vec![
                     Span::styled(cursor_marker.to_string(), Style::default().fg(t.accent)),
-                    Span::styled(
-                        format!("{:<10}", row.status_label),
-                        status_style,
-                    ),
+                    Span::styled(format!("{:<10}", row.status_label), status_style),
                     Span::raw("  "),
                     Span::styled(kind.to_string(), Style::default().fg(t.dim)),
                     Span::raw("  "),
