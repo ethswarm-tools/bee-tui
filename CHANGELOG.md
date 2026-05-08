@@ -11,6 +11,33 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.9.0] - 2026-05-08
+
+The "pubsub durability" release. Two small follow-ups close the
+overnight-subscription loop opened by v1.8's `[pubsub].history_file`
+writer: rotation keeps disk usage bounded, and a replay verb loads
+prior sessions back into S15 for visual analysis.
+
+### Added
+
+- **`[pubsub].rotate_size_mb` + `[pubsub].keep_files`** — when the
+  history file crosses the size threshold (default 64 MiB), bee-tui
+  rolls it over to `<path>.1` (and shifts older rotations to `.2` ..
+  `.N`, dropping the oldest beyond `keep_files`, default 5). Set
+  `rotate_size_mb = 0` to disable rotation. The rotation is
+  serialised through the same mutex that orders concurrent appends,
+  so PSS + GSOC watchers can't race a rename.
+- **`:pubsub-replay <path>`** — load a prior session's pubsub-history
+  JSONL back onto the S15 timeline (oldest → newest, capped at the
+  500-message ring). Bad lines are skipped with a warn log; replay
+  does not start any watchers.
+
+### Notes
+
+- Tests: 422 lib tests (was 411 in v1.8.0), +10 covering rotation,
+  replay round-trip, MAX_MESSAGES cap, bad-line skip, and hex
+  decoder edges.
+
 ## [1.8.0] - 2026-05-08
 
 The "polish + read-side ACT" release. Three small features
