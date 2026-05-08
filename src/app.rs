@@ -32,7 +32,7 @@ use crate::{
     config::Config,
     log_capture,
     manifest_walker::{self, InspectResult},
-    stamp_preview,
+    pprof_bundle, stamp_preview,
     state::State,
     theme,
     tui::{Event, Tui},
@@ -186,13 +186,34 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
         "pss-target",
         "<overlay> — first 4 hex chars (Bee's max prefix)",
     ),
-    ("diagnose", "Export full snapshot to a file"),
+    (
+        "diagnose",
+        "[--pprof[=N]] Export snapshot (+ optional CPU profile + trace)",
+    ),
     ("pins-check", "Bulk integrity walk to a file"),
     ("loggers", "Dump live logger registry"),
     ("set-logger", "<expr> <level> — change a logger's verbosity"),
     ("context", "<name> — switch node profile"),
     ("quit", "Exit the cockpit"),
 ];
+
+/// Pull the `--pprof[=N]` flag value out of a `:diagnose ...`
+/// command line. Returns `Some(seconds)` when the flag is present
+/// (defaulting to 60 when no `=N` is supplied), `None` when the
+/// operator just typed `:diagnose`. Pure for testability.
+fn parse_pprof_arg(line: &str) -> Option<u32> {
+    for tok in line.split_whitespace() {
+        if tok == "--pprof" {
+            return Some(60);
+        }
+        if let Some(rest) = tok.strip_prefix("--pprof=") {
+            if let Ok(n) = rest.parse::<u32>() {
+                return Some(n.clamp(1, 600));
+            }
+        }
+    }
+    None
+}
 
 /// Produce the filtered list of (name, description) pairs that match
 /// the buffer's first whitespace token (case-insensitive prefix). An
@@ -770,13 +791,18 @@ impl App {
                 self.command_status = Some(CommandStatus::Info("quitting".into()));
             }
             "diagnose" | "diag" => {
-                self.command_status = Some(match self.export_diagnostic_bundle() {
-                    Ok(path) => CommandStatus::Info(format!(
-                        "diagnostic bundle exported to {}",
-                        path.display()
-                    )),
-                    Err(e) => CommandStatus::Err(format!("diagnose failed: {e}")),
-                });
+                let pprof_secs = parse_pprof_arg(trimmed);
+                if let Some(secs) = pprof_secs {
+                    self.command_status = Some(self.start_diagnose_with_pprof(secs));
+                } else {
+                    self.command_status = Some(match self.export_diagnostic_bundle() {
+                        Ok(path) => CommandStatus::Info(format!(
+                            "diagnostic bundle exported to {}",
+                            path.display()
+                        )),
+                        Err(e) => CommandStatus::Err(format!("diagnose failed: {e}")),
+                    });
+                }
             }
             "pins-check" => {
                 // `:pins-check` keeps the legacy bulk-check-to-file behaviour;
@@ -1504,6 +1530,58 @@ impl App {
             }
         });
         Ok(path)
+    }
+
+    /// `:diagnose --pprof[=N]` — drop the existing diagnostic text into
+    /// a fresh directory, then asynchronously fetch
+    /// `/debug/pprof/profile?seconds=N` and `/debug/pprof/trace?seconds=N`
+    /// and write each as a sibling file. The operator's command-status
+    /// row gets a "running" notice immediately; the final bundle path
+    /// (or error) lands via `cmd_status_tx` when the pprof block ends.
+    ///
+    /// Pprof endpoints live on Bee's debug API. When operators
+    /// haven't enabled `--debug-api-enable=true` the endpoint 404s;
+    /// the helper translates that into a clear "enable Bee's debug
+    /// API" hint.
+    fn start_diagnose_with_pprof(&self, seconds: u32) -> CommandStatus {
+        let secs_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("bee-tui-diagnostic-{secs_unix}"));
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            return CommandStatus::Err(format!("diagnose --pprof: mkdir failed: {e}"));
+        }
+        let bundle_text = self.render_diagnostic_bundle();
+        if let Err(e) = std::fs::write(dir.join("bundle.txt"), &bundle_text) {
+            return CommandStatus::Err(format!("diagnose --pprof: write bundle.txt: {e}"));
+        }
+        // Resolve the active node's auth token so the pprof fetch
+        // carries the same Authorization header bee-tui uses for the
+        // regular API. Bee's debug-api-addr inherits the token when
+        // it's served on the same listener.
+        let auth_token = self
+            .config
+            .nodes
+            .iter()
+            .find(|n| n.name == self.api.name)
+            .and_then(|n| n.resolved_token());
+        let base_url = self.api.url.clone();
+        let dir_for_task = dir.clone();
+        let tx = self.cmd_status_tx.clone();
+        tokio::spawn(async move {
+            let r = pprof_bundle::fetch_and_write(&base_url, auth_token, seconds, dir_for_task)
+                .await;
+            let status = match r {
+                Ok(b) => CommandStatus::Info(b.summary()),
+                Err(e) => CommandStatus::Err(format!("diagnose --pprof failed: {e}")),
+            };
+            let _ = tx.send(status);
+        });
+        CommandStatus::Info(format!(
+            "diagnose --pprof={seconds}s in flight (bundle.txt already at {}; profile + trace will join when sampling completes)",
+            dir.display()
+        ))
     }
 
     fn export_diagnostic_bundle(&self) -> std::io::Result<PathBuf> {
@@ -2309,6 +2387,39 @@ mod tests {
     #[test]
     fn path_only_passes_relative_through() {
         assert_eq!(path_only("/already/relative"), "/already/relative");
+    }
+
+    #[test]
+    fn parse_pprof_arg_default_60() {
+        assert_eq!(parse_pprof_arg("diagnose --pprof"), Some(60));
+        assert_eq!(parse_pprof_arg("diag --pprof some other"), Some(60));
+    }
+
+    #[test]
+    fn parse_pprof_arg_with_explicit_seconds() {
+        assert_eq!(parse_pprof_arg("diagnose --pprof=120"), Some(120));
+        assert_eq!(parse_pprof_arg("diagnose --pprof=15 trailing"), Some(15));
+    }
+
+    #[test]
+    fn parse_pprof_arg_clamps_extreme_values() {
+        // 0 → 1 (lower clamp), 9999 → 600 (upper clamp).
+        assert_eq!(parse_pprof_arg("diagnose --pprof=0"), Some(1));
+        assert_eq!(parse_pprof_arg("diagnose --pprof=9999"), Some(600));
+    }
+
+    #[test]
+    fn parse_pprof_arg_none_when_absent() {
+        assert_eq!(parse_pprof_arg("diagnose"), None);
+        assert_eq!(parse_pprof_arg("diag"), None);
+        assert_eq!(parse_pprof_arg(""), None);
+    }
+
+    #[test]
+    fn parse_pprof_arg_ignores_garbage_value() {
+        // Garbage after `=` falls through to None — operator gets the
+        // sync diagnostic, not a panic on bad input.
+        assert_eq!(parse_pprof_arg("diagnose --pprof=lol"), None);
     }
 
     #[test]
