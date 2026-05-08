@@ -11,6 +11,69 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.6.0] - 2026-05-08
+
+The "watch + walk" release. Two features extend v1.5's primitives
+into long-running and historical surfaces: the v1.5 single-shot
+`:feed-probe` graduates into a full S14 Feed Timeline screen with
+cursor navigation; v1.5's BMT-verified `:durability-check` gets a
+daemon mode that re-runs it periodically and feeds the rolling
+history into the existing S13 Watchlist.
+
+Two commits since v1.5.0 (`74a0576`, `b6c77e0`).
+
+### Added — feeds
+
+- **S14 Feed Timeline screen** — walks a feed's history backward
+  from the latest index and renders each entry's index, age,
+  payload size, and (when reference-shaped) embedded Swarm
+  reference. Misses (404 / parse error) render dim so gaps are
+  visible at a glance. Cursor navigation (`↑↓` / `jk` / PgUp /
+  PgDn). Default 50 entries, hard-capped at 1000.
+- **`:feed-timeline <owner> <topic> [N]`** — cockpit verb that
+  triggers the walk and switches to S14 with a spinner while the
+  background fetch runs. Topic input accepts the same forms as
+  `:feed-probe` (64-hex literal or arbitrary string).
+- **`--once feed-timeline`** — JSON output with full entries
+  array. CI gates can assert `entries[0].index` strictly advances
+  across runs or that `error` count stays under a threshold.
+- New `crate::feed_timeline` module with bounded-parallel walker
+  (8-way `futures::join_all`) and pure SOC-bytes parser. 3 unit
+  tests cover the parser + summary; the screen ships 6 more
+  covering loading-state transitions and cursor clamping.
+
+### Added — durability
+
+- **`:watch-ref <ref> [interval]`** — daemon mode for
+  `:durability-check`. Spawns a tokio task that re-runs the full
+  BMT-verified walk every `interval-secs` (default 60, clamped
+  10..=86400) and feeds each result into the existing S13
+  Watchlist ring. Re-issuing for a watched ref cancels the prior
+  daemon — convenient for changing the interval without an
+  explicit stop.
+- **`:watch-ref-stop [ref]`** — cancels active daemons. With no
+  arg, cancels every active one; with a `<ref>` arg, cancels just
+  the matching daemon.
+- Pairs cleanly with v1.4's `[alerts].webhook_url` — durability
+  gate transitions on the watched ref now ping the operator's
+  webhook through the existing alerter path.
+
+### `--once` CI mode
+
+One new verb (`feed-timeline`) — total verbs across cockpit +
+`--once` is now 42 cockpit / 23 `--once`.
+
+### Internals
+
+- New `App::watch_refs: HashMap<String, CancellationToken>` —
+  daemons keyed by reference hex. Each token is a child of
+  `root_cancel` so quit unwinds them like every other spawned
+  task.
+- New `feed_timeline_tx/rx` mpsc channel mirrors the
+  `durability_tx` plumbing for funneling background results into
+  S14.
+- 392 lib tests + integration suite passing.
+
 ## [1.5.0] - 2026-05-08
 
 The "publish + verify" release. Three features bundle into the
