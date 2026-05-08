@@ -42,6 +42,30 @@ pub struct Cli {
     /// already in `config.toml`. Overrides `[bee].config`.
     #[arg(long, value_name = "PATH")]
     pub bee_config: Option<PathBuf>,
+
+    /// Run a single verb without launching the TUI. Prints the
+    /// result on stdout and exits with `0` (ok), `1` (unhealthy /
+    /// failed), or `2` (usage error). Designed for CI / shell
+    /// pipelines: `bee-tui --once readiness` is the canonical
+    /// "is my Bee node ready for traffic?" smoke test.
+    ///
+    /// Supported verbs: `hash`, `cid`, `depth-table`, `pss-target`,
+    /// `gsoc-mine`, `readiness`, `version-check`, `inspect`,
+    /// `durability-check`. Trailing positional args go to the verb.
+    #[arg(long, value_name = "VERB")]
+    pub once: Option<String>,
+
+    /// When `--once` is set, emit a single JSON object on stdout
+    /// instead of the human-readable line. Field shape: `{ verb,
+    /// status, message, data }`. Lets CI parse the result without
+    /// regex on the human line.
+    #[arg(long)]
+    pub json: bool,
+
+    /// Trailing positional args consumed by `--once <verb>`. Not
+    /// used in TUI mode.
+    #[arg(trailing_var_arg = true)]
+    pub once_args: Vec<String>,
 }
 
 const VERSION_MESSAGE: &str = concat!(

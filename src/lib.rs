@@ -24,6 +24,7 @@ pub mod logging;
 pub mod manifest_walker;
 pub mod metrics;
 pub mod metrics_server;
+pub mod once;
 pub mod pprof_bundle;
 pub mod stamp_preview;
 pub mod state;
