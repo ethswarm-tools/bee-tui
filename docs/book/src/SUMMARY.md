@@ -28,6 +28,7 @@
 - [`:pins-check`](./commands/pins-check.md)
 - [`:loggers` / `:set-logger`](./commands/loggers.md)
 - [Stamp dry-run previews](./commands/stamp-previews.md)
+- [`:probe-upload`](./commands/probe-upload.md)
 - [`:context` (multi-node)](./commands/context.md)
 
 # Reference

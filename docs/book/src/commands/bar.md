@@ -59,6 +59,7 @@ target screen, but faster on a 10-screen carousel.
 | `:dilute-preview <batch> <new-depth>` | [stamp-previews](./stamp-previews.md) | Predict capacity / TTL change of diluting a batch |
 | `:extend-preview <batch> <duration>` | [stamp-previews](./stamp-previews.md) | Predict cost to gain N days/hours of TTL |
 | `:buy-preview <depth> <amount>` | [stamp-previews](./stamp-previews.md) | Predict TTL / capacity / cost of a hypothetical fresh buy |
+| `:probe-upload <batch>` | [probe-upload](./probe-upload.md) | Upload one synthetic 4 KiB chunk; report end-to-end latency |
 | `:context <name>` (alias `:ctx`) | [context](./context.md) | Switch to a different node profile from your config |
 | `:context` | [context](./context.md) | List configured profiles (no switch) |
 | `:quit` (alias `:q`) | — | Exit the cockpit |
@@ -97,8 +98,11 @@ These actions deliberately don't have a `:command` form:
   debugging escape hatch.
 
 The cockpit is a read-mostly observer. The few mutating
-commands it *does* have (`:set-logger`) are scoped to
-diagnostic state, not funds-bearing actions.
+commands it *does* have are scoped to diagnostic state, not
+funds-bearing actions: `:set-logger` (changes a Bee logger
+level) and `:probe-upload` (uploads one synthetic 4 KiB chunk
+worth fractions of a cent of BZZ to verify the upload path
+works end-to-end).
 
 ## See also
 
@@ -106,4 +110,5 @@ diagnostic state, not funds-bearing actions.
 - [`:pins-check`](./pins-check.md)
 - [`:loggers` / `:set-logger`](./loggers.md)
 - [Stamp dry-run previews](./stamp-previews.md)
+- [`:probe-upload`](./probe-upload.md)
 - [`:context`](./context.md)

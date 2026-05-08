@@ -99,6 +99,13 @@ pub struct App {
     /// the cockpit isn't acting as the supervisor (no log file to
     /// tail). Drained on each Tick into the LogPane.
     bee_log_rx: Option<mpsc::UnboundedReceiver<(LogTab, BeeLogLine)>>,
+    /// Channel for async-completing `:command` results. Verbs that
+    /// can't return their answer synchronously (e.g. `:probe-upload`
+    /// which has to wait on an HTTP round-trip) hand a clone of the
+    /// sender to a tokio task and surface the outcome on completion;
+    /// the App drains this on every Tick into `command_status`.
+    cmd_status_tx: mpsc::UnboundedSender<CommandStatus>,
+    cmd_status_rx: mpsc::UnboundedReceiver<CommandStatus>,
 }
 
 /// Window during which a second `q` press is interpreted as confirming
@@ -160,6 +167,7 @@ impl App {
         overrides: AppOverrides,
     ) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
+        let (cmd_status_tx, cmd_status_rx) = mpsc::unbounded_channel();
         let config = Config::new()?;
         // Install the theme first so any tracing emitted during the
         // rest of `new` already reflects the operator's choice.
@@ -310,6 +318,8 @@ impl App {
             supervisor,
             bee_status: BeeStatus::Running,
             bee_log_rx,
+            cmd_status_tx,
+            cmd_status_rx,
         })
     }
 
@@ -677,6 +687,9 @@ impl App {
             "buy-preview" => {
                 self.command_status = Some(self.run_buy_preview(trimmed));
             }
+            "probe-upload" => {
+                self.command_status = Some(self.run_probe_upload(trimmed));
+            }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
                 if target.is_empty() {
@@ -712,7 +725,7 @@ impl App {
             }
             other => {
                 self.command_status = Some(CommandStatus::Err(format!(
-                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :context, :quit)"
+                    "unknown command: {other:?} (try :health, :stamps, :swap, :lottery, :peers, :network, :warmup, :api, :tags, :diagnose, :pins-check, :loggers, :set-logger, :topup-preview, :dilute-preview, :extend-preview, :buy-preview, :probe-upload, :context, :quit)"
                 )));
             }
         }
@@ -810,6 +823,73 @@ impl App {
             Ok(p) => CommandStatus::Info(p.summary()),
             Err(e) => CommandStatus::Err(e),
         }
+    }
+
+    /// `:probe-upload <batch-prefix>` — uploads one synthetic 4 KiB
+    /// chunk to Bee and reports end-to-end latency. The cockpit is
+    /// otherwise read-only; this is the deliberate exception. The
+    /// chunk's payload is timestamp-randomised so each invocation
+    /// fully exercises the upload + stamp path (no Bee dedup).
+    ///
+    /// Cost: one bucket increment on the chosen batch + the BZZ for
+    /// one stamped chunk (`current_price` PLUR, fractions of a cent
+    /// at typical prices). Returns immediately with a "started"
+    /// notice; the actual outcome lands on the command bar via the
+    /// async `cmd_status_tx` channel when Bee responds.
+    fn run_probe_upload(&self, line: &str) -> CommandStatus {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let prefix = match parts.as_slice() {
+            [_, prefix, ..] => *prefix,
+            _ => {
+                return CommandStatus::Err(
+                    "usage: :probe-upload <batch-prefix>  (uploads one synthetic 4 KiB chunk)"
+                        .into(),
+                );
+            }
+        };
+        let stamps = self.watch.stamps().borrow().clone();
+        let batch = match stamp_preview::match_batch_prefix(&stamps.batches, prefix) {
+            Ok(b) => b.clone(),
+            Err(e) => return CommandStatus::Err(e),
+        };
+        if !batch.usable {
+            return CommandStatus::Err(format!(
+                "batch {} is not usable yet (waiting on chain confirmation) — pick another",
+                short_hex(&batch.batch_id.to_hex(), 8),
+            ));
+        }
+        if batch.batch_ttl <= 0 {
+            return CommandStatus::Err(format!(
+                "batch {} is expired — pick another",
+                short_hex(&batch.batch_id.to_hex(), 8),
+            ));
+        }
+
+        let api = self.api.clone();
+        let tx = self.cmd_status_tx.clone();
+        let batch_id = batch.batch_id;
+        let batch_short = short_hex(&batch.batch_id.to_hex(), 8);
+        let task_short = batch_short.clone();
+        tokio::spawn(async move {
+            let chunk = build_synthetic_probe_chunk();
+            let started = Instant::now();
+            let result = api.bee().file().upload_chunk(&batch_id, chunk, None).await;
+            let elapsed_ms = started.elapsed().as_millis();
+            let status = match result {
+                Ok(res) => CommandStatus::Info(format!(
+                    "probe-upload OK in {elapsed_ms}ms — batch {task_short}, ref {}",
+                    short_hex(&res.reference.to_hex(), 8),
+                )),
+                Err(e) => CommandStatus::Err(format!(
+                    "probe-upload FAILED after {elapsed_ms}ms — batch {task_short}: {e}"
+                )),
+            };
+            let _ = tx.send(status);
+        });
+
+        CommandStatus::Info(format!(
+            "probe-upload to batch {batch_short} in flight — result will replace this line"
+        ))
     }
 
     /// `:buy-preview <depth> <amount-plur>` — hypothetical fresh
@@ -1139,6 +1219,13 @@ impl App {
                         while let Ok((tab, line)) = rx.try_recv() {
                             self.log_pane.push_bee(tab, line);
                         }
+                    }
+                    // Surface async command-result updates (e.g.
+                    // `:probe-upload` finished). The latest message
+                    // wins — earlier ones get implicitly overwritten
+                    // because we keep the loop draining.
+                    while let Ok(status) = self.cmd_status_rx.try_recv() {
+                        self.command_status = Some(status);
                     }
                 }
                 Action::Quit => self.should_quit = true,
@@ -1499,6 +1586,38 @@ fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Componen
     ]
 }
 
+/// Build the 4104-byte (8 + 4096) synthetic chunk that
+/// `:probe-upload` ships at Bee. Timestamp-randomised so each
+/// invocation produces a unique chunk address — Bee's
+/// content-addressing dedup would otherwise short-circuit the
+/// second probe on a fresh batch and skew the latency reading.
+/// Returns `Vec<u8>`, which `bee::FileApi::upload_chunk` accepts via
+/// its `impl Into<bytes::Bytes>` parameter.
+fn build_synthetic_probe_chunk() -> Vec<u8> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut data = Vec::with_capacity(8 + 4096);
+    // Span: little-endian u64 with the payload length.
+    data.extend_from_slice(&4096u64.to_le_bytes());
+    // Payload: 16 bytes of timestamp + zero-padding to 4096.
+    data.extend_from_slice(&nanos.to_le_bytes());
+    data.resize(8 + 4096, 0);
+    data
+}
+
+/// Truncate a hex string to a short prefix with an ellipsis. Used by
+/// `:probe-upload` for the human-readable batch + reference labels.
+fn short_hex(hex: &str, len: usize) -> String {
+    if hex.len() > len {
+        format!("{}…", &hex[..len])
+    } else {
+        hex.to_string()
+    }
+}
+
 /// Build the closure the metrics HTTP handler invokes on each
 /// scrape. Captures cloned `BeeWatch` receivers (cheap — they're
 /// `Arc`-backed) plus the log-capture handle, then re-reads the
@@ -1777,5 +1896,34 @@ mod tests {
         // Numeric and named forms sort identically.
         assert_eq!(verbosity_rank("info"), verbosity_rank("1"));
         assert_eq!(verbosity_rank("warning"), verbosity_rank("2"));
+    }
+
+    #[test]
+    fn probe_chunk_is_4104_bytes_with_correct_span() {
+        // span(8) + payload(4096) = 4104, span = 4096 little-endian.
+        let chunk = build_synthetic_probe_chunk();
+        assert_eq!(chunk.len(), 4104);
+        let span = u64::from_le_bytes(chunk[..8].try_into().unwrap());
+        assert_eq!(span, 4096);
+    }
+
+    #[test]
+    fn probe_chunk_payloads_are_unique_per_call() {
+        // Timestamp-randomised → two consecutive builds must differ.
+        // The randomness lives in payload bytes 0..16, so compare just
+        // that window to keep the test deterministic against the
+        // zero-padded tail.
+        let a = build_synthetic_probe_chunk();
+        // tiny sleep so the nanosecond clock is guaranteed to advance
+        std::thread::sleep(Duration::from_micros(1));
+        let b = build_synthetic_probe_chunk();
+        assert_ne!(&a[8..24], &b[8..24]);
+    }
+
+    #[test]
+    fn short_hex_truncates_with_ellipsis() {
+        assert_eq!(short_hex("a1b2c3d4e5f6", 8), "a1b2c3d4…");
+        assert_eq!(short_hex("short", 8), "short");
+        assert_eq!(short_hex("abcdefgh", 8), "abcdefgh");
     }
 }
