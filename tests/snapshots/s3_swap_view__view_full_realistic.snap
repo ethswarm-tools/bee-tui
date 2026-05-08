@@ -50,4 +50,5 @@ SwapView {
     time_total_sent: Some(
         "BZZ 0.2000",
     ),
+    market: None,
 }

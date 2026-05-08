@@ -377,7 +377,19 @@ impl App {
         let watch = BeeWatch::start_with_profile(api.clone(), &root_cancel, refresh);
         let health_rx = watch.health();
 
-        let screens = build_screens(&api, &watch);
+        // Cost-context poller — opt-in via `[economics].enable_market_tile`.
+        // When off, no outbound traffic and S3 SWAP renders identically
+        // to v1.3 (no Market tile slot).
+        let market_rx = if config.economics.enable_market_tile {
+            Some(economics_oracle::spawn_poller(
+                config.economics.gnosis_rpc_url.clone(),
+                root_cancel.child_token(),
+            ))
+        } else {
+            None
+        };
+
+        let screens = build_screens(&api, &watch, market_rx);
         // Bottom log pane subscribes to the bee::http capture set up
         // by logging::init for its `bee::http` tab. The four severity
         // tabs + "Bee HTTP" tab populate from the supervisor's log
@@ -1627,7 +1639,19 @@ impl App {
         let refresh = RefreshProfile::from_config(&self.config.ui.refresh);
         let new_watch = BeeWatch::start_with_profile(new_api.clone(), &self.root_cancel, refresh);
         let new_health_rx = new_watch.health();
-        let new_screens = build_screens(&new_api, &new_watch);
+        // Spin up a fresh cost-context poller for the new context;
+        // the old one keeps emitting until root_cancel fires at quit
+        // (cheap — one tokio task), but the screens consume only the
+        // new receiver after this point.
+        let new_market_rx = if self.config.economics.enable_market_tile {
+            Some(economics_oracle::spawn_poller(
+                self.config.economics.gnosis_rpc_url.clone(),
+                self.root_cancel.child_token(),
+            ))
+        } else {
+            None
+        };
+        let new_screens = build_screens(&new_api, &new_watch, new_market_rx);
         self.api = new_api;
         self.watch = new_watch;
         self.health_rx = new_health_rx;
@@ -2477,10 +2501,17 @@ fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)
 /// Order matters — the [`SCREEN_NAMES`] table assumes index 0 is
 /// Health, 1 is Stamps, 2 is Swap, 3 is Lottery, 4 is Peers, 5 is
 /// Network, 6 is Warmup, 7 is API, 8 is Tags, 9 is Pins.
-fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Component>> {
+fn build_screens(
+    api: &Arc<ApiClient>,
+    watch: &BeeWatch,
+    market_rx: Option<watch::Receiver<crate::economics_oracle::EconomicsSnapshot>>,
+) -> Vec<Box<dyn Component>> {
     let health = Health::new(api.clone(), watch.health(), watch.topology());
     let stamps = Stamps::new(api.clone(), watch.stamps());
-    let swap = Swap::new(watch.swap());
+    let swap = match market_rx {
+        Some(rx) => Swap::new(watch.swap()).with_market_feed(rx),
+        None => Swap::new(watch.swap()),
+    };
     let lottery = Lottery::new(api.clone(), watch.health(), watch.lottery());
     let peers = Peers::new(api.clone(), watch.topology());
     let network = Network::new(watch.network(), watch.topology());

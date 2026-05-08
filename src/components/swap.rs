@@ -116,26 +116,80 @@ pub struct SwapView {
     pub settlements: Vec<SettlementRow>,
     pub time_total_received: Option<String>,
     pub time_total_sent: Option<String>,
+    /// Pre-rendered Market tile lines. `None` when the operator
+    /// hasn't enabled `[economics].enable_market_tile` — the
+    /// renderer skips the tile row entirely in that case.
+    pub market: Option<MarketTile>,
+}
+
+/// Snapshot of the Market tile lines. Pure data so snapshot tests
+/// can pin the formatted strings without poking the renderer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketTile {
+    /// `BZZ ≈ $0.4321` — `—` when price hasn't loaded yet.
+    pub price_line: String,
+    /// `gas: 1.20 base + 0.50 tip = 1.70 gwei` — `—` when not
+    /// configured or basefee fetch failed.
+    pub gas_line: String,
+    /// "stale: ..." line shown dim+italic under the tile when the
+    /// last poll surfaced an error. `None` when the latest poll
+    /// was clean, or when no poll has run yet (cold start shows a
+    /// `loading…` line via `cold_start` instead).
+    pub stale_why: Option<String>,
+    /// `true` while no poll has completed — drives the spinner
+    /// glyph in the tile so cold-start motion is visible.
+    pub cold_start: bool,
 }
 
 pub struct Swap {
     rx: watch::Receiver<SwapSnapshot>,
     snapshot: SwapSnapshot,
+    /// Optional cost-context feed driving the Market tile. `None`
+    /// when `[economics].enable_market_tile` is off — the tile is
+    /// suppressed entirely in that case so the layout doesn't waste
+    /// a row on placeholder text.
+    market_rx: Option<watch::Receiver<crate::economics_oracle::EconomicsSnapshot>>,
+    market: crate::economics_oracle::EconomicsSnapshot,
 }
 
 impl Swap {
     pub fn new(rx: watch::Receiver<SwapSnapshot>) -> Self {
         let snapshot = rx.borrow().clone();
-        Self { rx, snapshot }
+        Self {
+            rx,
+            snapshot,
+            market_rx: None,
+            market: crate::economics_oracle::EconomicsSnapshot::default(),
+        }
+    }
+
+    /// Builder-style attach for the cost-context feed. Call once
+    /// after `new` when `[economics].enable_market_tile` is true.
+    pub fn with_market_feed(
+        mut self,
+        rx: watch::Receiver<crate::economics_oracle::EconomicsSnapshot>,
+    ) -> Self {
+        self.market = rx.borrow().clone();
+        self.market_rx = Some(rx);
+        self
     }
 
     fn pull_latest(&mut self) {
         self.snapshot = self.rx.borrow().clone();
+        if let Some(rx) = &self.market_rx {
+            self.market = rx.borrow().clone();
+        }
     }
 
     /// Pure, snapshot-driven view computation. Exposed for snapshot
-    /// tests in `tests/s3_swap_view.rs`.
-    pub fn view_for(snap: &SwapSnapshot) -> SwapView {
+    /// tests in `tests/s3_swap_view.rs`. The `market` argument is
+    /// `None` when `[economics].enable_market_tile` is off — the
+    /// tile is suppressed entirely in that case so cold-start
+    /// renders identically to today.
+    pub fn view_for(
+        snap: &SwapSnapshot,
+        market: Option<&crate::economics_oracle::EconomicsSnapshot>,
+    ) -> SwapView {
         let card = card_for(snap.chequebook.as_ref());
         let cheques = cheque_rows_for(&snap.last_received);
         let settlements = settlement_rows_for(snap.settlements.as_ref());
@@ -149,6 +203,7 @@ impl Swap {
             .as_ref()
             .and_then(|s| s.total_sent.as_ref())
             .map(format_plur);
+        let market = market.map(market_tile_for);
         SwapView {
             card,
             chequebook_address: snap.chequebook_address.clone(),
@@ -156,7 +211,42 @@ impl Swap {
             settlements,
             time_total_received,
             time_total_sent,
+            market,
         }
+    }
+
+    /// Convenience wrapper used by snapshot tests that don't care
+    /// about the optional Market tile. Equivalent to
+    /// `view_for(snap, None)`.
+    pub fn view_for_no_market(snap: &SwapSnapshot) -> SwapView {
+        Self::view_for(snap, None)
+    }
+}
+
+/// Pure formatter — exposed for tests. Builds the four tile lines
+/// from the latest poller snapshot.
+fn market_tile_for(m: &crate::economics_oracle::EconomicsSnapshot) -> MarketTile {
+    let price_line = match &m.price {
+        Some(p) => format!("BZZ ≈ ${:.4}", p.usd),
+        None => "BZZ ≈ —".to_string(),
+    };
+    let gas_line = match &m.gas {
+        Some(g) => match g.max_priority_fee_gwei {
+            Some(tip) => format!(
+                "gas: {:.2} base + {:.2} tip = {:.2} gwei",
+                g.base_fee_gwei,
+                tip,
+                g.total_gwei(),
+            ),
+            None => format!("gas: {:.2} gwei base", g.base_fee_gwei),
+        },
+        None => "gas: —".to_string(),
+    };
+    MarketTile {
+        price_line,
+        gas_line,
+        stale_why: m.last_error.clone(),
+        cold_start: m.last_polled.is_none(),
     }
 }
 
@@ -335,13 +425,36 @@ impl Component for Swap {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        let chunks = Layout::vertical([
-            Constraint::Length(3), // header
-            Constraint::Length(5), // chequebook card
-            Constraint::Min(0),    // tables
-            Constraint::Length(1), // footer
-        ])
-        .split(area);
+        let view = Self::view_for(&self.snapshot, self.market_rx.as_ref().map(|_| &self.market));
+
+        // Layout slots: header, optional market tile (3 rows when
+        // present), chequebook card, tables, footer. Computing slots
+        // up-front keeps the conditional in one place.
+        let mut constraints: Vec<Constraint> = vec![Constraint::Length(3)];
+        let market_present = view.market.is_some();
+        if market_present {
+            constraints.push(Constraint::Length(3));
+        }
+        constraints.push(Constraint::Length(5)); // chequebook card
+        constraints.push(Constraint::Min(0)); // tables
+        constraints.push(Constraint::Length(1)); // footer
+        let chunks = Layout::vertical(constraints).split(area);
+
+        let mut slot = 0usize;
+        let header_slot = chunks[slot];
+        slot += 1;
+        let market_slot = if market_present {
+            let s = chunks[slot];
+            slot += 1;
+            Some(s)
+        } else {
+            None
+        };
+        let card_slot = chunks[slot];
+        slot += 1;
+        let tables_slot = chunks[slot];
+        slot += 1;
+        let footer_slot = chunks[slot];
 
         let t = theme::active();
         // Header
@@ -367,10 +480,44 @@ impl Component for Swap {
         frame.render_widget(
             Paragraph::new(vec![header_l1, Line::from(header_l2)])
                 .block(Block::default().borders(Borders::BOTTOM)),
-            chunks[0],
+            header_slot,
         );
 
-        let view = Self::view_for(&self.snapshot);
+        // Market tile (xBZZ price + Gnosis basefee). Rendered only
+        // when [economics].enable_market_tile is on. Two-line tile:
+        // price + gas, with optional dim "stale" why-line under it.
+        if let (Some(rect), Some(tile)) = (market_slot, view.market.as_ref()) {
+            let prefix = if tile.cold_start {
+                format!("{} ", theme::spinner_glyph())
+            } else {
+                "  ".to_string()
+            };
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::raw(prefix.clone()),
+                    Span::styled(
+                        "Market  ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(tile.price_line.clone()),
+                    Span::raw("    "),
+                    Span::raw(tile.gas_line.clone()),
+                ]),
+            ];
+            if let Some(why) = &tile.stale_why {
+                lines.push(Line::from(vec![
+                    Span::raw("    └─ "),
+                    Span::styled(
+                        format!("stale: {why}"),
+                        Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
+                    ),
+                ]));
+            }
+            frame.render_widget(
+                Paragraph::new(lines).block(Block::default().borders(Borders::BOTTOM)),
+                rect,
+            );
+        }
 
         // Chequebook card
         let card = &view.card;
@@ -409,13 +556,13 @@ impl Component for Swap {
         }
         frame.render_widget(
             Paragraph::new(card_lines).block(Block::default().borders(Borders::BOTTOM)),
-            chunks[1],
+            card_slot,
         );
 
         // Tables stacked: cheques (top) + settlements (bottom)
         let table_chunks =
             Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)])
-                .split(chunks[2]);
+                .split(tables_slot);
 
         // Cheques table
         let mut cheque_lines: Vec<Line> = vec![Line::from(Span::styled(
@@ -503,7 +650,7 @@ impl Component for Swap {
                 Span::styled(" net ", Style::default().fg(t.fail)),
                 Span::raw(" out-of-balance peer (>0.5 BZZ) "),
             ])),
-            chunks[3],
+            footer_slot,
         );
 
         Ok(())

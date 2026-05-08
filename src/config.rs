@@ -181,6 +181,12 @@ pub struct EconomicsConfig {
     /// with a clear "configure [economics].gnosis_rpc_url" hint.
     #[serde(default)]
     pub gnosis_rpc_url: Option<String>,
+    /// When `true`, S3 SWAP renders an always-on Market tile that
+    /// polls xBZZ → USD every 60 s and (if `gnosis_rpc_url` is set)
+    /// Gnosis basefee + tip alongside it. Off by default — fresh
+    /// installs make no outbound traffic without an explicit opt-in.
+    #[serde(default)]
+    pub enable_market_tile: bool,
 }
 
 /// `[alerts]` table from `config.toml`. Off by default — without a

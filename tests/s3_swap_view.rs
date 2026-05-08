@@ -12,7 +12,9 @@ use std::time::Instant;
 
 use bee::debug::{Cheque, ChequebookBalance, LastCheque, Settlement, Settlements};
 use bee_tui::components::swap::Swap;
+use bee_tui::economics_oracle::{EconomicsSnapshot, GasInfo, XbzzPrice};
 use bee_tui::watch::SwapSnapshot;
+use std::time::SystemTime;
 use num_bigint::BigInt;
 
 /// 1 BZZ = 10^16 PLUR.
@@ -67,7 +69,7 @@ fn snapshot_with(
 
 #[test]
 fn view_empty_snapshot() {
-    let view = Swap::view_for(&snapshot_with(None, vec![], None, None));
+    let view = Swap::view_for_no_market(&snapshot_with(None, vec![], None, None));
     insta::assert_debug_snapshot!(view);
 }
 
@@ -78,7 +80,7 @@ fn view_propagates_chequebook_address() {
     // future view_for refactors.
     let mut snap = snapshot_with(None, vec![], None, None);
     snap.chequebook_address = Some("0xCE3EE0201A1A8296E8bC2BE9f912eC21708fd615".into());
-    let view = Swap::view_for(&snap);
+    let view = Swap::view_for_no_market(&snap);
     assert_eq!(
         view.chequebook_address.as_deref(),
         Some("0xCE3EE0201A1A8296E8bC2BE9f912eC21708fd615"),
@@ -91,7 +93,7 @@ fn view_unfunded_chequebook() {
         total_balance: BigInt::from(0),
         available_balance: BigInt::from(0),
     };
-    let view = Swap::view_for(&snapshot_with(Some(cb), vec![], None, None));
+    let view = Swap::view_for_no_market(&snapshot_with(Some(cb), vec![], None, None));
     insta::assert_debug_snapshot!(view);
 }
 
@@ -101,7 +103,7 @@ fn view_healthy_chequebook() {
         total_balance: bzz(10),
         available_balance: bzz(8),
     };
-    let view = Swap::view_for(&snapshot_with(Some(cb), vec![], None, None));
+    let view = Swap::view_for_no_market(&snapshot_with(Some(cb), vec![], None, None));
     insta::assert_debug_snapshot!(view);
 }
 
@@ -112,7 +114,7 @@ fn view_tight_chequebook() {
         total_balance: bzz(10),
         available_balance: bzz_tenths(10), // 1.0 BZZ
     };
-    let view = Swap::view_for(&snapshot_with(Some(cb), vec![], None, None));
+    let view = Swap::view_for_no_market(&snapshot_with(Some(cb), vec![], None, None));
     insta::assert_debug_snapshot!(view);
 }
 
@@ -128,7 +130,7 @@ fn view_cheques_sort_descending_with_never_at_bottom() {
         last_cheque("0xcccccccccccccccccccccccccccccccc", Some(bzz_tenths(15))),
         last_cheque("0xdddddddddddddddddddddddddddddddd", Some(bzz_tenths(7))),
     ];
-    let view = Swap::view_for(&snapshot_with(Some(cb), cheques, None, None));
+    let view = Swap::view_for_no_market(&snapshot_with(Some(cb), cheques, None, None));
     insta::assert_debug_snapshot!(view);
 }
 
@@ -162,7 +164,7 @@ fn view_settlements_with_flagged_peer() {
             ),
         ],
     };
-    let view = Swap::view_for(&snapshot_with(Some(cb), vec![], Some(s), None));
+    let view = Swap::view_for_no_market(&snapshot_with(Some(cb), vec![], Some(s), None));
     insta::assert_debug_snapshot!(view);
 }
 
@@ -200,11 +202,73 @@ fn view_full_realistic() {
         total_sent: Some(bzz_tenths(2)),
         settlements: vec![],
     };
-    let view = Swap::view_for(&snapshot_with(
+    let view = Swap::view_for_no_market(&snapshot_with(
         Some(cb),
         cheques,
         Some(settlements),
         Some(time_settlements),
     ));
     insta::assert_debug_snapshot!(view);
+}
+
+#[test]
+fn view_with_market_tile_pinned() {
+    // Realistic snapshot: chequebook funded, market poller has
+    // returned both price and gas. Pins the formatted tile lines so
+    // a future format change is forced through review.
+    let cb = ChequebookBalance {
+        total_balance: bzz(10),
+        available_balance: bzz(8),
+    };
+    let snap = snapshot_with(Some(cb), vec![], None, None);
+    let market = EconomicsSnapshot {
+        price: Some(XbzzPrice {
+            usd: 0.4321,
+            fetched_at: SystemTime::now(),
+            source: "https://tokenservice.ethswarm.org/token_price".into(),
+        }),
+        gas: Some(GasInfo {
+            base_fee_gwei: 1.2345,
+            max_priority_fee_gwei: Some(0.5),
+            fetched_at: SystemTime::now(),
+            source_url: "https://rpc.example".into(),
+        }),
+        last_polled: Some(SystemTime::now()),
+        last_error: None,
+    };
+    let view = Swap::view_for(&snap, Some(&market));
+    let tile = view.market.expect("market tile present");
+    assert_eq!(tile.price_line, "BZZ ≈ $0.4321");
+    assert_eq!(tile.gas_line, "gas: 1.23 base + 0.50 tip = 1.73 gwei");
+    assert!(!tile.cold_start);
+    assert!(tile.stale_why.is_none());
+}
+
+#[test]
+fn view_market_cold_start_and_stale_error() {
+    let snap = snapshot_with(None, vec![], None, None);
+    let market = EconomicsSnapshot {
+        price: None,
+        gas: None,
+        last_polled: None,
+        last_error: None,
+    };
+    let view = Swap::view_for(&snap, Some(&market));
+    let tile = view.market.unwrap();
+    assert!(tile.cold_start, "before first poll, cold_start is true");
+    assert_eq!(tile.price_line, "BZZ ≈ —");
+    assert_eq!(tile.gas_line, "gas: —");
+
+    // After a poll that errored, last_polled is Some and we surface
+    // the why-line dim under the tile.
+    let market = EconomicsSnapshot {
+        price: None,
+        gas: None,
+        last_polled: Some(SystemTime::now()),
+        last_error: Some("price: HTTP 503".into()),
+    };
+    let view = Swap::view_for(&snap, Some(&market));
+    let tile = view.market.unwrap();
+    assert!(!tile.cold_start);
+    assert_eq!(tile.stale_why.as_deref(), Some("price: HTTP 503"));
 }

@@ -119,6 +119,26 @@ predicted TTL, pending-tx age, bee-tui's own request percentiles)
 that Bee's own `/metrics` doesn't expose. See the [Prometheus
 metrics reference](./reference/metrics.md) for the full list.
 
+### `[economics]` — cost-context oracles (optional)
+
+```toml
+[economics]
+gnosis_rpc_url      = "https://rpc.gnosischain.com"   # required by :basefee + Market tile gas line
+enable_market_tile  = true                            # default false; turns on the S3 SWAP Market tile
+```
+
+Two facets:
+
+- **Verbs** (`:price`, `:basefee`) work without the section being
+  present — `:price` always hits the public Swarm token service;
+  `:basefee` errors with a clear "configure
+  `[economics].gnosis_rpc_url`" hint when unset.
+- **Market tile** on S3 SWAP is opt-in via `enable_market_tile = true`.
+  When on, bee-tui polls `tokenservice.ethswarm.org` (and, if
+  `gnosis_rpc_url` is set, the Gnosis RPC) every 60 s and renders a
+  one-line tile showing `BZZ ≈ $X.XXXX` and `gas: B base + T tip = N
+  gwei`. Off by default — fresh installs make no outbound traffic.
+
 ### `[alerts]` — webhook ping when a health gate flips (optional)
 
 ```toml

@@ -36,4 +36,5 @@ SwapView {
     settlements: [],
     time_total_received: None,
     time_total_sent: None,
+    market: None,
 }

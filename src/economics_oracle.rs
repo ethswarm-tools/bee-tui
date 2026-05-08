@@ -236,6 +236,85 @@ fn parse_hex_u128(hex: &str) -> Result<u128, String> {
     u128::from_str_radix(s, 16).map_err(|e| format!("parse hex {hex:?}: {e}"))
 }
 
+/// Aggregated cost-context view consumed by the S3 SWAP "Market"
+/// tile. `None` fields mean "not fetched yet" or "last fetch
+/// failed"; `last_error` carries the most recent error string for
+/// the dim-italic "why" line under the tile.
+#[derive(Debug, Clone, Default)]
+pub struct EconomicsSnapshot {
+    pub price: Option<XbzzPrice>,
+    pub gas: Option<GasInfo>,
+    /// `None` until the first poll completes (success *or* failure).
+    pub last_polled: Option<SystemTime>,
+    /// The most recent failure surface — dropped on the next success.
+    /// Carried so the tile can show a dim "(price stale: ...)" hint
+    /// rather than silently leaving stale numbers up.
+    pub last_error: Option<String>,
+}
+
+/// Poll cadence for the cost-context tile. xBZZ price moves on
+/// minutes-to-hours timescales and Gnosis basefee changes per-block
+/// (~5 s) but operators don't need second-precision — the tile is a
+/// glance check, not a trading dashboard. 60 s is the same cadence
+/// the watch hub already uses for S7 Network on the default profile.
+pub const POLL_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Spawn the cost-context poller. Emits an `EconomicsSnapshot` on
+/// the returned watch channel every [`POLL_INTERVAL`] until `cancel`
+/// is triggered. When `gnosis_rpc_url` is `None`, the poller still
+/// fetches the xBZZ price (the public token service has no
+/// dependencies) and leaves `gas: None` — operators who don't run a
+/// Gnosis RPC still get the price half of the tile.
+pub fn spawn_poller(
+    gnosis_rpc_url: Option<String>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> tokio::sync::watch::Receiver<EconomicsSnapshot> {
+    let (tx, rx) = tokio::sync::watch::channel(EconomicsSnapshot::default());
+    tokio::spawn(async move {
+        loop {
+            // Fetch both in parallel. Either may fail independently;
+            // a price failure shouldn't blank out a working basefee.
+            let price_fut = fetch_xbzz_price();
+            let gas_fut = async {
+                match gnosis_rpc_url.as_deref() {
+                    Some(url) if !url.is_empty() => Some(fetch_gnosis_gas(url).await),
+                    _ => None,
+                }
+            };
+            let (price_res, gas_res) = tokio::join!(price_fut, gas_fut);
+
+            let mut snap = tx.borrow().clone();
+            let mut error_pieces: Vec<String> = Vec::new();
+            match price_res {
+                Ok(p) => snap.price = Some(p),
+                Err(e) => error_pieces.push(format!("price: {e}")),
+            }
+            match gas_res {
+                Some(Ok(g)) => snap.gas = Some(g),
+                Some(Err(e)) => error_pieces.push(format!("gas: {e}")),
+                None => {} // not configured — silent, not an error
+            }
+            snap.last_polled = Some(SystemTime::now());
+            snap.last_error = if error_pieces.is_empty() {
+                None
+            } else {
+                Some(error_pieces.join("; "))
+            };
+            // `send_replace` doesn't error on no-receivers; we want
+            // the poller to stay alive even when nobody's watching
+            // (multi-screen cockpit re-binds receivers as the
+            // operator switches screens).
+            let _ = tx.send(snap);
+
+            tokio::select! {
+                _ = tokio::time::sleep(POLL_INTERVAL) => {}
+                _ = cancel.cancelled() => return,
+            }
+        }
+    });
+    rx
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
