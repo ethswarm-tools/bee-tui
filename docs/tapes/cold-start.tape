@@ -1,10 +1,10 @@
-# Cold-start demo — first 30 seconds of a fresh launch.
+# Cold-start demo — first 60 seconds of a fresh launch.
 #
 # Render: vhs cold-start.tape
 # Output: cold-start.gif
 #
 # Operator tour: launch, watch the syncing warn, tab through the
-# nine screens, observe the gates settle as Bee finishes warmup.
+# fourteen screens, observe the gates settle as Bee finishes warmup.
 
 Output cold-start.gif
 
@@ -18,25 +18,40 @@ Type "bee-tui"
 Enter
 Sleep 3s
 
-# Cycle through the screens quickly
+# Cycle through all fourteen screens. Tab moves to the next; we
+# press it 13 times to land on the last one (Pubsub).
+#
+# Order: Health → Stamps → Swap → Lottery → Peers → Network →
+#        Warmup → API → Tags → Pins → Manifest → Watchlist →
+#        FeedTimeline → Pubsub
 Tab
-Sleep 2s
+Sleep 1500ms
 Tab
-Sleep 2s
+Sleep 1500ms
 Tab
-Sleep 2s
+Sleep 1500ms
 Tab
-Sleep 2s
+Sleep 1500ms
 Tab
-Sleep 2s
+Sleep 1500ms
 Tab
-Sleep 2s
+Sleep 1500ms
 Tab
-Sleep 2s
+Sleep 1500ms
+Tab
+Sleep 1500ms
+Tab
+Sleep 1500ms
+Tab
+Sleep 1500ms
+Tab
+Sleep 1500ms
+Tab
+Sleep 1500ms
 Tab
 Sleep 2s
 
-# Pop the help overlay
+# Pop the help overlay to advertise the keymap.
 Type "?"
 Sleep 4s
 Escape
