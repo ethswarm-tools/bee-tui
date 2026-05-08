@@ -28,7 +28,7 @@ use ratatui::{
 
 use super::Component;
 use crate::action::Action;
-use crate::log_capture::{LogCapture, LogEntry};
+use crate::log_capture::{CockpitCapture, CockpitEntry, LogCapture, LogEntry};
 use crate::state::{LOG_PANE_MAX_HEIGHT, LOG_PANE_MIN_HEIGHT};
 use crate::theme;
 
@@ -47,16 +47,21 @@ pub enum LogTab {
     Debug,
     BeeHttp,
     SelfHttp,
+    /// Cockpit-internal events: anything bee-tui emits that isn't a
+    /// `bee::http` request — supervisor lifecycle, watch poll loops,
+    /// command-bar dispatches, etc.
+    Cockpit,
 }
 
 impl LogTab {
-    pub const ALL: [LogTab; 6] = [
+    pub const ALL: [LogTab; 7] = [
         LogTab::Errors,
         LogTab::Warning,
         LogTab::Info,
         LogTab::Debug,
         LogTab::BeeHttp,
         LogTab::SelfHttp,
+        LogTab::Cockpit,
     ];
 
     /// Parse the kebab-case form persisted in `state.toml`. Unknown
@@ -70,6 +75,7 @@ impl LogTab {
             "debug" => Self::Debug,
             "bee-http" => Self::BeeHttp,
             "self-http" => Self::SelfHttp,
+            "cockpit" => Self::Cockpit,
             _ => Self::SelfHttp,
         }
     }
@@ -82,6 +88,7 @@ impl LogTab {
             Self::Debug => "debug",
             Self::BeeHttp => "bee-http",
             Self::SelfHttp => "self-http",
+            Self::Cockpit => "cockpit",
         }
     }
 
@@ -94,6 +101,7 @@ impl LogTab {
             Self::Debug => "Debug",
             Self::BeeHttp => "Bee HTTP",
             Self::SelfHttp => "bee::http",
+            Self::Cockpit => "Cockpit",
         }
     }
 
@@ -147,7 +155,7 @@ impl BeeLogBuffers {
             LogTab::Info => Some(&self.info),
             LogTab::Debug => Some(&self.debug),
             LogTab::BeeHttp => Some(&self.bee_http),
-            LogTab::SelfHttp => None,
+            LogTab::SelfHttp | LogTab::Cockpit => None,
         }
     }
 
@@ -164,6 +172,8 @@ impl BeeLogBuffers {
 pub struct LogPane {
     capture: Option<LogCapture>,
     self_http_entries: Vec<LogEntry>,
+    cockpit_capture: Option<CockpitCapture>,
+    cockpit_entries: Vec<CockpitEntry>,
     bee_buffers: BeeLogBuffers,
     active_tab: LogTab,
     /// Height in lines including the title strip + borders.
@@ -188,6 +198,8 @@ impl LogPane {
         Self {
             capture,
             self_http_entries: Vec::new(),
+            cockpit_capture: None,
+            cockpit_entries: Vec::new(),
             bee_buffers: BeeLogBuffers::default(),
             active_tab: initial_tab,
             height: initial_height.clamp(LOG_PANE_MIN_HEIGHT, LOG_PANE_MAX_HEIGHT),
@@ -195,6 +207,14 @@ impl LogPane {
             scroll_offset: 0,
             h_scroll_offset: 0,
         }
+    }
+
+    /// Attach the cockpit-capture ring buffer so the Cockpit tab can
+    /// render events bee-tui itself emitted (everything that isn't
+    /// `bee::http`). Wired by [`App::new`] after
+    /// [`crate::logging::init`] has installed the capture.
+    pub fn set_cockpit_capture(&mut self, cap: CockpitCapture) {
+        self.cockpit_capture = Some(cap);
     }
 
     pub fn active_tab(&self) -> LogTab {
@@ -325,7 +345,7 @@ impl LogPane {
             LogTab::Info => &mut self.bee_buffers.info,
             LogTab::Debug => &mut self.bee_buffers.debug,
             LogTab::BeeHttp => &mut self.bee_buffers.bee_http,
-            LogTab::SelfHttp => return, // not a bee-side tab
+            LogTab::SelfHttp | LogTab::Cockpit => return, // capture-fed tabs
         };
         let was_full = buf.len() == BEE_TAB_RING_CAPACITY;
         if was_full {
@@ -357,12 +377,26 @@ impl LogPane {
             self.self_http_entries = new;
         }
     }
+
+    fn pull_cockpit(&mut self) {
+        if let Some(c) = &self.cockpit_capture {
+            let new = c.snapshot();
+            if self.active_tab == LogTab::Cockpit && self.scroll_offset > 0 {
+                let delta = new.len().saturating_sub(self.cockpit_entries.len());
+                if delta > 0 {
+                    self.scroll_offset = self.scroll_offset.saturating_add(delta);
+                }
+            }
+            self.cockpit_entries = new;
+        }
+    }
 }
 
 impl Component for LogPane {
     fn update(&mut self, action: Action) -> Result<Option<Action>> {
         if matches!(action, Action::Tick) {
             self.pull_self_http();
+            self.pull_cockpit();
         }
         Ok(None)
     }
@@ -399,6 +433,7 @@ impl Component for LogPane {
 
         let lines: Vec<Line> = match active {
             LogTab::SelfHttp => render_self_http(&self.self_http_entries, t),
+            LogTab::Cockpit => render_cockpit(&self.cockpit_entries, t),
             tab => render_bee_tab(&self.bee_buffers, tab, self.spawn_active, t),
         };
 
@@ -435,6 +470,7 @@ impl LogPane {
     pub fn active_tab_total_lines(&self) -> usize {
         match self.active_tab {
             LogTab::SelfHttp => self.self_http_entries.len(),
+            LogTab::Cockpit => self.cockpit_entries.len(),
             tab => self.bee_buffers.count(tab),
         }
     }
@@ -455,7 +491,10 @@ fn tab_title_line<'a>(
     spans.push(Span::raw(" "));
     for tab in LogTab::ALL {
         let count = bufs.count(tab);
-        let label = if count == 0 || tab == LogTab::SelfHttp {
+        // SelfHttp + Cockpit don't have BeeLogBuffer counts (their
+        // payload comes from the in-process capture buffers, not the
+        // supervisor's tail), so render the label without a count.
+        let label = if count == 0 || matches!(tab, LogTab::SelfHttp | LogTab::Cockpit) {
             format!(" {} ", tab.label())
         } else {
             format!(" {} {} ", tab.label(), human_count(count))
@@ -502,6 +541,7 @@ fn tab_severity_color(tab: LogTab, t: &theme::Theme) -> Style {
         LogTab::Debug => Style::default().fg(t.dim),
         LogTab::BeeHttp => Style::default().fg(t.accent),
         LogTab::SelfHttp => Style::default().fg(t.dim),
+        LogTab::Cockpit => Style::default().fg(t.accent),
     }
 }
 
@@ -513,6 +553,43 @@ fn human_count(n: usize) -> String {
     } else {
         format!("{:.1}m", n as f64 / 1_000_000.0)
     }
+}
+
+fn render_cockpit<'a>(entries: &'a [CockpitEntry], t: &theme::Theme) -> Vec<Line<'a>> {
+    if entries.is_empty() {
+        return vec![Line::from(Span::styled(
+            "  (no cockpit-internal events captured yet)",
+            Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
+        ))];
+    }
+    entries.iter().map(|e| cockpit_line(e, t)).collect()
+}
+
+fn cockpit_line<'a>(e: &'a CockpitEntry, t: &theme::Theme) -> Line<'a> {
+    let level_style = match e.level.as_str() {
+        "ERROR" => Style::default().fg(t.fail).add_modifier(Modifier::BOLD),
+        "WARN" => Style::default().fg(t.warn).add_modifier(Modifier::BOLD),
+        "INFO" => Style::default().fg(t.info),
+        _ => Style::default().fg(t.dim),
+    };
+    Line::from(vec![
+        Span::styled(format!("{} ", e.ts), Style::default().fg(t.dim)),
+        Span::styled(format!("{:<5}", e.level), level_style),
+        Span::raw(" "),
+        Span::styled(
+            format!("{:<22}", trim_target(&e.target)),
+            Style::default().fg(t.accent),
+        ),
+        Span::raw("  "),
+        Span::raw(e.message.clone()),
+    ])
+}
+
+/// Drop the leading `bee_tui::` prefix on cockpit-event targets so
+/// the rendered line stays under 80 columns. `bee_tui::watch::peers`
+/// → `watch::peers`.
+fn trim_target(target: &str) -> &str {
+    target.strip_prefix("bee_tui::").unwrap_or(target)
 }
 
 fn render_self_http<'a>(entries: &'a [LogEntry], t: &theme::Theme) -> Vec<Line<'a>> {
@@ -633,6 +710,7 @@ mod tests {
             LogTab::Debug,
             LogTab::BeeHttp,
             LogTab::SelfHttp,
+            LogTab::Cockpit,
             LogTab::Errors,
         ] {
             assert_eq!(pane.next_tab(), expected);
@@ -643,6 +721,7 @@ mod tests {
     fn prev_tab_wraps() {
         let mut pane = LogPane::new(None, LogTab::Errors, 10);
         for expected in [
+            LogTab::Cockpit,
             LogTab::SelfHttp,
             LogTab::BeeHttp,
             LogTab::Debug,

@@ -315,6 +315,9 @@ impl App {
             persisted.log_pane_height,
         );
         log_pane.set_spawn_active(supervisor.is_some());
+        if let Some(c) = log_capture::cockpit_handle() {
+            log_pane.set_cockpit_capture(c);
+        }
 
         // Spawn the bee-log tailer if we own the supervisor. The
         // tailer parses each new line of the captured Bee log and

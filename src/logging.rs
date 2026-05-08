@@ -33,7 +33,8 @@ pub fn init() -> color_eyre::Result<()> {
     // them. Capacity 200 lines = a few minutes of activity at the
     // typical poll rate.
     let capture = log_capture::install(200);
-    let capture_layer = log_capture::CaptureLayer::new(capture);
+    let cockpit_capture = log_capture::install_cockpit(500);
+    let capture_layer = log_capture::CaptureLayer::new(capture, cockpit_capture);
 
     tracing_subscriber::registry()
         .with(file_subscriber)
