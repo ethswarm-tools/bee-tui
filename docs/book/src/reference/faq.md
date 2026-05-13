@@ -180,7 +180,7 @@ track meaningfully. See [S9](../screens/s9-tags.md).
 
 ### How do I switch between nodes?
 
-Two ways:
+Three ways:
 
 - **`Ctrl+N`** (or `:nodes`, v1.10+) — opens a picker overlay
   listing every `[[nodes]]` entry; ↑/↓ to select, Enter to
@@ -188,9 +188,26 @@ Two ways:
   `default = true` row is marked `★`.
 - **`:context <name>`** — typed switch (alias `:ctx`). Same flow
   under the hood.
+- **S15 Fleet view** (v1.11+) — press `Alt+5` to open the
+  fleet roll-up; cursor onto the node you want; Enter switches
+  context to it (same `switch_context` flow as the other two)
+  and lands you on S1 Health for that node.
 
 Define the nodes in `config.toml`. See
-[`:context`](../commands/context.md).
+[`:context`](../commands/context.md) and
+[S15 Fleet view](../screens/s16-fleet.md).
+
+### How do I monitor multiple Bees at once?
+
+S15 Fleet view (v1.11+). It polls every configured `[[nodes]]`
+entry every 10 seconds in parallel and shows one row per node:
+aggregate status, peer count, worst stamp TTL, `/health` ping.
+The roll-up is shallow on purpose — three endpoints per node so
+the fan-out cost stays modest — and the row's Enter binding
+switches context to that node for full per-screen detail when
+you need it. Each node still fires its own `[alerts].webhook_url`
+independently; the fleet view itself is a passive dashboard, not
+an alert source.
 
 ### Can bee-tui start Bee for me, or only talk to a running one?
 

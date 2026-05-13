@@ -24,6 +24,7 @@
 - [S12 — Durability Watchlist](./screens/s13-watchlist.md)
 - [S13 — Feed Timeline](./screens/s14-feed-timeline.md)
 - [S14 — Pubsub watch](./screens/s15-pubsub.md)
+- [S15 — Fleet view](./screens/s16-fleet.md)
 - [Bottom log pane (legacy "S10")](./screens/s10-log.md)
 
 # Commands

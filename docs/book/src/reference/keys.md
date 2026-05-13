@@ -12,7 +12,7 @@ offline reference.
 | `Shift+Tab` | Previous screen |
 | `1` – `9` | Jump to S1 – S9 |
 | `0` | Jump to S10 (Pins) |
-| `Alt+1` – `Alt+4` | Jump to S11 – S14 (Manifest, Watchlist, FeedTimeline, Pubsub) |
+| `Alt+1` – `Alt+5` | Jump to S11 – S15 (Manifest, Watchlist, FeedTimeline, Pubsub, Fleet) |
 | `Ctrl+N` | Open node picker (also `:nodes`) |
 | `[` / `]` | Previous / next tab on the bottom log pane (Errors / Warn / Info / Debug / Bee HTTP / bee::http / Cockpit). Persisted across launches. |
 | `+` / `-` | Grow / shrink the bottom log pane height by one line. Clamped to 4..24. Persisted across launches. |

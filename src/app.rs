@@ -166,6 +166,15 @@ pub struct App {
     /// Which page of the help overlay is showing. Tab cycles between
     /// Keys (default) and Verbs.
     help_page: HelpPage,
+    /// Watch receiver feeding the S15 Fleet screen. Cloned into each
+    /// fresh `Fleet` component built by `build_screens`; the poller
+    /// itself lives across context switches (it polls **every**
+    /// `[[nodes]]` entry, not just the active one), so we hold the
+    /// rx on App rather than re-creating it on `switch_context`.
+    fleet_rx: watch::Receiver<crate::fleet::FleetSnapshot>,
+    /// Operator-trigger channel for the fleet poller's "re-poll now"
+    /// signal (S15 row `r` key). Same lifetime as `fleet_rx`.
+    fleet_resync_tx: tokio::sync::mpsc::UnboundedSender<()>,
 }
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,6 +222,7 @@ const SCREEN_NAMES: &[&str] = &[
     "Watchlist",
     "FeedTimeline",
     "Pubsub",
+    "Fleet",
 ];
 
 /// Catalog of every `:command` verb with a short description. Drives
@@ -327,6 +337,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
         "<path> — load a pubsub history JSONL into the S15 timeline",
     ),
     ("watchlist", "S13 Watchlist — durability-check history"),
+    (
+        "fleet",
+        "S15 Fleet — health roll-up across every [[nodes]] entry",
+    ),
     (
         "hash",
         "<path> — Swarm reference of a local file/dir (offline)",
@@ -530,7 +544,25 @@ impl App {
             None
         };
 
-        let screens = build_screens(&api, &watch, market_rx);
+        // Fleet poller — fans a cheap /health + /status + /stamps
+        // probe out to **every** configured node every 10 s. Lives
+        // across context switches because the S15 screen wants to
+        // surface other nodes' state regardless of which one the
+        // operator's currently driving. Resync mpsc is the "r" key
+        // path for impatient re-probes.
+        let (fleet_rx, fleet_resync_tx) = crate::fleet::spawn_poller(
+            config.nodes.clone(),
+            root_cancel.child_token(),
+            std::time::Duration::from_secs(10),
+        );
+
+        let screens = build_screens(
+            &api,
+            &watch,
+            market_rx,
+            fleet_rx.clone(),
+            fleet_resync_tx.clone(),
+        );
         // Bottom log pane subscribes to the bee::http capture set up
         // by logging::init for its `bee::http` tab. The four severity
         // tabs + "Bee HTTP" tab populate from the supervisor's log
@@ -638,6 +670,8 @@ impl App {
             nodes_picker_visible: false,
             nodes_picker_selected: 0,
             help_page: HelpPage::Keys,
+            fleet_rx,
+            fleet_resync_tx,
         })
     }
 
@@ -867,11 +901,11 @@ impl App {
             }
             return Ok(());
         }
-        // Direct numeric jumps for the cockpit's 14 screens. Plain
+        // Direct numeric jumps for the cockpit's 15 screens. Plain
         // digits 1-9 jump to S1-S9 (Health through Tags); 0 jumps
-        // to S10 (Pins). Alt+1..Alt+4 reach the second-row screens
-        // S11-S14 (Manifest, Watchlist, FeedTimeline, Pubsub) — Alt
-        // keeps the plain digit row available for any future
+        // to S10 (Pins). Alt+1..Alt+5 reach the second-row screens
+        // S11-S15 (Manifest, Watchlist, FeedTimeline, Pubsub, Fleet)
+        // — Alt keeps the plain digit row available for any future
         // in-screen numeric input without conflict.
         if let crossterm::event::KeyCode::Char(c) = key.code {
             if key.modifiers == crossterm::event::KeyModifiers::NONE {
@@ -2630,7 +2664,13 @@ impl App {
         } else {
             None
         };
-        let new_screens = build_screens(&new_api, &new_watch, new_market_rx);
+        let new_screens = build_screens(
+            &new_api,
+            &new_watch,
+            new_market_rx,
+            self.fleet_rx.clone(),
+            self.fleet_resync_tx.clone(),
+        );
         self.api = new_api;
         self.watch = new_watch;
         self.health_rx = new_health_rx;
@@ -3056,6 +3096,17 @@ impl App {
                 Action::ClearScreen => tui.terminal.clear()?,
                 Action::Resize(w, h) => self.handle_resize(tui, w, h)?,
                 Action::Render => self.render(tui)?,
+                Action::SwitchContext(ref target) => {
+                    // Triggered by S15 Fleet's Enter binding. Same
+                    // flow as the `:context` verb / Ctrl-N picker.
+                    self.command_status = Some(match self.switch_context(target) {
+                        Ok(()) => CommandStatus::Info(format!(
+                            "switched to context {target} ({})",
+                            self.api.url
+                        )),
+                        Err(e) => CommandStatus::Err(format!("context switch failed: {e}")),
+                    });
+                }
                 _ => {}
             }
             let tx = self.action_tx.clone();
@@ -3475,7 +3526,7 @@ fn build_help_keys_lines<'a>(
     let global_rows: &[(&str, &str)] = &[
         ("Tab / Shift+Tab", "cycle screen"),
         ("1-9 / 0", "jump to S1-S9 / S10"),
-        ("Alt+1..Alt+4", "jump to S11-S14"),
+        ("Alt+1..Alt+5", "jump to S11-S15"),
         ("Ctrl+N", "open node picker (also :nodes)"),
         ("[ / ]", "previous / next log-pane tab"),
         ("+ / -", "grow / shrink log pane"),
@@ -3537,7 +3588,7 @@ fn build_help_keys_lines<'a>(
 fn verb_category(name: &str) -> &'static str {
     match name {
         "health" | "stamps" | "swap" | "lottery" | "peers" | "network" | "warmup" | "api"
-        | "tags" | "pins" | "watchlist" => "navigate",
+        | "tags" | "pins" | "watchlist" | "fleet" => "navigate",
         "topup-preview" | "dilute-preview" | "extend-preview" | "buy-preview" | "buy-suggest"
         | "plan-batch" | "price" | "basefee" => "stamps & economics",
         "probe-upload" | "upload-file" | "upload-collection" => "uploads",
@@ -3809,6 +3860,12 @@ fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)
             ),
             (":pubsub-filter-clear", "remove the active filter"),
         ],
+        // 14: Fleet — multi-node health roll-up.
+        14 => &[
+            ("↑↓ / j k", "move row selection"),
+            ("Enter", "switch context to the cursored node"),
+            ("r", "re-poll the fleet right now"),
+        ],
         _ => &[],
     }
 }
@@ -3825,6 +3882,8 @@ fn build_screens(
     api: &Arc<ApiClient>,
     watch: &BeeWatch,
     market_rx: Option<watch::Receiver<crate::economics_oracle::EconomicsSnapshot>>,
+    fleet_rx: watch::Receiver<crate::fleet::FleetSnapshot>,
+    fleet_resync_tx: tokio::sync::mpsc::UnboundedSender<()>,
 ) -> Vec<Box<dyn Component>> {
     let health = Health::new(api.clone(), watch.health(), watch.topology());
     let stamps = Stamps::new(api.clone(), watch.stamps());
@@ -3848,6 +3907,8 @@ fn build_screens(
     let watchlist = Watchlist::new();
     let feed_timeline = FeedTimeline::new();
     let pubsub_screen = Pubsub::new();
+    let fleet =
+        crate::components::fleet::Fleet::new(fleet_rx, api.name.clone(), fleet_resync_tx);
     vec![
         Box::new(health),
         Box::new(stamps),
@@ -3863,6 +3924,7 @@ fn build_screens(
         Box::new(watchlist),
         Box::new(feed_timeline),
         Box::new(pubsub_screen),
+        Box::new(fleet),
     ]
 }
 

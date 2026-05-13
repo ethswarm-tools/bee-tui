@@ -33,6 +33,10 @@ exists to address:
 - **"Which of my nodes am I driving?"** — `Ctrl+N` opens the v1.10
   node picker over a list of every `[[nodes]]` entry; the top-bar
   metadata line always names the active profile + endpoint.
+- **"Is anything red across my whole fleet?"** — S15 Fleet view
+  (v1.11+) polls every configured node every 10 s and surfaces the
+  aggregate status / peers / worst stamp TTL / ping per row. Enter
+  on a row switches context to that node's per-screen detail.
 - **"Is anything running in the background?"** — top-bar awareness
   chips (`subs N`, `watch N`, `alerts ●`, v1.10+) appear whenever
   a pubsub subscription, a `:watch-ref` daemon, or webhook alerting

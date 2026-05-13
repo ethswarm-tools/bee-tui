@@ -11,6 +11,79 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.11.0] - 2026-05-13
+
+The "fleet view" minor release. Closes the v1.x design gap
+between bee-tui's multi-node *config* support (which had been
+in place since v0.2) and its multi-node *visibility* — every
+release through v1.10 still surfaced a single active node at a
+time. Operators running 3-10 nodes had to hop manually to confirm
+nothing was on fire.
+
+S15 Fleet now polls every configured `[[nodes]]` entry in
+parallel every 10 seconds against a cheap 3-endpoint probe
+(`/health` + `/status` + `/stamps`) and aggregates the results
+into one row per node — operator scans the table in two seconds
+to answer "is anything red?", then `Enter` switches context to
+whichever node needs attention.
+
+### Added
+
+- **S15 Fleet screen** — new tabbed screen at index 14. One row
+  per `[[nodes]]` entry showing aggregate status (pass / warn /
+  fail / loading), connected peer count, worst-batch stamp TTL,
+  and `/health` ping. The header line carries the fleet roll-up
+  (`4 configured · 3 pass · 1 warn`). The cursored row gets a
+  why-line continuation explaining the status reason when it's
+  not green. `↑↓` / `j k` move the cursor, `Enter` switches
+  context to that node (calls the existing `switch_context`,
+  lands on S1 Health), `r` re-polls immediately.
+- **`:fleet` verb** — jumps to S15 from the command bar.
+- **`Alt+5` hotkey** — completes the second-row screen jumps
+  (Alt+1..Alt+5 → S11..S15).
+- **`crate::fleet` module** — `FleetSnapshot`, `FleetRow`,
+  `FleetStatus`, and `spawn_poller(nodes, cancel, interval)`
+  returning a `watch::Receiver<FleetSnapshot>` and the
+  operator-resync mpsc handle. The poller fans out via
+  `FuturesUnordered` with a 5-second per-probe timeout — a
+  slow or unreachable node times out without blocking the
+  others. Pure `aggregate(...)` fn drives the status ladder
+  (zero peers → Fail; < 4 peers → Warn; warming up → Warn;
+  stamp TTL ≤ 24h → Fail; stamp TTL ≤ 7d → Warn; otherwise
+  Pass). Tested independently of HTTP.
+- **`Action::SwitchContext(String)` variant** — emitted by the
+  Fleet screen on `Enter`; `App::handle_actions` dispatches it
+  through the same `switch_context` path as `:context` and the
+  Ctrl+N picker, so daemon teardown + alert-state reset (v1.9.1)
+  apply identically.
+
+### Internals
+
+- `App::fleet_rx` / `fleet_resync_tx` fields hold the poller's
+  handles. The poller spawns once at `App::with_overrides` and
+  survives every `switch_context` — fleet visibility is
+  node-agnostic, so rebuilding it on profile change would just
+  waste a probe cycle. The `Fleet` component takes the rx
+  during `build_screens` so context-switches naturally pick up
+  the live data without re-wiring.
+- `SCREEN_NAMES` grew to 15 entries; numeric-hotkey constants
+  updated; `screen_keymap(14)` advertises the new `↑↓` /
+  `Enter` / `r` bindings; `verb_category("fleet")` returns
+  `"navigate"` so it appears in the right help-overlay group.
+
+### Notes
+
+- Tests: 444 lib tests (was 424), +20 covering `aggregate`
+  ladder transitions, snapshot count partitioning, view-shape
+  formatting, and TTL bucketing.
+- Resource cost for a 6-node fleet: 3 endpoints × 6 nodes /
+  10 s = 1.8 reqs/s total. Reasonable on every Bee size.
+- Semver-stable surfaces (`view_for` / `compute_*_view`,
+  `watch::*` snapshot shapes, CLI flags, `[ui]` config,
+  `--once` exit codes + JSON shape) untouched. The new
+  `crate::fleet` types and `Action::SwitchContext` variant
+  are additive.
+
 ## [1.10.0] - 2026-05-13
 
 The "awareness + discoverability" minor release. Four small UI

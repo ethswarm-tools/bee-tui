@@ -12,4 +12,10 @@ pub enum Action {
     ClearScreen,
     Error(String),
     Help,
+    /// Switch the active node profile to the named `[[nodes]]`
+    /// entry. Emitted by the S15 Fleet screen's Enter binding so
+    /// the operator can hop from a fleet row to that node's
+    /// per-screen view; App's `handle_actions` calls
+    /// `switch_context` and clears the action.
+    SwitchContext(String),
 }
