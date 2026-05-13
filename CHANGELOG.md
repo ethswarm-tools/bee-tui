@@ -11,6 +11,84 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.10.0] - 2026-05-13
+
+The "awareness + discoverability" minor release. Four small UI
+additions that close gaps where bee-tui's functionality existed
+but the operator had to know the typed verb to find it: the
+configured `[[nodes]]` list, what's running in the background,
+how to reach screens past `Tab`'s reach, and the full verb
+catalogue.
+
+### Added
+
+- **Node picker overlay** (`Ctrl+N` / `:nodes`) — opens a centred
+  list of every `[[nodes]]` entry from `config.toml`. The cursor
+  lands on the active node; ↑/↓ (or `j`/`k`) move it, `↵`
+  switches, `Esc` or `Ctrl+N` close without switching. The active
+  node is marked `●`, the `default = true` entry `★`. Internally
+  it's a thin wrapper around the existing `switch_context` flow
+  introduced in v1.6 — same teardown of `pubsub_subs` /
+  `watch_refs` / `alert_state`, same rebuild of the watch hub
+  and screens.
+- **Background-task awareness chips on the top bar** — three
+  hidden-when-zero chips appended after `ping`: `subs N`
+  (`pubsub_subs.len()` — active PSS / GSOC subscriptions), `watch
+  N` (`watch_refs.len()` — active `:watch-ref` daemons), and
+  `alerts ●` (a green dot when `[alerts].webhook_url` is set).
+  Operators no longer have to remember which daemons they
+  started; the chips appear when something is running and
+  disappear when it stops.
+- **Numeric screen hotkeys** — `1`-`9` jump to S1-S9 (Health
+  through Tags), `0` jumps to S10 (Pins), `Alt+1`-`Alt+4` reach
+  the second-row screens S11-S14 (Manifest, Watchlist,
+  FeedTimeline, Pubsub). `Tab` / `Shift+Tab` still cycle as
+  before — the digit row is additive, for direct access when you
+  know where you want to be. (Replaces the historical "number
+  keys deliberately unbound" decision in `keys.md` — five years
+  of cockpit navigation taught us digit-row jumps don't conflict
+  with in-screen selection in practice.)
+- **Verb catalogue in the help overlay** — `?` now opens a
+  two-page overlay. The **Keys** page mirrors the previous
+  cheatsheet (global + screen-specific) plus the new numeric and
+  `Ctrl+N` rows. The **Verbs** page lists every `:verb` from
+  `KNOWN_COMMANDS` (~50 entries) grouped by category — navigate,
+  inspect, stamps & economics, uploads, durability, pubsub,
+  mining / addresses, diagnostics & config, cockpit. `Tab`
+  switches between pages while help is open.
+
+### Docs
+
+- `reference/keys.md` — gains rows for numeric jumps and
+  `Ctrl+N`; new sections describing the node picker and the
+  paged help overlay; the "What's not bound" section drops its
+  "number keys for screen jump would conflict" line.
+- `commands/bar.md` — adds `:nodes` next to `:context`.
+- `commands/context.md` — re-titled and grown a "picker overlay"
+  section explaining the wrapper.
+
+### Internals
+
+- New `HelpPage` enum on `App` (`Keys` / `Verbs`) for the paged
+  help overlay; routed via `Tab` while help is visible.
+- New `App` fields `nodes_picker_visible: bool`,
+  `nodes_picker_selected: usize`. Both rendered via a new
+  `draw_nodes_picker` helper that auto-sizes to the configured
+  node count (clamped to 6..20 rows / 48..80 cols).
+- New pure helper `verb_category(name) -> &'static str` powers
+  the help-overlay grouping; a test asserts every verb in
+  `KNOWN_COMMANDS` maps to a real category (no silent
+  `"other"` fall-through when adding new verbs).
+
+### Notes
+
+- Tests: 424 lib tests (was 422), +2 covering verb category
+  exhaustiveness and the canonical groupings.
+- Semver-stable surfaces (`view_for` / `compute_*_view`,
+  `watch::*` snapshot shapes, CLI flags, `[ui]` config,
+  `--once` exit codes + JSON shape) untouched. The new node
+  picker overlay and help-page Tab handling are additive.
+
 ## [1.9.1] - 2026-05-13
 
 The "context-switch correctness + documentation catch-up" patch.

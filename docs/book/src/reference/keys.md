@@ -10,6 +10,10 @@ offline reference.
 |---|---|
 | `Tab` | Next screen |
 | `Shift+Tab` | Previous screen |
+| `1` – `9` | Jump to S1 – S9 |
+| `0` | Jump to S10 (Pins) |
+| `Alt+1` – `Alt+4` | Jump to S11 – S14 (Manifest, Watchlist, FeedTimeline, Pubsub) |
+| `Ctrl+N` | Open node picker (also `:nodes`) |
 | `[` / `]` | Previous / next tab on the bottom log pane (Errors / Warn / Info / Debug / Bee HTTP / bee::http / Cockpit). Persisted across launches. |
 | `+` / `-` | Grow / shrink the bottom log pane height by one line. Clamped to 4..24. Persisted across launches. |
 | `Shift+↑` / `Shift+↓` | Scroll the active log tab back / forward by one line. Pauses auto-tail; the title shows a `paused N ↑` indicator. |
@@ -146,15 +150,50 @@ Open `?` on any screen. The overlay shows the global keymap
 S6 lists peer-drill keys; pressing `?` on S9 lists scroll
 keys. No memorisation needed.
 
+## The node picker overlay
+
+`Ctrl+N` (or `:nodes`) opens a centred overlay listing every
+`[[nodes]]` entry from `config.toml`. The cursor lands on the
+currently active node:
+
+| Key | Effect |
+|---|---|
+| `↑↓` / `j k` | Move cursor through configured nodes |
+| `↵` | Switch to the cursored node (rebuilds API client + watch hub; no-op if cursor is already on the active node) |
+| `Esc` / `Ctrl+N` | Close without switching |
+
+The active node is marked `●` and the `default = true` entry is
+marked `★`. After switching, the metadata line at the top of the
+cockpit updates to show the new profile and endpoint; any
+`:watch-ref` daemons and pubsub subscriptions that were running
+against the previous node are cancelled (they don't follow the
+context — re-issue the verbs against the new node if you want them
+there too).
+
+## The help overlay
+
+`?` opens a centred overlay with two pages:
+
+| Key | Effect |
+|---|---|
+| `?` | Toggle the overlay |
+| `Tab` / `Shift+Tab` | Switch between **Keys** and **Verbs** pages |
+| `Esc` / `?` / `q` | Close |
+
+The **Keys** page mirrors this cheatsheet (global keys + the
+screen-specific block for whichever screen is active). The
+**Verbs** page lists every `:verb` grouped by category (navigate,
+inspect, stamps & economics, uploads, durability, pubsub, mining,
+diagnostics, cockpit) so the entire surface is discoverable
+without leaving the cockpit.
+
 ## What's not bound
 
 The cockpit deliberately leaves these unbound:
 
-- **Up/down arrow for screen jump** — `Tab` is the only
-  screen-jump key. Arrow keys are reserved for in-screen
+- **Up/down arrow for screen jump** — `Tab` (or the digit keys)
+  is the screen-jump path. Arrow keys are reserved for in-screen
   navigation.
-- **Number keys for screen jump** — would conflict with
-  future selection / drill operations.
 - **`/` for search** — there's no global text search yet.
   Most screens are too short to need one, and where they
   aren't (S6 peers, S9 tags), you can scroll with

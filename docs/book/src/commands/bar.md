@@ -94,6 +94,7 @@ target screen, but faster on a 14-screen carousel.
 | `:watchlist` (jump) | — | Jump to S13 Watchlist (history of `:durability-check` results) |
 | `:context <name>` (alias `:ctx`) | [context](./context.md) | Switch to a different node profile from your config |
 | `:context` | [context](./context.md) | List configured profiles (no switch) |
+| `:nodes` | [context](./context.md) | Open the node-picker overlay (also `Ctrl+N`) |
 | `:quit` (alias `:q`) | — | Exit the cockpit |
 
 ## Why a colon prompt?

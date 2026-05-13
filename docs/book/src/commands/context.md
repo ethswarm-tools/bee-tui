@@ -1,4 +1,4 @@
-# `:context` — multi-node switching
+# `:context` / `:nodes` — multi-node switching
 
 Switch the cockpit's active node profile without restarting.
 The screen layout stays the same; the data behind it
@@ -8,7 +8,19 @@ re-points to a different Bee endpoint.
 :context              # list known profiles (no switch)
 :context <name>       # switch to <name>
 :ctx <name>           # alias
+:nodes                # open the picker overlay (also Ctrl+N)
 ```
+
+## The picker overlay (added v1.10.0)
+
+`Ctrl+N` (or `:nodes`) opens a centred list of every
+`[[nodes]]` entry from `config.toml`. The cursor lands on the
+active node; ↑/↓ (or `j`/`k`) move it, `↵` switches, `Esc` or
+`Ctrl+N` close without switching. The active node is marked
+`●` and the `default = true` entry is marked `★`. The picker
+is just a thin wrapper around the switch flow described
+below — same teardown, same rebuild, same status-line
+confirmation.
 
 ## Listing profiles
 

@@ -155,6 +155,24 @@ pub struct App {
     /// circuits before touching this state so the cost is one
     /// `Option::is_none` check per Tick.
     alert_state: crate::alerts::AlertState,
+    /// True while the `Ctrl-N` (or `:nodes`) node-picker overlay is
+    /// visible. Key handling routes to picker-only bindings (↑/↓ /
+    /// Enter / Esc) when set; the cockpit beneath keeps rendering.
+    nodes_picker_visible: bool,
+    /// Cursor row in the node-picker overlay, indexed into
+    /// `self.config.nodes`. Clamped on every render so config edits
+    /// that shrink the list can't leave it pointing past the end.
+    nodes_picker_selected: usize,
+    /// Which page of the help overlay is showing. Tab cycles between
+    /// Keys (default) and Verbs.
+    help_page: HelpPage,
+}
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpPage {
+    #[default]
+    Keys,
+    Verbs,
 }
 
 /// Window during which a second `q` press is interpreted as confirming
@@ -331,6 +349,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     ("loggers", "Dump live logger registry"),
     ("set-logger", "<expr> <level> — change a logger's verbosity"),
     ("context", "<name> — switch node profile"),
+    (
+        "nodes",
+        "open the node picker (Ctrl-N) — switch between [[nodes]]",
+    ),
     ("quit", "Exit the cockpit"),
 ];
 
@@ -613,6 +635,9 @@ impl App {
             pubsub_msg_tx,
             pubsub_msg_rx,
             alert_state: crate::alerts::AlertState::new(config_alerts_debounce),
+            nodes_picker_visible: false,
+            nodes_picker_selected: 0,
+            help_page: HelpPage::Keys,
         })
     }
 
@@ -680,7 +705,8 @@ impl App {
         // a key that *closes* one (Esc on help) flips it the other
         // way but also shouldn't propagate. Either side of the
         // transition counts as "modal" for swallowing purposes.
-        let modal_before = self.command_buffer.is_some() || self.help_visible;
+        let modal_before =
+            self.command_buffer.is_some() || self.help_visible || self.nodes_picker_visible;
         match event {
             Event::Quit => action_tx.send(Action::Quit)?,
             Event::Tick => action_tx.send(Action::Tick)?,
@@ -689,7 +715,8 @@ impl App {
             Event::Key(key) => self.handle_key_event(key)?,
             _ => {}
         }
-        let modal_after = self.command_buffer.is_some() || self.help_visible;
+        let modal_after =
+            self.command_buffer.is_some() || self.help_visible || self.nodes_picker_visible;
         // Non-key events (Tick / Resize / Render) always propagate
         // so screens keep refreshing under modals.
         let propagate = !((modal_before || modal_after) && matches!(event, Event::Key(_)));
@@ -732,8 +759,73 @@ impl App {
                 | crossterm::event::KeyCode::Char('q') => {
                     self.help_visible = false;
                 }
+                crossterm::event::KeyCode::Tab | crossterm::event::KeyCode::BackTab => {
+                    self.help_page = match self.help_page {
+                        HelpPage::Keys => HelpPage::Verbs,
+                        HelpPage::Verbs => HelpPage::Keys,
+                    };
+                }
                 _ => {}
             }
+            return Ok(());
+        }
+        // Node-picker overlay key routing. Only ↑/↓, Enter, Esc,
+        // and Ctrl-N (to dismiss) reach this branch; everything
+        // else is swallowed so a stray keystroke can't switch
+        // screens behind the overlay.
+        if self.nodes_picker_visible {
+            let len = self.config.nodes.len();
+            match key.code {
+                crossterm::event::KeyCode::Esc => {
+                    self.nodes_picker_visible = false;
+                }
+                crossterm::event::KeyCode::Char('n')
+                    if key.modifiers == crossterm::event::KeyModifiers::CONTROL =>
+                {
+                    self.nodes_picker_visible = false;
+                }
+                crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Char('k') if len > 0 => {
+                    self.nodes_picker_selected = (self.nodes_picker_selected + len - 1) % len;
+                }
+                crossterm::event::KeyCode::Down | crossterm::event::KeyCode::Char('j')
+                    if len > 0 =>
+                {
+                    self.nodes_picker_selected = (self.nodes_picker_selected + 1) % len;
+                }
+                crossterm::event::KeyCode::Enter if len > 0 => {
+                    let target = self.config.nodes[self.nodes_picker_selected].name.clone();
+                    self.nodes_picker_visible = false;
+                    // No-op when the cursor was already on the
+                    // active node; avoids a needless watch-hub
+                    // rebuild.
+                    if target != self.api.name {
+                        self.command_status = Some(match self.switch_context(&target) {
+                            Ok(()) => CommandStatus::Info(format!(
+                                "switched to context {target} ({})",
+                                self.api.url
+                            )),
+                            Err(e) => CommandStatus::Err(format!("context switch failed: {e}")),
+                        });
+                    }
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+        // Ctrl-N opens the node-picker overlay (mirrors `:nodes`).
+        // Captured at the app level so every screen gets it without
+        // each one wiring it. Plain `n` stays free for in-screen use.
+        if matches!(key.code, crossterm::event::KeyCode::Char('n'))
+            && key.modifiers == crossterm::event::KeyModifiers::CONTROL
+        {
+            let active = self
+                .config
+                .nodes
+                .iter()
+                .position(|n| n.name == self.api.name)
+                .unwrap_or(0);
+            self.nodes_picker_selected = active;
+            self.nodes_picker_visible = true;
             return Ok(());
         }
         // `?` opens the help overlay. We capture it at the app level
@@ -774,6 +866,45 @@ impl App {
                 );
             }
             return Ok(());
+        }
+        // Direct numeric jumps for the cockpit's 14 screens. Plain
+        // digits 1-9 jump to S1-S9 (Health through Tags); 0 jumps
+        // to S10 (Pins). Alt+1..Alt+4 reach the second-row screens
+        // S11-S14 (Manifest, Watchlist, FeedTimeline, Pubsub) — Alt
+        // keeps the plain digit row available for any future
+        // in-screen numeric input without conflict.
+        if let crossterm::event::KeyCode::Char(c) = key.code {
+            if key.modifiers == crossterm::event::KeyModifiers::NONE {
+                let idx = match c {
+                    '1'..='9' => Some((c as usize) - ('1' as usize)),
+                    '0' => Some(9),
+                    _ => None,
+                };
+                if let Some(i) = idx {
+                    if i < self.screens.len() {
+                        self.current_screen = i;
+                        debug!(
+                            "switched to screen {}",
+                            SCREEN_NAMES.get(self.current_screen).unwrap_or(&"?")
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+            if key.modifiers == crossterm::event::KeyModifiers::ALT
+                && let Some(d) = c.to_digit(10)
+                && (1..=9).contains(&d)
+            {
+                let i = 10 + (d as usize) - 1;
+                if i < self.screens.len() {
+                    self.current_screen = i;
+                    debug!(
+                        "switched to screen {}",
+                        SCREEN_NAMES.get(self.current_screen).unwrap_or(&"?")
+                    );
+                    return Ok(());
+                }
+            }
         }
         // Log-pane controls. `[` / `]` cycle tabs (lazygit / k9s
         // pattern, no conflict with screen-cycling Tab/Shift+Tab).
@@ -1121,6 +1252,19 @@ impl App {
             }
             "pubsub-replay" => {
                 self.command_status = Some(self.run_pubsub_replay(trimmed));
+            }
+            "nodes" => {
+                // Open the picker overlay. Cursor lands on the
+                // currently active node so Enter on an unchanged
+                // selection is a cheap no-op (matches Esc).
+                let active = self
+                    .config
+                    .nodes
+                    .iter()
+                    .position(|n| n.name == self.api.name)
+                    .unwrap_or(0);
+                self.nodes_picker_selected = active;
+                self.nodes_picker_visible = true;
             }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
@@ -2940,6 +3084,7 @@ impl App {
         let command_suggestion_index = self.command_suggestion_index;
         let command_status = self.command_status.clone();
         let help_visible = self.help_visible;
+        let help_page = self.help_page;
         let profile = self.api.name.clone();
         let endpoint = self.api.url.clone();
         let last_ping = self.health_rx.borrow().last_ping;
@@ -2952,6 +3097,38 @@ impl App {
         } else {
             None
         };
+        // Background-task awareness chips. Hidden when there's nothing
+        // to surface — keeps the top bar quiet on a fresh session and
+        // visibly busy when daemons are running.
+        let pubsub_subs_count = self.pubsub_subs.len();
+        let watch_refs_count = self.watch_refs.len();
+        let alerts_enabled = self
+            .config
+            .alerts
+            .webhook_url
+            .as_deref()
+            .is_some_and(|u| !u.is_empty());
+        // Node picker overlay state — clamp the cursor every render
+        // so a config reload that shrunk `nodes` can't leave it
+        // pointing past the end.
+        let nodes_picker_visible = self.nodes_picker_visible;
+        if !self.config.nodes.is_empty() && self.nodes_picker_selected >= self.config.nodes.len() {
+            self.nodes_picker_selected = self.config.nodes.len() - 1;
+        }
+        let nodes_picker_selected = self.nodes_picker_selected;
+        let nodes_picker_rows: Vec<(String, String, bool, bool)> = self
+            .config
+            .nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.name.clone(),
+                    n.url.clone(),
+                    n.default,
+                    n.name == self.api.name,
+                )
+            })
+            .collect();
         tui.draw(|frame| {
             use ratatui::layout::{Constraint, Layout};
             use ratatui::style::{Color, Modifier, Style};
@@ -3006,6 +3183,35 @@ impl App {
                         .fg(Color::Black)
                         .bg(t.fail)
                         .add_modifier(Modifier::BOLD),
+                ));
+            }
+            // Background-task chips: pubsub subscriptions, watch-ref
+            // daemons, and alerts state. Each is hidden when there's
+            // nothing to surface so the line stays calm on a fresh
+            // session. Operator notices stuff is running when the
+            // chip appears, not by remembering to type a verb.
+            if pubsub_subs_count > 0 {
+                metadata_spans.push(Span::raw("   "));
+                metadata_spans.push(Span::styled("subs ", Style::default().fg(t.dim)));
+                metadata_spans.push(Span::styled(
+                    format!("{pubsub_subs_count}"),
+                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
+                ));
+            }
+            if watch_refs_count > 0 {
+                metadata_spans.push(Span::raw("   "));
+                metadata_spans.push(Span::styled("watch ", Style::default().fg(t.dim)));
+                metadata_spans.push(Span::styled(
+                    format!("{watch_refs_count}"),
+                    Style::default().fg(t.info).add_modifier(Modifier::BOLD),
+                ));
+            }
+            if alerts_enabled {
+                metadata_spans.push(Span::raw("   "));
+                metadata_spans.push(Span::styled("alerts ", Style::default().fg(t.dim)));
+                metadata_spans.push(Span::styled(
+                    "●",
+                    Style::default().fg(t.pass).add_modifier(Modifier::BOLD),
                 ));
             }
             let metadata_line = Line::from(metadata_spans);
@@ -3089,7 +3295,16 @@ impl App {
             // terminals (≥60 cols). Falls back to the full screen on
             // anything narrower.
             if help_visible {
-                draw_help_overlay(frame, frame.area(), active, &theme);
+                draw_help_overlay(frame, frame.area(), active, help_page, &theme);
+            }
+            if nodes_picker_visible {
+                draw_nodes_picker(
+                    frame,
+                    frame.area(),
+                    &nodes_picker_rows,
+                    nodes_picker_selected,
+                    &theme,
+                );
             }
         })?;
         Ok(())
@@ -3202,18 +3417,66 @@ fn draw_help_overlay(
     frame: &mut ratatui::Frame,
     area: ratatui::layout::Rect,
     active_screen: usize,
+    page: HelpPage,
     theme: &theme::Theme,
 ) {
     use ratatui::layout::Rect;
+    use ratatui::style::Style;
+    use ratatui::text::Line;
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+    // Overlay box: bigger when we need the verb catalogue to fit
+    // (it has 50+ rows including headings).
+    let (w_max, h_max) = match page {
+        HelpPage::Keys => (72, 22),
+        HelpPage::Verbs => (84, 40),
+    };
+    let w = area.width.min(w_max);
+    let h = area.height.min(h_max);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+
+    let lines: Vec<Line> = match page {
+        HelpPage::Keys => build_help_keys_lines(active_screen, theme),
+        HelpPage::Verbs => build_help_verbs_lines(theme),
+    };
+
+    let title = match page {
+        HelpPage::Keys => " help — keys ",
+        HelpPage::Verbs => " help — verbs ",
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.accent))
+                .title(title),
+        ),
+        rect,
+    );
+}
+
+fn build_help_keys_lines<'a>(
+    active_screen: usize,
+    theme: &theme::Theme,
+) -> Vec<ratatui::text::Line<'a>> {
     use ratatui::style::{Modifier, Style};
     use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
     let screen_name = SCREEN_NAMES.get(active_screen).copied().unwrap_or("?");
     let screen_rows = screen_keymap(active_screen);
     let global_rows: &[(&str, &str)] = &[
-        ("Tab", "next screen"),
-        ("Shift+Tab", "previous screen"),
+        ("Tab / Shift+Tab", "cycle screen"),
+        ("1-9 / 0", "jump to S1-S9 / S10"),
+        ("Alt+1..Alt+4", "jump to S11-S14"),
+        ("Ctrl+N", "open node picker (also :nodes)"),
         ("[ / ]", "previous / next log-pane tab"),
         ("+ / -", "grow / shrink log pane"),
         ("Shift+↑/↓", "scroll log pane (1 line); pauses auto-tail"),
@@ -3225,19 +3488,6 @@ fn draw_help_overlay(
         ("qq", "quit (double-tap; or :q)"),
         ("Ctrl+C / Ctrl+D", "quit immediately"),
     ];
-
-    // Layout: pick the smaller of (screen size, 70x22) so we always
-    // fit on small terminals.
-    let w = area.width.min(72);
-    let h = area.height.min(22);
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let rect = Rect {
-        x,
-        y,
-        width: w,
-        height: h,
-    };
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(vec![
@@ -3273,21 +3523,196 @@ fn draw_help_overlay(
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Esc / ? / q to dismiss",
+        "  Tab to verb list   Esc / ? / q to dismiss",
+        Style::default()
+            .fg(theme.dim)
+            .add_modifier(Modifier::ITALIC),
+    )));
+    lines
+}
+
+/// Categorise every `KNOWN_COMMANDS` entry. Each verb maps to one
+/// category; the catalogue ordering inside a category preserves the
+/// `KNOWN_COMMANDS` order so the popup and the verb list agree.
+fn verb_category(name: &str) -> &'static str {
+    match name {
+        "health" | "stamps" | "swap" | "lottery" | "peers" | "network" | "warmup" | "api"
+        | "tags" | "pins" | "watchlist" => "navigate",
+        "topup-preview" | "dilute-preview" | "extend-preview" | "buy-preview" | "buy-suggest"
+        | "plan-batch" | "price" | "basefee" => "stamps & economics",
+        "probe-upload" | "upload-file" | "upload-collection" => "uploads",
+        "feed-probe" | "feed-timeline" | "manifest" | "inspect" | "hash" | "cid"
+        | "depth-table" | "grantees-list" => "inspect",
+        "durability-check" | "watch-ref" | "watch-ref-stop" | "pins-check" => "durability",
+        "pubsub-pss"
+        | "pubsub-gsoc"
+        | "pubsub-stop"
+        | "pubsub-filter"
+        | "pubsub-filter-clear"
+        | "pubsub-replay" => "pubsub",
+        "gsoc-mine" | "pss-target" => "mining / addresses",
+        "check-version" | "config-doctor" | "diagnose" | "loggers" | "set-logger" => {
+            "diagnostics & config"
+        }
+        "context" | "nodes" | "quit" => "cockpit",
+        _ => "other",
+    }
+}
+
+fn build_help_verbs_lines(theme: &theme::Theme) -> Vec<ratatui::text::Line<'static>> {
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
+
+    // Category order — matches the cockpit's typical reading flow.
+    let order = [
+        "navigate",
+        "inspect",
+        "stamps & economics",
+        "uploads",
+        "durability",
+        "pubsub",
+        "mining / addresses",
+        "diagnostics & config",
+        "cockpit",
+    ];
+    let mut lines: Vec<Line<'static>> =
+        Vec::with_capacity(KNOWN_COMMANDS.len() + order.len() * 2 + 4);
+    lines.push(Line::from(Span::styled(
+        format!("  every :verb ({})", KNOWN_COMMANDS.len()),
+        Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    for cat in order {
+        let mut first = true;
+        for (name, desc) in KNOWN_COMMANDS {
+            if verb_category(name) != cat {
+                continue;
+            }
+            if first {
+                lines.push(Line::from(Span::styled(
+                    format!("  {cat}"),
+                    Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
+                )));
+                first = false;
+            }
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("{:<18}", format!(":{name}")),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::raw(*desc),
+            ]));
+        }
+        if !first {
+            lines.push(Line::from(""));
+        }
+    }
+    lines.push(Line::from(Span::styled(
+        "  Tab to keys   Esc / ? / q to dismiss",
+        Style::default()
+            .fg(theme.dim)
+            .add_modifier(Modifier::ITALIC),
+    )));
+    lines
+}
+
+/// Render the node-picker overlay. Rows are `(name, url, is_default,
+/// is_active)`; `selected` is the cursor row. Floats centred and
+/// auto-sizes to fit the configured `[[nodes]]` count plus a header
+/// and footer. Used by both Ctrl-N and the `:nodes` verb.
+fn draw_nodes_picker(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    rows: &[(String, String, bool, bool)],
+    selected: usize,
+    theme: &theme::Theme,
+) {
+    use ratatui::layout::Rect;
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+    // Auto-width: longest "name @ url" plus padding, clamped to 78.
+    let name_w = rows.iter().map(|r| r.0.len()).max().unwrap_or(8);
+    let url_w = rows.iter().map(|r| r.1.len()).max().unwrap_or(20);
+    let needed = (name_w + url_w + 12) as u16;
+    let w = area.width.min(needed.max(48)).min(80);
+    let h = ((rows.len() + 4) as u16).clamp(6, area.height.min(20));
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+
+    let mut lines: Vec<Line> = Vec::with_capacity(rows.len() + 2);
+    if rows.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no nodes configured — add [[nodes]] entries to config.toml)",
+            Style::default()
+                .fg(theme.dim)
+                .add_modifier(Modifier::ITALIC),
+        )));
+    } else {
+        for (i, (name, url, is_default, is_active)) in rows.iter().enumerate() {
+            let is_sel = i == selected;
+            let cursor = if is_sel { "▸ " } else { "  " };
+            let row_style = if is_sel {
+                Style::default()
+                    .fg(theme.tab_active_fg)
+                    .bg(theme.tab_active_bg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            // Active / default markers, right-aligned-ish for the eye.
+            let mut tags = String::new();
+            if *is_active {
+                tags.push_str(" ●");
+            }
+            if *is_default {
+                tags.push_str(" ★");
+            }
+            lines.push(Line::from(vec![
+                Span::styled(format!("{cursor}{name:<name_w$}  "), row_style),
+                Span::styled(
+                    url.to_string(),
+                    if is_sel {
+                        row_style
+                    } else {
+                        Style::default().fg(theme.dim)
+                    },
+                ),
+                Span::styled(
+                    tags,
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  ↑/↓ select   Enter switch   Esc / Ctrl-N close   ● active  ★ default",
         Style::default()
             .fg(theme.dim)
             .add_modifier(Modifier::ITALIC),
     )));
 
-    // `Clear` blanks the underlying rendered region so the overlay
-    // doesn't ghost over screen content.
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme.accent))
-                .title(" help "),
+                .title(" nodes "),
         ),
         rect,
     );
@@ -3892,5 +4317,31 @@ mod tests {
         assert_eq!(short_hex("a1b2c3d4e5f6", 8), "a1b2c3d4…");
         assert_eq!(short_hex("short", 8), "short");
         assert_eq!(short_hex("abcdefgh", 8), "abcdefgh");
+    }
+
+    #[test]
+    fn verb_category_covers_every_known_command() {
+        // Every entry in KNOWN_COMMANDS must map to a real category
+        // (never the "other" fall-through), otherwise the verb won't
+        // appear in the help overlay's grouped list. Easy to forget
+        // when adding a new verb.
+        for (name, _) in KNOWN_COMMANDS {
+            assert_ne!(
+                verb_category(name),
+                "other",
+                "verb {name} has no category — add it to verb_category()"
+            );
+        }
+    }
+
+    #[test]
+    fn verb_category_groups_known_verbs() {
+        assert_eq!(verb_category("health"), "navigate");
+        assert_eq!(verb_category("buy-suggest"), "stamps & economics");
+        assert_eq!(verb_category("upload-file"), "uploads");
+        assert_eq!(verb_category("manifest"), "inspect");
+        assert_eq!(verb_category("watch-ref"), "durability");
+        assert_eq!(verb_category("pubsub-pss"), "pubsub");
+        assert_eq!(verb_category("nodes"), "cockpit");
     }
 }
