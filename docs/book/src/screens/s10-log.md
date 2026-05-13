@@ -14,6 +14,36 @@ cockpit makes to Bee. The trust anchor and live tutorial:
 operators see the *actual* request behind every gauge they're
 watching, with method, path, status, and elapsed time.
 
+## Reading the pane in detail (v1.13+)
+
+Two viewing-comfort affordances were added in v1.13.0:
+
+- **`Shift+L`** toggles a **fullscreen** view of the log pane.
+  The active screen above collapses to zero lines and the pane
+  expands to fill the middle of the cockpit — same data, same
+  seven tabs (`[` / `]` to cycle), same filter (see below). Press
+  `Shift+L` again to return to the split layout. Top bar and
+  command bar stay visible either way, so you never lose sight
+  of which node you're on.
+- **`/`** opens an in-pane **filter** prompt — case-insensitive
+  substring. Type a needle, press `Enter`, and the pane hides
+  every line that doesn't match. The title strip shows
+  `/<query> · N matches` so you can confirm at a glance that
+  your filter is doing what you expect. `Esc` cancels the
+  prompt; pressing `Esc` again (no prompt open) clears an
+  active filter. The filter applies to whichever tab you're
+  viewing — switching tabs (`[` / `]`) keeps it applied, so
+  you can grep "where did `503 syncing` show up" across
+  Errors, Bee HTTP, and the cockpit log without retyping.
+
+The filter is a **substring** match, not a regex. It's
+case-insensitive and respects the live tail — newly arriving
+lines that match appear at the bottom; non-matching lines are
+silently skipped over. The match count updates as new lines
+arrive even while you have the pane scrolled back.
+
+
+
 ## Why this screen exists
 
 Three reasons, in priority order:

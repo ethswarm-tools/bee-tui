@@ -15,6 +15,8 @@ offline reference.
 | `Alt+1` – `Alt+5` | Jump to S11 – S15 (Manifest, Watchlist, FeedTimeline, Pubsub, Fleet) |
 | `Ctrl+N` | Open node picker (also `:nodes`) |
 | `Shift+E` | Open the batch-economics modal (v1.12+) — guided form for topup/dilute/extend/buy/plan previews |
+| `Shift+L` | Toggle fullscreen log pane (v1.13+) — collapses the active screen so the log pane fills the middle of the cockpit. Press again to return. |
+| `/` | Open the log-pane filter prompt (v1.13+) — case-insensitive substring; `Enter` commits, `Esc` cancels. With an active filter, `Esc` (no prompt open) clears it. |
 | `[` / `]` | Previous / next tab on the bottom log pane (Errors / Warn / Info / Debug / Bee HTTP / bee::http / Cockpit). Persisted across launches. |
 | `+` / `-` | Grow / shrink the bottom log pane height by one line. Clamped to 4..24. Persisted across launches. |
 | `Shift+↑` / `Shift+↓` | Scroll the active log tab back / forward by one line. Pauses auto-tail; the title shows a `paused N ↑` indicator. |

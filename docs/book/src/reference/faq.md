@@ -293,6 +293,34 @@ every request, with method / path / status / elapsed. See
 [the log-pane page](../screens/s10-log.md) (file kept at its
 old `s10-log.md` path for stable links).
 
+### The log pane is too small. Can I make it bigger?
+
+Three options:
+
+- **`+` / `-`** grows / shrinks the bottom pane by one line.
+  Range 4–24 lines; the choice persists across launches via
+  `~/.local/share/bee-tui`.
+- **`Shift+L`** (v1.13+) toggles fullscreen log mode: the
+  active screen collapses to zero lines and the log pane
+  fills the middle of the cockpit. Press again to return to
+  the split layout. Same tabs, same scroll position, same
+  filter — just bigger.
+- For long-form digging, `:diagnose` and `:loggers` write
+  full snapshots to `$TMPDIR/bee-tui-*` files that you can
+  open in your editor of choice.
+
+### How do I grep / search inside the log pane?
+
+`/` (v1.13+) opens an inline filter prompt at the top of the
+pane. Type a case-insensitive substring; the pane hides every
+line that doesn't match. `Enter` commits, `Esc` cancels.
+Pressing `Esc` with an active filter and no prompt open
+clears the filter. The title strip carries a `/<query> · N
+matches` chip so you can confirm at a glance. The filter
+follows you across tabs (`[` / `]`), so the same needle
+applies whether you're looking at Errors, Bee HTTP, or the
+cockpit-own log.
+
 ## Things the cockpit deliberately won't do
 
 ### "Why can't I cash out cheques from the cockpit?"

@@ -47,6 +47,10 @@ exists to address:
 - **"Run a topup-preview without remembering the arg order."** —
   v1.12's `Shift+E` opens a guided modal that builds the verb line
   field-by-field and shows the result inline.
+- **"The log pane is tiny and I want to grep through it."** — v1.13's
+  `Shift+L` toggles a fullscreen log view (active screen collapses),
+  and `/` opens an inline case-insensitive substring filter with a
+  live match-count.
 - **"Is anything running in the background?"** — top-bar awareness
   chips (`subs N`, `watch N`, `alerts ●`, v1.10+) appear whenever
   a pubsub subscription, a `:watch-ref` daemon, or webhook alerting

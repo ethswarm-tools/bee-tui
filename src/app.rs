@@ -196,6 +196,11 @@ pub struct App {
     /// struct's fields stay empty and `tick_fleet_aggregate` is a
     /// cheap no-op.
     fleet_aggregator: FleetAggregator,
+    /// True when `Shift+L` has expanded the log pane to fill the
+    /// middle of the cockpit. The current screen body is hidden
+    /// while this is on. Toggled by the same key — same data,
+    /// same tabs, same filter; just bigger.
+    log_fullscreen: bool,
 }
 
 /// Per-node previous status + the buffered pending alerts. The
@@ -1077,6 +1082,7 @@ impl App {
             batch_modal: BatchModal::default(),
             supervisor_watchdog,
             fleet_aggregator: FleetAggregator::default(),
+            log_fullscreen: false,
         })
     }
 
@@ -1147,7 +1153,8 @@ impl App {
         let modal_before = self.command_buffer.is_some()
             || self.help_visible
             || self.nodes_picker_visible
-            || self.batch_modal.visible;
+            || self.batch_modal.visible
+            || self.log_pane.filter_prompt_visible();
         match event {
             Event::Quit => action_tx.send(Action::Quit)?,
             Event::Tick => action_tx.send(Action::Tick)?,
@@ -1159,7 +1166,8 @@ impl App {
         let modal_after = self.command_buffer.is_some()
             || self.help_visible
             || self.nodes_picker_visible
-            || self.batch_modal.visible;
+            || self.batch_modal.visible
+            || self.log_pane.filter_prompt_visible();
         // Non-key events (Tick / Resize / Render) always propagate
         // so screens keep refreshing under modals.
         let propagate = !((modal_before || modal_after) && matches!(event, Event::Key(_)));
@@ -1255,6 +1263,40 @@ impl App {
             }
             return Ok(());
         }
+        // Log-pane filter prompt routing. While `/` has opened
+        // the prompt, every keystroke flows into the input buffer
+        // (or commits / cancels). Same modal discipline as help /
+        // picker / batch modal.
+        if self.log_pane.filter_prompt_visible() {
+            use crossterm::event::KeyCode;
+            match key.code {
+                KeyCode::Esc => self.log_pane.cancel_filter_prompt(),
+                KeyCode::Enter => self.log_pane.commit_filter_prompt(),
+                KeyCode::Char(c) => self.log_pane.push_filter_char(c),
+                KeyCode::Backspace => self.log_pane.pop_filter_char(),
+                _ => {}
+            }
+            return Ok(());
+        }
+        // `/` opens the log-pane filter prompt — same key as
+        // grep-in-pane in less / k9s / lazygit. Operators don't
+        // have to know "this is for the log pane"; it's the only
+        // pane with a filter so context is implicit.
+        if matches!(key.code, crossterm::event::KeyCode::Char('/'))
+            && key.modifiers == crossterm::event::KeyModifiers::NONE
+        {
+            self.log_pane.open_filter_prompt();
+            return Ok(());
+        }
+        // Esc with no modal open clears any active log filter so
+        // operators can drop back to the unfiltered tail without
+        // flipping tabs or retyping.
+        if matches!(key.code, crossterm::event::KeyCode::Esc)
+            && self.log_pane.active_filter().is_some()
+        {
+            self.log_pane.clear_filter();
+            return Ok(());
+        }
         // Ctrl-N opens the node-picker overlay (mirrors `:nodes`).
         // Captured at the app level so every screen gets it without
         // each one wiring it. Plain `n` stays free for in-screen use.
@@ -1289,6 +1331,16 @@ impl App {
                 visible: true,
                 ..Default::default()
             };
+            return Ok(());
+        }
+        // `Shift+L` toggles fullscreen log mode — collapses the
+        // active screen body and lets the log pane fill the
+        // middle of the cockpit. Same data, same tabs, same
+        // filter (if any) — just bigger. Press again to return.
+        if matches!(key.code, crossterm::event::KeyCode::Char('L'))
+            && key.modifiers == crossterm::event::KeyModifiers::SHIFT
+        {
+            self.log_fullscreen = !self.log_fullscreen;
             return Ok(());
         }
         // `?` opens the help overlay. We capture it at the app level
@@ -3814,19 +3866,37 @@ impl App {
             .collect();
         let batch_modal_visible = self.batch_modal.visible;
         let batch_modal_state = self.batch_modal.clone();
+        let log_fullscreen = self.log_fullscreen;
         tui.draw(|frame| {
             use ratatui::layout::{Constraint, Layout};
             use ratatui::style::{Color, Modifier, Style};
             use ratatui::text::{Line, Span};
             use ratatui::widgets::Paragraph;
 
-            let chunks = Layout::vertical([
-                Constraint::Length(2),               // top-bar (metadata + tabs)
-                Constraint::Min(0),                  // active screen
-                Constraint::Length(1),               // command bar / status line
-                Constraint::Length(log_pane_height), // tabbed log pane (operator-resizable)
-            ])
-            .split(frame.area());
+            // Layout: in normal mode the active screen takes the
+            // middle of the cockpit and the log pane sits below at
+            // its configured height. When `Shift+L` flips
+            // `log_fullscreen`, we swap the roles: the screen
+            // collapses to 0 lines and the log pane absorbs the
+            // middle. Top bar + command bar stay put either way so
+            // the operator never loses sight of context or input.
+            let chunks = if log_fullscreen {
+                Layout::vertical([
+                    Constraint::Length(2),  // top-bar (metadata + tabs)
+                    Constraint::Length(0),  // (hidden screen body)
+                    Constraint::Length(1),  // command bar / status line
+                    Constraint::Min(0),     // log pane fills the rest
+                ])
+                .split(frame.area())
+            } else {
+                Layout::vertical([
+                    Constraint::Length(2),               // top-bar (metadata + tabs)
+                    Constraint::Min(0),                  // active screen
+                    Constraint::Length(1),               // command bar / status line
+                    Constraint::Length(log_pane_height), // tabbed log pane
+                ])
+                .split(frame.area())
+            };
 
             let top_chunks =
                 Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(chunks[0]);
@@ -3924,10 +3994,16 @@ impl App {
             ));
             frame.render_widget(Paragraph::new(Line::from(tabs)), top_chunks[1]);
 
-            // Active screen
-            if let Some(screen) = screens.get_mut(active) {
-                if let Err(err) = screen.draw(frame, chunks[1]) {
-                    let _ = tx.send(Action::Error(format!("Failed to draw screen: {err:?}")));
+            // Active screen — skipped when the log pane has been
+            // expanded to fullscreen via `Shift+L` (the chunks[1]
+            // rect is Length(0) in that mode and screens that
+            // allocate via Layout::vertical would otherwise spam
+            // ratatui with zero-size rect warnings).
+            if !log_fullscreen {
+                if let Some(screen) = screens.get_mut(active) {
+                    if let Err(err) = screen.draw(frame, chunks[1]) {
+                        let _ = tx.send(Action::Error(format!("Failed to draw screen: {err:?}")));
+                    }
                 }
             }
             // Command bar / status line
@@ -4167,6 +4243,8 @@ fn build_help_keys_lines<'a>(
         ("Alt+1..Alt+5", "jump to S11-S15"),
         ("Ctrl+N", "open node picker (also :nodes)"),
         ("E", "open batch-economics modal (topup/dilute/extend/buy/plan)"),
+        ("Shift+L", "toggle fullscreen log pane (collapses active screen)"),
+        ("/", "filter the log pane (case-insensitive substring)"),
         ("[ / ]", "previous / next log-pane tab"),
         ("+ / -", "grow / shrink log pane"),
         ("Shift+↑/↓", "scroll log pane (1 line); pauses auto-tail"),

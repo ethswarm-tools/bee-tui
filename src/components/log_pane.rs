@@ -191,6 +191,19 @@ pub struct LogPane {
     /// run past the pane width; this lets the operator pan right to
     /// see the truncated tail. Reset on tab switch.
     h_scroll_offset: u16,
+    /// Active case-insensitive substring filter. `None` means no
+    /// filter; rendered lines pass through unchanged. `Some(q)`
+    /// hides every line whose lossless-stringified form does not
+    /// contain `q` (lowercased on both sides). Survives tab
+    /// switches deliberately — operators searching for a string
+    /// want it applied to whichever tab they're looking at.
+    filter: Option<String>,
+    /// When `Some(buf)`, the in-pane filter prompt is open and the
+    /// operator is typing `buf` into it. Distinct from `filter` so
+    /// the live preview can show match-count for the buffer as
+    /// they type (without re-committing on every keystroke).
+    /// Committed into `filter` on Enter.
+    filter_prompt: Option<String>,
 }
 
 impl LogPane {
@@ -206,6 +219,8 @@ impl LogPane {
             spawn_active: false,
             scroll_offset: 0,
             h_scroll_offset: 0,
+            filter: None,
+            filter_prompt: None,
         }
     }
 
@@ -300,6 +315,82 @@ impl LogPane {
 
     /// Current horizontal scroll offset. Exposed for tests + the
     /// title-strip indicator.
+    /// True while `/` has opened the in-pane filter prompt and the
+    /// operator is typing. App's key router needs to know this so
+    /// `j`/`k`/`q`/etc. don't escape into screen-level bindings
+    /// while the prompt has focus.
+    pub fn filter_prompt_visible(&self) -> bool {
+        self.filter_prompt.is_some()
+    }
+
+    /// Open the filter prompt seeded with the existing filter (if
+    /// any) so editing an active filter doesn't require retyping.
+    pub fn open_filter_prompt(&mut self) {
+        self.filter_prompt = Some(self.filter.clone().unwrap_or_default());
+    }
+
+    /// Drop the in-progress filter prompt without committing.
+    /// Active filter (if any) is preserved.
+    pub fn cancel_filter_prompt(&mut self) {
+        self.filter_prompt = None;
+    }
+
+    /// Commit the in-progress prompt as the active filter. An
+    /// empty buffer clears the filter (same as pressing Esc on a
+    /// fresh prompt) — saves the operator a separate "clear"
+    /// keystroke.
+    pub fn commit_filter_prompt(&mut self) {
+        if let Some(buf) = self.filter_prompt.take() {
+            let trimmed = buf.trim();
+            if trimmed.is_empty() {
+                self.filter = None;
+            } else {
+                self.filter = Some(trimmed.to_string());
+            }
+        }
+        // Filter changes invalidate scroll offset (the visible
+        // line set just changed). Snap back to tail so the
+        // operator sees the most recent matches.
+        self.scroll_offset = 0;
+        self.h_scroll_offset = 0;
+    }
+
+    /// Append a character to the filter prompt buffer.
+    pub fn push_filter_char(&mut self, c: char) {
+        if let Some(buf) = self.filter_prompt.as_mut() {
+            buf.push(c);
+        }
+    }
+
+    /// Delete the trailing character of the filter prompt buffer.
+    pub fn pop_filter_char(&mut self) {
+        if let Some(buf) = self.filter_prompt.as_mut() {
+            buf.pop();
+        }
+    }
+
+    /// Operator-facing view of the in-progress prompt buffer
+    /// (e.g. for rendering). Empty string when the prompt isn't
+    /// open.
+    pub fn filter_prompt_buffer(&self) -> &str {
+        self.filter_prompt.as_deref().unwrap_or("")
+    }
+
+    /// Currently committed filter string, if any.
+    pub fn active_filter(&self) -> Option<&str> {
+        self.filter.as_deref()
+    }
+
+    /// Clear any active filter and dismiss the prompt. Wired to
+    /// Esc when the prompt isn't open but a filter is active, so
+    /// the same key clears both states.
+    pub fn clear_filter(&mut self) {
+        self.filter = None;
+        self.filter_prompt = None;
+        self.scroll_offset = 0;
+        self.h_scroll_offset = 0;
+    }
+
     pub fn h_scroll_offset(&self) -> u16 {
         self.h_scroll_offset
     }
@@ -405,12 +496,32 @@ impl Component for LogPane {
         let t = theme::active();
         let active = self.active_tab;
 
+        // Render every line for the active tab, then apply the
+        // active filter (if any). The filter check looks at the
+        // line's lossless plaintext — we keep span styling for the
+        // surviving lines, so colour treatment of error/warn levels
+        // is preserved across the filter.
+        let raw_lines: Vec<Line> = match active {
+            LogTab::SelfHttp => render_self_http(&self.self_http_entries, t),
+            LogTab::Cockpit => render_cockpit(&self.cockpit_entries, t),
+            tab => render_bee_tab(&self.bee_buffers, tab, self.spawn_active, t),
+        };
+        let filter_active = self.filter.as_deref();
+        let lines: Vec<Line> = match filter_active {
+            None => raw_lines,
+            Some(q) => filter_lines(raw_lines, q),
+        };
+        let match_count = if filter_active.is_some() {
+            Some(lines.len())
+        } else {
+            None
+        };
+
         // Clamp the scroll offset against what the active tab can
         // actually scroll. Pane content area excludes top + bottom
         // borders; we approximate from the outer area here.
         let content_h = (area.height as usize).saturating_sub(2);
-        let total_lines = self.active_tab_total_lines();
-        let max_offset = total_lines.saturating_sub(content_h);
+        let max_offset = lines.len().saturating_sub(content_h);
         if self.scroll_offset > max_offset {
             self.scroll_offset = max_offset;
         }
@@ -420,22 +531,59 @@ impl Component for LogPane {
             &self.bee_buffers,
             self.scroll_offset,
             self.h_scroll_offset,
+            filter_active,
+            match_count,
             t,
         ));
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let content_area = Layout::vertical([Constraint::Min(0)])
-            .split(inner)
-            .first()
-            .copied()
-            .unwrap_or(inner);
-
-        let lines: Vec<Line> = match active {
-            LogTab::SelfHttp => render_self_http(&self.self_http_entries, t),
-            LogTab::Cockpit => render_cockpit(&self.cockpit_entries, t),
-            tab => render_bee_tab(&self.bee_buffers, tab, self.spawn_active, t),
+        // When the in-pane filter prompt is open, eat the top row
+        // of the content area for the live-typed input. The match
+        // count updates per keystroke from the buffer (not the
+        // committed filter), so operators see whether their typing
+        // will hit anything before they press Enter.
+        let prompt_open = self.filter_prompt.is_some();
+        let chunks = if prompt_open {
+            Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner)
+        } else {
+            Layout::vertical([Constraint::Min(0)]).split(inner)
         };
+        if prompt_open {
+            let buf = self.filter_prompt_buffer().to_string();
+            // Compute the "preview" match count for the *current*
+            // buffer (independent of the committed filter) so the
+            // operator sees match-count update as they type.
+            let preview_lines: Vec<Line> = match active {
+                LogTab::SelfHttp => render_self_http(&self.self_http_entries, t),
+                LogTab::Cockpit => render_cockpit(&self.cockpit_entries, t),
+                tab => render_bee_tab(&self.bee_buffers, tab, self.spawn_active, t),
+            };
+            let preview_matches = if buf.trim().is_empty() {
+                preview_lines.len()
+            } else {
+                filter_lines(preview_lines, &buf).len()
+            };
+            let prompt_line = Line::from(vec![
+                Span::styled(
+                    "  /",
+                    Style::default()
+                        .fg(t.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(buf, Style::default().fg(t.info)),
+                Span::styled("_", Style::default().fg(t.dim)),
+                Span::raw("   "),
+                Span::styled(
+                    format!("{preview_matches} matches · Enter commits · Esc cancels"),
+                    Style::default()
+                        .fg(t.dim)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(prompt_line), chunks[0]);
+        }
+        let content_area = if prompt_open { chunks[1] } else { chunks[0] };
 
         // Pick the visible window: tail semantics + scroll offset.
         // - tailing (offset = 0): show the last `render_h` lines.
@@ -464,6 +612,22 @@ impl Component for LogPane {
     }
 }
 
+/// Case-insensitive substring filter on a vector of ratatui `Line`s.
+/// Each `Line` is reduced to its concatenated text via the existing
+/// `to_string()` impl and compared against the lowercased query.
+/// Pure for testability — `tests/s10_log_filter.rs` (and the unit
+/// tests below) exercise this without spinning a TUI.
+pub fn filter_lines<'a>(lines: Vec<Line<'a>>, query: &str) -> Vec<Line<'a>> {
+    let needle = query.to_lowercase();
+    if needle.is_empty() {
+        return lines;
+    }
+    lines
+        .into_iter()
+        .filter(|line| line.to_string().to_lowercase().contains(&needle))
+        .collect()
+}
+
 impl LogPane {
     /// Number of payload lines the active tab currently has. Used
     /// by `draw()` to clamp the scroll offset and by tests.
@@ -485,6 +649,8 @@ fn tab_title_line<'a>(
     bufs: &BeeLogBuffers,
     scroll_offset: usize,
     h_scroll_offset: u16,
+    filter: Option<&str>,
+    filter_match_count: Option<usize>,
     t: &theme::Theme,
 ) -> Line<'a> {
     let mut spans: Vec<Span> = Vec::with_capacity(LogTab::ALL.len() * 2 + 2);
@@ -526,6 +692,18 @@ fn tab_title_line<'a>(
         spans.push(Span::styled(
             format!(" → {h_scroll_offset} "),
             Style::default().fg(t.warn).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if let Some(q) = filter {
+        // Active filter chip with the live query + match count so
+        // operators can confirm the filter is doing what they
+        // expect without flipping tabs.
+        let count = filter_match_count.unwrap_or(0);
+        spans.push(Span::styled(
+            format!(" /{q} · {count} matches "),
+            Style::default()
+                .fg(t.info)
+                .add_modifier(Modifier::BOLD),
         ));
     }
     Line::from(spans)
@@ -987,5 +1165,113 @@ mod tests {
         pane.reset_h_scroll();
         assert_eq!(pane.scroll_offset(), 7);
         assert_eq!(pane.h_scroll_offset(), 0);
+    }
+
+    // --- v1.13.0 filter tests ---
+
+    fn mk_line(s: &str) -> Line<'static> {
+        Line::from(Span::raw(s.to_string()))
+    }
+
+    #[test]
+    fn filter_lines_empty_query_passes_through() {
+        let lines = vec![mk_line("alpha"), mk_line("beta"), mk_line("gamma")];
+        let out = filter_lines(lines.clone(), "");
+        assert_eq!(out.len(), lines.len());
+    }
+
+    #[test]
+    fn filter_lines_matches_case_insensitive_substring() {
+        let lines = vec![
+            mk_line("GET /status 503 Node is syncing"),
+            mk_line("GET /health 200 4ms"),
+            mk_line("GET /STATUS 503 Node is syncing"),
+        ];
+        let out = filter_lines(lines, "status");
+        // Matches both /status and /STATUS (case-insensitive).
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn filter_lines_drops_non_matching() {
+        let lines = vec![mk_line("foo"), mk_line("bar"), mk_line("foobar")];
+        let out = filter_lines(lines, "foo");
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].to_string(), "foo");
+        assert_eq!(out[1].to_string(), "foobar");
+    }
+
+    #[test]
+    fn filter_prompt_lifecycle_opens_commits_and_clears() {
+        let mut pane = LogPane::new(None, LogTab::Errors, LOG_PANE_MIN_HEIGHT);
+        assert!(!pane.filter_prompt_visible());
+        assert!(pane.active_filter().is_none());
+        pane.open_filter_prompt();
+        assert!(pane.filter_prompt_visible());
+        pane.push_filter_char('5');
+        pane.push_filter_char('0');
+        pane.push_filter_char('3');
+        assert_eq!(pane.filter_prompt_buffer(), "503");
+        pane.commit_filter_prompt();
+        assert!(!pane.filter_prompt_visible());
+        assert_eq!(pane.active_filter(), Some("503"));
+        pane.clear_filter();
+        assert!(pane.active_filter().is_none());
+    }
+
+    #[test]
+    fn filter_prompt_empty_commit_clears_existing_filter() {
+        // Operator opens the prompt, deletes everything, and
+        // presses Enter — that should clear the filter (saves a
+        // separate "clear" keystroke).
+        let mut pane = LogPane::new(None, LogTab::Errors, LOG_PANE_MIN_HEIGHT);
+        pane.open_filter_prompt();
+        pane.push_filter_char('x');
+        pane.commit_filter_prompt();
+        assert_eq!(pane.active_filter(), Some("x"));
+        pane.open_filter_prompt();
+        pane.pop_filter_char();
+        pane.commit_filter_prompt();
+        assert!(pane.active_filter().is_none());
+    }
+
+    #[test]
+    fn filter_prompt_cancel_preserves_active_filter() {
+        let mut pane = LogPane::new(None, LogTab::Errors, LOG_PANE_MIN_HEIGHT);
+        pane.open_filter_prompt();
+        pane.push_filter_char('a');
+        pane.commit_filter_prompt();
+        // Now reopen the prompt, type something different, then
+        // cancel. The previous filter should remain in effect.
+        pane.open_filter_prompt();
+        pane.push_filter_char('z');
+        pane.cancel_filter_prompt();
+        assert_eq!(pane.active_filter(), Some("a"));
+    }
+
+    #[test]
+    fn open_filter_prompt_seeds_with_active_filter() {
+        // So editing an existing filter doesn't require retyping.
+        let mut pane = LogPane::new(None, LogTab::Errors, LOG_PANE_MIN_HEIGHT);
+        pane.open_filter_prompt();
+        pane.push_filter_char('a');
+        pane.push_filter_char('b');
+        pane.commit_filter_prompt();
+        pane.open_filter_prompt();
+        assert_eq!(pane.filter_prompt_buffer(), "ab");
+    }
+
+    #[test]
+    fn filter_commit_resets_scroll_offset() {
+        // A new filter changes which lines are visible; auto-tail
+        // to the bottom of the filtered set so the operator sees
+        // the most recent matches.
+        let mut pane = LogPane::new(None, LogTab::Errors, LOG_PANE_MIN_HEIGHT);
+        pane.scroll_up(20);
+        assert_eq!(pane.scroll_offset(), 20);
+        pane.open_filter_prompt();
+        pane.push_filter_char('x');
+        pane.commit_filter_prompt();
+        assert_eq!(pane.scroll_offset(), 0);
     }
 }

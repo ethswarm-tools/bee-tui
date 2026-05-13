@@ -11,6 +11,77 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.13.0] - 2026-05-13
+
+The "log-pane viewing polish" minor release. Two additions
+that close a real operator complaint — the bottom log pane is
+where you actually verify "is Bee doing what I think it's
+doing?", and at 4–24 lines it was too small for any digging
+that wasn't single-line spot-checks.
+
+### Added
+
+- **`Shift+L` toggles fullscreen log mode.** The active screen
+  collapses to zero lines and the log pane absorbs the middle
+  of the cockpit — same seven tabs (Errors / Warn / Info /
+  Debug / Bee HTTP / bee::http / Cockpit), same scroll
+  position, same filter (see below). Press again to return.
+  Top bar and command bar stay visible either way, so you
+  never lose sight of which node you're on or how to issue
+  the next verb. Help-overlay row added.
+- **`/` opens an inline log-pane filter prompt.** Type a
+  case-insensitive substring, `Enter` to commit. The pane
+  hides every line that doesn't match; the title strip grows
+  a `/<query> · N matches` chip so you can confirm the filter
+  is doing what you expect. `Esc` cancels the prompt;
+  pressing `Esc` again (no prompt open) clears an active
+  filter. Filter applies across tabs — switching tabs (`[` /
+  `]`) keeps it applied, so you can grep "where did this
+  string show up" across Errors / Bee HTTP / Cockpit without
+  retyping. Implementation is a pure `filter_lines` helper
+  exposed for testing, plus a small state machine on
+  `LogPane` (prompt buffer separate from active filter so the
+  live preview can show match-count without re-committing on
+  every keystroke).
+
+### Added — supporting
+
+- `LogPane` API surface: `filter_prompt_visible`,
+  `open_filter_prompt`, `cancel_filter_prompt`,
+  `commit_filter_prompt`, `push_filter_char`,
+  `pop_filter_char`, `filter_prompt_buffer`, `active_filter`,
+  `clear_filter`, plus the pure `filter_lines(...)` helper.
+- `App::log_fullscreen` flag toggled by `Shift+L`; the draw
+  closure picks one of two `Layout::vertical` configurations
+  based on it (screen body 0-height vs. log pane fills the
+  remainder).
+- Help-overlay Keys page lists `Shift+L` and `/`.
+
+### Internals
+
+- `tab_title_line` extended with `filter` + `filter_match_count`
+  parameters so the active-filter chip renders inside the
+  existing title strip alongside the `paused N ↑` and `→ N`
+  indicators.
+- `LogPane::draw` now applies the filter *before* the visible-
+  window slice so scroll offsets clamp correctly against the
+  filtered line count.
+- `modal_before` / `modal_after` in `App::handle_events`
+  include `log_pane.filter_prompt_visible()` so the prompt is
+  modal in the same way help / picker / batch modal are —
+  per-component keys don't escape while the prompt has focus.
+
+### Notes
+
+- Tests: 467 lib tests (was 459), +8 covering pure `filter_lines`
+  (empty query passthrough, case-insensitive substring match,
+  drops non-matching) and the prompt lifecycle (open / commit /
+  cancel preserves active filter / empty-commit clears / seed
+  from existing filter / commit resets scroll offset).
+- Semver-stable surfaces untouched. New `LogPane` API methods
+  are additive; no field renames or signature changes on
+  pre-existing methods.
+
 ## [1.12.0] - 2026-05-13
 
 The "operator polish" minor release. Three additive features
