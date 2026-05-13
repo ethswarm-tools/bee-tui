@@ -161,7 +161,7 @@ up in:
 - The verb's summary line: `swarmscan: seen` /
   `swarmscan: NOT seen` (or omitted when the probe was skipped or
   errored).
-- The S13 Watchlist row detail: ` · scan: seen` /
+- The S12 Watchlist row detail: ` · scan: seen` /
   ` · scan: NOT seen`.
 - `--once durability-check`'s JSON: `swarmscan_seen` field
   (`true` / `false` / `null`).

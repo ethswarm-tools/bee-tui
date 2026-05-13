@@ -54,6 +54,20 @@ Resources currently watched (with cadence):
 | Tags | `/tags` | 5 s |
 | Network | `/addresses` | 60 s |
 | Transactions | `/transactions` | 5 s |
+| Economics oracle (v1.4.0, opt-in) | xBZZ→USD price service + Gnosis JSON-RPC basefee | 60 s |
+
+The economics-oracle poller is gated by `[economics].enable_market_tile`
+and is the only watcher that talks to non-Bee endpoints; it lives in
+`src/economics_oracle.rs` rather than `src/watch/` because the failure
+modes (third-party rate-limit, RPC outage) are unrelated to Bee
+health and shouldn't poison the shared hub.
+
+Beyond the hub there are two **per-verb daemon families** that spawn
+under `root_cancel` but aren't part of the watch loop: `:watch-ref`
+tokio loops (tracked in `App::watch_refs: HashMap<ref, CancellationToken>`,
+v1.6) and PSS / GSOC pubsub subscriptions (`App::pubsub_subs: HashMap<sub_id, CancellationToken>`,
+v1.7). The top-bar awareness chips (v1.10) read `len()` on each map
+so the operator sees how many are running.
 
 Cadences are tuned for the rate at which each resource
 *actually changes*. Stamps utilization grows at upload rate
@@ -76,7 +90,14 @@ called `root_cancel`, owned by `App`. On quit:
 `:context <name>` is the same pattern, scoped: the active
 `BeeWatch::shutdown()` cancels its children, a new
 `BeeWatch::start(new_api, &self.root_cancel)` spawns under
-the same root, and component receivers are rebuilt.
+the same root, and component receivers are rebuilt. Since
+v1.9.1, `switch_context` also drains the per-verb daemon
+maps (`pubsub_subs`, `watch_refs`) and resets
+`alert_state` — without that, daemons spawned against the
+previous node kept pumping wrong-node messages into the
+rebuilt screens, and stale gate-transition memory could
+fire spurious webhooks (or suppress real ones) right after
+the switch.
 
 This means **no orphaned tasks** can outlive the cockpit.
 Even mid-fetch drill spawns are tied to the same tree —

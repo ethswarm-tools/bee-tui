@@ -1,6 +1,6 @@
 # S1 — Health gates
 
-The first screen, default view on launch. Ten gates with a
+The first screen, default view on launch. Eleven gates with a
 tri-state status ladder (Pass / Warn / Fail / Unknown), each
 carrying a tooltip that encodes tribal knowledge about *why*
 a gate fails the way it does.
@@ -18,7 +18,7 @@ they did wrong.
 
 S1 is the screen that hands you that calibration up front.
 
-## The ten gates
+## The eleven gates
 
 | # | Gate | What's checked | Source |
 |---|---|---|---|
@@ -32,6 +32,7 @@ S1 is the screen that hands you that calibration up front.
 | 8 | Healthy for redistribution | `is_healthy = true` from `/redistributionstate` | `RedistributionState.is_healthy` |
 | 9 | Not frozen | `is_frozen = false` from `/redistributionstate` | `RedistributionState.is_frozen` |
 | 10 | Sufficient funds to play | `has_sufficient_funds = true` from `/redistributionstate` | `RedistributionState.has_sufficient_funds` |
+| 11 | Stamp TTL (v1.4.0+) | Worst-batch TTL across **usable** batches from `/stamps`. **Pass** when all usable batches have TTL > 7d; **Warn** when any drops under the 7d planning threshold; **Fail** when any drops under the 24h urgent threshold. Pending batches (`usable=false`) and nodes with zero usable batches show **Unknown** — operators on a fresh node would be surprised by a green stamp gate when no batches exist. | `StampsSnapshot.batches[].batch_ttl` |
 
 ## The status ladder
 
@@ -120,7 +121,27 @@ S1 polls four endpoints at 2-second intervals:
 The 2 s cadence is fast enough that operator-visible state
 changes feel live, slow enough not to hammer Bee. Per-bin
 data for the saturation gate comes from the `/topology`
-poller (5 s cadence) on the shared watch hub.
+poller (5 s cadence) on the shared watch hub. The Stamp TTL
+gate reads the S2 Stamps watch (15 s cadence) — TTL counts
+down in seconds, so a slower poll is fine.
+
+## Webhook alerts (v1.4.0+)
+
+When `[alerts].webhook_url` is set in `config.toml`, bee-tui
+diffs the gate states between ticks and POSTs a Slack /
+Discord-compatible payload on every transition worth pinging
+on (per-gate `Pass↔Fail` and `Pass↔Warn` flips, with `Unknown`
+silenced so cold-start doesn't fire noise). Each alert carries
+the gate label, the from / to status, and the why-tooltip — so
+the receiving channel gets enough context to triage without
+opening the cockpit.
+
+A per-gate debounce window (`[alerts].debounce_secs`, default
+`60`) suppresses thrash when a gate flickers around its
+threshold. The top bar shows `alerts ●` whenever a webhook is
+configured, so operators see at a glance whether outbound
+pinging is on. See [`config.md`](../config.md#alerts) for the
+full block.
 
 ## Keys
 

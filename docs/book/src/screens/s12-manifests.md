@@ -1,4 +1,8 @@
-# S12 — Manifests
+# S11 — Manifests
+
+> Earlier docs (and the file name `s12-manifests.md`) called
+> this S12. The screen is now the **11th** tab — the file name
+> is kept for stable links.
 
 A Mantaray-tree browser. The first screen in bee-tui that gives
 operators X-ray vision into their *data* — not just their node.

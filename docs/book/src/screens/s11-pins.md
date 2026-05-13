@@ -1,4 +1,8 @@
-# S11 — Pins
+# S10 — Pins
+
+> Earlier docs (and the file name `s11-pins.md`) called this S11.
+> The screen is now the **10th** tab in the strip — the file
+> name is kept for stable links.
 
 Sortable list of every reference Bee has pinned locally, with
 on-demand integrity checks. Promotes the

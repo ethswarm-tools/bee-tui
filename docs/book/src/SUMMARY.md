@@ -19,12 +19,12 @@
 - [S7 — Network / NAT](./screens/s7-network.md)
 - [S8 — RPC / API health](./screens/s8-api.md)
 - [S9 — Tags / uploads](./screens/s9-tags.md)
-- [S10 — Command log pane](./screens/s10-log.md)
-- [S11 — Pins](./screens/s11-pins.md)
-- [S12 — Manifests](./screens/s12-manifests.md)
-- [S13 — Durability Watchlist](./screens/s13-watchlist.md)
-- [S14 — Feed Timeline](./screens/s14-feed-timeline.md)
-- [S15 — Pubsub watch](./screens/s15-pubsub.md)
+- [S10 — Pins](./screens/s11-pins.md)
+- [S11 — Manifests](./screens/s12-manifests.md)
+- [S12 — Durability Watchlist](./screens/s13-watchlist.md)
+- [S13 — Feed Timeline](./screens/s14-feed-timeline.md)
+- [S14 — Pubsub watch](./screens/s15-pubsub.md)
+- [Bottom log pane (legacy "S10")](./screens/s10-log.md)
 
 # Commands
 

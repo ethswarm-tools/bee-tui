@@ -180,8 +180,56 @@ track meaningfully. See [S9](../screens/s9-tags.md).
 
 ### How do I switch between nodes?
 
-`:context <name>`. Define the nodes in `config.toml`. See
+Two ways:
+
+- **`Ctrl+N`** (or `:nodes`, v1.10+) — opens a picker overlay
+  listing every `[[nodes]]` entry; ↑/↓ to select, Enter to
+  switch, Esc to cancel. The active row is marked `●` and the
+  `default = true` row is marked `★`.
+- **`:context <name>`** — typed switch (alias `:ctx`). Same flow
+  under the hood.
+
+Define the nodes in `config.toml`. See
 [`:context`](../commands/context.md).
+
+### Can bee-tui start Bee for me, or only talk to a running one?
+
+Both. By default `bee-tui` connects to whatever `[[nodes]]`
+profile is active — that's the "talk to a running Bee" path
+and it works against local or remote nodes. Set `[bee].bin`
+and `[bee].config` in `config.toml` (or pass `--bee-bin` /
+`--bee-config` on the CLI) and bee-tui will spawn that
+binary, wait for its API to come up, then open the cockpit
+on top. The wrapper sits over the connect path; it isn't a
+separate mode.
+
+### How do I turn on webhook alerts for unhealthy gates?
+
+Set `[alerts].webhook_url` in `config.toml` to a Slack-compatible
+incoming webhook URL. Optionally tune `[alerts].debounce_secs`
+(default 60). bee-tui will POST on every gate transition worth
+pinging on. The top bar shows `alerts ●` whenever it's
+configured. See [`config.md`](../config.md#alerts) and
+[S1 § Webhook alerts](../screens/s1-health.md#webhook-alerts-v140).
+
+### How do I run `:durability-check` continuously?
+
+`:watch-ref <ref> [interval-seconds]` runs the same check as a
+daemon (default cadence 60 s, clamp 10..86400). The top bar
+chip `watch N` confirms how many are running. `:watch-ref-stop
+<ref>` cancels one; `:watch-ref-stop` with no arg cancels all.
+The S12 Watchlist screen shows results as they arrive.
+
+### Can I use bee-tui from CI / cron without the TUI?
+
+`bee-tui --once <verb> [args] [--json]` runs a single verb,
+prints one line (or JSON), and exits with `0` (ok), `1`
+(unhealthy / failed), or `2` (usage error). 24 verbs available
+— `readiness`, `inspect`, `durability-check`, `plan-batch`,
+`buy-preview`, etc. See [`--once`](../commands/once.md). The
+exit codes + JSON shape are part of the semver-stable surface,
+so CI gates that depend on them won't break across minor
+upgrades.
 
 ### Where does the diagnostic bundle go?
 
@@ -202,9 +250,10 @@ config. See [Theme & accessibility](./theme.md).
 
 ### How do I see what HTTP calls the cockpit is making?
 
-S10 Command log. Live tail of every request, with method /
-path / status / elapsed. See
-[S10](../screens/s10-log.md).
+The bottom log pane underneath every screen — a live tail of
+every request, with method / path / status / elapsed. See
+[the log-pane page](../screens/s10-log.md) (file kept at its
+old `s10-log.md` path for stable links).
 
 ## Things the cockpit deliberately won't do
 

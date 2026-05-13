@@ -33,6 +33,7 @@ HEALTH   prod-1 · http://10.0.1.5:1633     ping: 8ms
  ✓  Healthy for redistribution   yes
  ✓  Not frozen                   yes
  ✓  Sufficient funds to play     yes
+ ✓  Stamp TTL                    worst-batch a1b2c3d4 · TTL 14d 3h
 ─────────────────────────────────────────────────────────────────────────────────────
 :cmd
 ┌ bee::http ──────────────────────────────────────────────────────────────────────────┐
@@ -112,7 +113,7 @@ Fourteen operator screens plus an always-on command-log pane:
 
 | Screen | What it answers |
 |---|---|
-| **S1 Health** | "Why is my node unhealthy?" — 10 gates with WHY tooltips encoding tribal knowledge (e.g. "storageRadius decreases ONLY on the 30-min reserve worker tick"). |
+| **S1 Health** | "Why is my node unhealthy?" — 11 gates with WHY tooltips encoding tribal knowledge (e.g. "storageRadius decreases ONLY on the 30-min reserve worker tick"). Includes the v1.4 Stamp TTL gate that fires before batches actually expire, and the v1.4 webhook alerter that POSTs per-gate transitions to Slack / Discord. |
 | **S2 Stamps** | "Which batch is about to fail uploads?" — worst-bucket fill bar, immutable-vs-mutable rejection semantics (bee#5334), 5-state status ladder. **`↵` drills into the per-bucket fill histogram.** |
 | **S3 Swap / cheques** | Chequebook headroom (with on-chain contract address), per-peer net (received − sent) with `\|net\| > 0.5 BZZ` flagging, last-received cheque table. Optional `[economics].enable_market_tile` adds an xBZZ→USD + Gnosis basefee tile. |
 | **S4 Lottery** | "Why am I not earning rewards?" — round timeline, anchor summary (last won / played / selected / frozen with `Δ`), stake card with frozen / unhealthy / insufficient-gas reasoning, on-demand `r`-key rchash benchmark. |
@@ -121,11 +122,11 @@ Fourteen operator screens plus an always-on command-log pane:
 | **S7 Network / NAT** | "Why am I unreachable?" — public-vs-private underlay classification, AutoNAT reachability with stability window (flickers under symmetric NAT). |
 | **S8 RPC / API health** | Bee API call stats (p50 / p99 latency, error rate over the last 100 calls), pending operator transactions with full tx hash + to-address per row. |
 | **S9 Tags / uploads** | "Where is my upload stuck?" — per-tag lifecycle counters (split → sent → synced) and a TagStatus ladder. Long lists scroll with `j k` / `PgUp PgDn` / `Home`. |
-| **S11 Pins** | Pinned-reference inspector with per-pin drill (pin detail). Pair with `:pins-check` for a chunk-level integrity walk. |
-| **S12 Manifests** | Mantaray tree browser. `:manifest <ref>` or `:inspect <ref>` opens the tree; `↵` lazy-loads forks. The first screen that gives operators X-ray vision into their *data*, not just their node. |
-| **S13 Watchlist** | Rolling history of `:durability-check` results — the operator-facing answer to "is my data still alive?" Walks the chunk graph rooted at `<ref>`, BMT-verifies every chunk, optionally cross-checks against swarmscan. |
-| **S14 Feed Timeline** | Walks a feed's history (newest first, bounded-parallel) via `:feed-timeline <owner> <topic> [N]`. Default 50 entries, hard cap 1 000. |
-| **S15 Pubsub watch** | Live tail of PSS topic + GSOC subscriptions, merged timeline. `:pubsub-pss / :pubsub-gsoc` open subscriptions; `:pubsub-filter` narrows the timeline; `[pubsub].history_file` persists every frame to JSONL with size-based rotation; `:pubsub-replay <path>` loads prior sessions. |
+| **S10 Pins** | Pinned-reference inspector with per-pin drill (pin detail). Pair with `:pins-check` for a chunk-level integrity walk. |
+| **S11 Manifests** | Mantaray tree browser. `:manifest <ref>` or `:inspect <ref>` opens the tree; `↵` lazy-loads forks. The first screen that gives operators X-ray vision into their *data*, not just their node. |
+| **S12 Watchlist** | Rolling history of `:durability-check` results — the operator-facing answer to "is my data still alive?" Walks the chunk graph rooted at `<ref>`, BMT-verifies every chunk, optionally cross-checks against swarmscan. |
+| **S13 Feed Timeline** | Walks a feed's history (newest first, bounded-parallel) via `:feed-timeline <owner> <topic> [N]`. Default 50 entries, hard cap 1 000. |
+| **S14 Pubsub watch** | Live tail of PSS topic + GSOC subscriptions, merged timeline. `:pubsub-pss / :pubsub-gsoc` open subscriptions; `:pubsub-filter` narrows the timeline; `[pubsub].history_file` persists every frame to JSONL with size-based rotation; `:pubsub-replay <path>` loads prior sessions. |
 | **Bottom log pane** | Always-visible `bee::http` request tail (lazygit-style) plus six other tabs (Errors / Warn / Info / Debug / Bee HTTP / Cockpit). The trust anchor — operators learn the API by watching it. |
 
 ## Drill panes
@@ -156,24 +157,24 @@ The cockpit grew an "audit" tier across v1.2-v1.9 — screens that
 inspect the *data*, the *network's view of the data*, and the
 *pubsub messages* flowing through it.
 
-- **S12 Manifests** — `:manifest <ref>` or `:inspect <ref>` opens
+- **S11 Manifests** — `:manifest <ref>` or `:inspect <ref>` opens
   the Mantaray tree; `↵` lazy-loads forks one chunk at a time.
 
   ![S12 manifest browser](docs/tapes/s12-manifest.gif)
 
-- **S13 Watchlist** — `:durability-check <ref>` walks the chunk
+- **S12 Watchlist** — `:durability-check <ref>` walks the chunk
   graph and records the result with BMT verification + optional
   swarmscan cross-check. `:watch-ref <ref> [interval]` runs it as
   a daemon.
 
   ![S13 durability watchlist](docs/tapes/s13-durability.gif)
 
-- **S14 Feed Timeline** — `:feed-timeline <owner> <topic> [N]`
+- **S13 Feed Timeline** — `:feed-timeline <owner> <topic> [N]`
   walks a feed's update history (newest first, bounded-parallel).
 
   ![S14 feed timeline](docs/tapes/s14-feed-timeline.gif)
 
-- **S15 Pubsub watch** — `:pubsub-pss` / `:pubsub-gsoc` open
+- **S14 Pubsub watch** — `:pubsub-pss` / `:pubsub-gsoc` open
   WebSocket subscriptions; `:pubsub-filter` narrows the merged
   timeline; `:pubsub-replay <path>` reloads a prior session's
   JSONL history file.
@@ -194,18 +195,23 @@ Designed for cron, monitoring, and CI gates.
 | | |
 |---|---|
 | `Tab` / `Shift+Tab` | cycle screens forward / backward |
-| `?` | toggle per-screen help overlay |
+| `1`-`9` | jump to S1 – S9 (Health … Tags) |
+| `0` | jump to S10 (Pins) |
+| `Alt+1` – `Alt+4` | jump to S11 – S14 (Manifest, Watchlist, FeedTimeline, Pubsub) |
+| `Ctrl+N` | open the node picker (also `:nodes`) |
+| `?` | toggle the paged help overlay (Keys ↔ Verbs via `Tab`) |
 | `:` | open command bar |
 | `qq` | quit (double-tap within ~1.5s; `:q` also works) |
 | `Ctrl+C` / `Ctrl+D` | quit immediately (escape hatch) |
-| `↑↓` / `j k` | move selection (S2, S6) or scroll (S9) |
-| `↵` | drill selected row (S2, S6) |
+| `↑↓` / `j k` | move selection (S2, S6, S11, S12-S15) or scroll (S9) |
+| `↵` | drill selected row (S2, S6, S11) / expand fork (S12) |
 | `Esc` | close drill / overlay |
 | `r` | run rchash benchmark (S4 Lottery) |
-| `PgUp` / `PgDn` / `Home` | page through long lists (S9) |
+| `PgUp` / `PgDn` / `Home` | page through long lists (S9, S13-S15) |
 
 `?` is the source of truth for screen-specific keymaps — every screen advertises
-its keys in the overlay.
+its keys in the overlay. Press `Tab` while help is open to switch to the
+**Verbs** page — every `:verb` grouped by category (added v1.10).
 
 **Copying values out of the cockpit:** mouse mode is off by default, so your
 terminal's native selection works. Click-drag a peer overlay or batch ID,
@@ -214,21 +220,34 @@ intercept it.
 
 ### Command bar
 
-| | |
+The cockpit now ships 52 verbs. The headline categories — see the
+v1.10 **Verbs** page in `?` for the full catalogue:
+
+| Category | Examples |
 |---|---|
-| `:health`, `:stamps`, `:swap`, `:lottery`, `:peers`, `:network`, `:warmup`, `:api`, `:tags`, `:pins`, `:manifest <ref>`, `:watchlist`, `:feedtimeline`, `:pubsub` | jump to that screen |
-| `:context <name>` | switch to another node from `config.nodes` |
-| `:diagnose` | export a redacted bundle to `$TMPDIR/bee-tui-diagnostic-<ts>.txt` (paste-ready for support threads — Bearer tokens never captured) |
-| `:pins-check` | walk every pinned root via `/pins/check`, write results to `$TMPDIR/bee-tui-pins-check-<profile>-<ts>.txt` (NDJSON streamed by Bee, collected and tail-friendly) — see [demo](docs/tapes/pins-check.gif) |
-| `:loggers` | snapshot `/loggers` to `$TMPDIR/bee-tui-loggers-<profile>-<ts>.txt`, sorted loudest-first |
-| `:set-logger <expr> <level>` | call `PUT /loggers/{exp}/{level}` — bump a Bee subsystem to `debug` / `info` / etc. without curl |
-| `:quit`, `:q` | quit |
+| **Navigate** | `:health`, `:stamps`, `:swap`, `:lottery`, `:peers`, `:network`, `:warmup`, `:api`, `:tags`, `:pins`, `:watchlist`, `:manifest <ref>`, `:feed-timeline <owner> <topic>`, `:pubsub` |
+| **Inspect** | `:inspect <ref>`, `:hash <path>`, `:cid <ref>`, `:depth-table`, `:feed-probe <owner> <topic>`, `:grantees-list <ref>` |
+| **Stamps & economics** | `:topup-preview`, `:dilute-preview`, `:extend-preview`, `:buy-preview`, `:buy-suggest`, `:plan-batch`, `:price`, `:basefee` |
+| **Uploads** | `:probe-upload <batch>`, `:upload-file <path> <batch>`, `:upload-collection <dir> <batch>` |
+| **Durability** | `:durability-check <ref>`, `:watch-ref <ref> [interval]`, `:watch-ref-stop [ref]`, `:pins-check` |
+| **Pubsub** | `:pubsub-pss <topic>`, `:pubsub-gsoc <owner> <id>`, `:pubsub-stop [sub-id]`, `:pubsub-filter <substr>`, `:pubsub-filter-clear`, `:pubsub-replay <path>` |
+| **Mining / addresses** | `:gsoc-mine <overlay> <id>`, `:pss-target <overlay>` |
+| **Diagnostics & config** | `:check-version`, `:config-doctor`, `:diagnose`, `:loggers`, `:set-logger <expr> <level>` |
+| **Cockpit** | `:context <name>` (alias `:ctx`), `:nodes` (or `Ctrl+N`), `:quit` (alias `:q`) |
 
 ## Multi-node
 
 Define multiple `[[nodes]]` in `config.toml`. The default profile loads at
-startup; `:context <name>` swaps the active connection without restarting. The
-top bar reflects the active profile.
+startup. Two ways to switch:
+
+- **`Ctrl+N`** (or `:nodes`, v1.10+) — opens a centred picker; ↑/↓ select,
+  Enter switches, Esc closes. The active row is marked `●`, the
+  default-flagged row `★`.
+- **`:context <name>`** — typed switch, same flow under the hood.
+
+The top bar reflects the active profile (`<name> @ <endpoint>`); the v1.10
+awareness chips (`subs N`, `watch N`, `alerts ●`) show what's running in
+the background and disappear when there's nothing to surface.
 
 ## Theme & accessibility
 
@@ -253,11 +272,12 @@ Runtime theme switching (`:theme <name>`) lands in v0.6.
 
 ## Status
 
-**v1.9.0** on crates.io (May 2026). Fourteen-screen cockpit with drill panes,
-51 cockpit verbs (24 also exposed as `--once` CI verbs), webhook health alerts,
-manifest browser, durability + feed timeline + pubsub watches, recursive uploads,
-multi-node, theme system, ASCII fallback, scrollbars, `?` help overlay, and
-prebuilt installers for all five major targets.
+**v1.10.0** on crates.io (May 2026). Fourteen-screen cockpit with drill panes,
+52 cockpit verbs (24 also exposed as `--once` CI verbs), node-picker overlay,
+top-bar awareness chips, paged help, webhook health alerts, manifest browser,
+durability + feed timeline + pubsub watches, recursive uploads, multi-node,
+theme system, ASCII fallback, scrollbars, `?` help overlay, and prebuilt
+installers for all five major targets.
 
 | Version | Scope | State |
 |---|---|---|
@@ -273,6 +293,8 @@ prebuilt installers for all five major targets.
 | v1.7.0 | S15 Pubsub watch + `:pubsub-pss` / `:pubsub-gsoc` / `:pubsub-stop`, swarmscan cross-check | ✅ shipped |
 | v1.8.0 | `:grantees-list`, `[pubsub].history_file`, `:pubsub-filter` / `:pubsub-filter-clear` | ✅ shipped |
 | v1.9.0 | `[pubsub].rotate_size_mb` + `keep_files` rotation, `:pubsub-replay` | ✅ shipped |
+| v1.9.1 | `:context`-switch daemon cleanup + alert-state reset, full-hex continuation lines on S3 SWAP / S4 Lottery / S9 Tags, mdBook catch-up + refreshed VHS GIFs | ✅ shipped |
+| v1.10.0 | Node picker overlay (`Ctrl+N` / `:nodes`), top-bar awareness chips (`subs` / `watch` / `alerts`), numeric screen hotkeys, paged help overlay with verb catalogue | ✅ shipped |
 
 Backed by [bee-rs](https://github.com/ethswarm-tools/bee-rs) v1.6 (full
 coverage of the Bee 8.0.0 OpenAPI surface). Full screen specs in
@@ -284,8 +306,8 @@ coverage of the Bee 8.0.0 OpenAPI surface). Full screen specs in
 - [crossterm](https://github.com/crossterm-rs/crossterm) — terminal backend
 - [Tokio](https://tokio.rs/) — async runtime
 - [bee-rs ≥ 1.6](https://crates.io/crates/bee-rs) — Bee API client
-- 106 lib + insta tests cover every gate / status ladder / drill view / scroll
-  edge / glyph slot
+- 424 lib + insta integration tests cover every gate / status ladder / drill view / scroll
+  edge / glyph slot / verb category exhaustiveness
 - MSRV 1.85, `clippy --all-targets -- -D warnings` clean
 
 ## Contributing

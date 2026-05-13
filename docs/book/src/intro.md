@@ -30,6 +30,13 @@ exists to address:
   reasons reconstruct the truth `LastPlayedRound` doesn't tell you.
 - **"Where is my upload stuck?"** — S9's TagStatus ladder lights up
   the exact phase a stuck upload is in.
+- **"Which of my nodes am I driving?"** — `Ctrl+N` opens the v1.10
+  node picker over a list of every `[[nodes]]` entry; the top-bar
+  metadata line always names the active profile + endpoint.
+- **"Is anything running in the background?"** — top-bar awareness
+  chips (`subs N`, `watch N`, `alerts ●`, v1.10+) appear whenever
+  a pubsub subscription, a `:watch-ref` daemon, or webhook alerting
+  is active, and disappear when nothing is.
 
 ## What this handbook is *not*
 

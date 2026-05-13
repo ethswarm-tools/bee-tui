@@ -99,9 +99,17 @@ deadline**:
 ```
 RCHASH BENCHMARK
   duration   3.4s
-  hash       0xabcd…
+  hash       0xabcd12ef…
+    hash 0xabcd12ef3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d
   budget     ✓ well under 95s commit deadline
 ```
+
+The `hash 0x<full>` continuation line below the truncated
+form is from v1.9.1 — before that, only the 8-char prefix
+was visible, which made copying the full hash for a Bee bug
+report or block-explorer search a non-starter. The truncated
+form stays in the table column for visual scan; the full hex
+is one line below.
 
 If duration approaches or exceeds 95 s, your reserve is too
 slow to commit in time. The lottery will silently skip your

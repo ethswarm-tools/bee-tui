@@ -1,4 +1,8 @@
-# S13 — Durability Watchlist
+# S12 — Durability Watchlist
+
+> Earlier docs (and the file name `s13-watchlist.md`) called
+> this S13. The screen is now the **12th** tab — the file name
+> is kept for stable links.
 
 A running history of `:durability-check` results, plus the live
 state of any `:watch-ref` daemons. The operator-facing answer to

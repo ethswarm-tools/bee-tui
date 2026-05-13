@@ -72,9 +72,10 @@ data — older entries are gone.
 - **p50 < 100ms, p99 < 500ms, error rate 0 %** — healthy.
 - **p99 climbing past 1 s** — Bee is under load. Could be
   upload + heavy reserve activity + a slow disk all at once.
-- **Error rate > 1 %** — something's failing repeatedly. Tab
-  to S10 Command log to see the actual error responses (most
-  often 503 during warmup, or 401 if the auth token expired).
+- **Error rate > 1 %** — something's failing repeatedly. Look
+  at the bottom log pane (the persistent HTTP tail underneath
+  every screen) to see the actual error responses (most often
+  503 during warmup, or 401 if the auth token expired).
 
 ## Pane 2 — Chain state
 

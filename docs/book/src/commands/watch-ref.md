@@ -2,7 +2,7 @@
 
 Daemon mode for [`:durability-check`](./pins-check.md). Runs the
 chunk-graph walk on a reference periodically and feeds each result
-into the [S13 Watchlist](../screens/s11-pins.md) — the same screen
+into the [S12 Watchlist](../screens/s13-watchlist.md) — the same screen
 single-shot `:durability-check` already populates. Useful for
 "watch this ref overnight" workflows where you want to know the
 moment a chunk goes missing.
@@ -25,7 +25,7 @@ indistinguishable from a manual re-run.
 
 ```text
 :watch-ref e7f3a201cd1f0e9b… 300
-→ watch-ref e7f3a201 started — re-checking every 300s; results in S13 Watchlist
+→ watch-ref e7f3a201 started — re-checking every 300s; results in S12 Watchlist
 ```
 
 Each iteration runs the **full BMT-verified** durability walk
@@ -38,7 +38,7 @@ the interval without an explicit stop:
 
 ```text
 :watch-ref e7f3a201cd1f0e9b… 60
-→ watch-ref e7f3a201 started — re-checking every 60s; results in S13 Watchlist
+→ watch-ref e7f3a201 started — re-checking every 60s; results in S12 Watchlist
 ```
 
 ## Stopping a daemon
@@ -61,7 +61,7 @@ before exiting.
 ## Output
 
 The verb itself is synchronous (just spawns the loop). Each
-periodic check's result lands in the S13 Watchlist row history
+periodic check's result lands in the S12 Watchlist row history
 the same way a manual `:durability-check` does — newest first,
 ring-buffered to the screen's row cap.
 

@@ -40,6 +40,25 @@ HEALTH   local · http://localhost:1633     ping: —ms
 └─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+A clean first launch shows only the four "always-on" header
+fields. As soon as something is running in the background,
+v1.10+ appends awareness chips after the `ping` block:
+
+```
+ bee-tui   local @ http://localhost:1633   ping 4ms   UTC HH:MM:SS   subs 2   watch 1   alerts ●
+```
+
+- `subs N` — active PSS / GSOC subscriptions (see S15 and the
+  `:pubsub-pss` / `:pubsub-gsoc` verbs).
+- `watch N` — active `:watch-ref` daemons (see S13).
+- `alerts ●` — present whenever `[alerts].webhook_url` is set
+  in `config.toml`; the green dot confirms outbound pinging is
+  configured even when no alerts are firing.
+
+Each chip is hidden when its count is zero (or `alerts` isn't
+configured), so the header stays calm on a fresh session and
+visibly busy when daemons are running.
+
 Three things are happening in parallel:
 
 1. **The watch hub is firing first requests.** Each screen has

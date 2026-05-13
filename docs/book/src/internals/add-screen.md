@@ -5,8 +5,12 @@ cockpit. The workflow is the same one every existing screen
 followed: snapshot type → watcher → component → pure view
 fn → insta tests → wire into App.
 
-The example in this page is hypothetical — adding an "S11
-— Settlements forensics" screen.
+The example in this page is hypothetical — adding an "S15
+— Settlements forensics" screen on top of the current 14.
+Real index `10` is already Manifest, `11` is Watchlist,
+`12` is FeedTimeline, `13` is Pubsub; a new screen would
+slot in at `14`. The illustrative code below uses index
+`14` accordingly.
 
 ## 1. Define the snapshot type
 
@@ -221,13 +225,18 @@ In `src/app.rs`:
 
 ```rust
 const SCREEN_NAMES: &[&str] = &[
-    "Health", "Stamps", "Swap", "Lottery", "Warmup",
-    "Peers", "Network", "API", "Tags", "Log",
-    "Settlements",  // NEW
+    "Health", "Stamps", "Swap", "Lottery", "Peers",
+    "Network", "Warmup", "API", "Tags", "Pins",
+    "Manifest", "Watchlist", "FeedTimeline", "Pubsub",
+    "Settlements",  // NEW — index 14
 ];
 
-fn build_screens(api: &Arc<ApiClient>, watch: &BeeWatch) -> Vec<Box<dyn Component>> {
-    // ...existing...
+fn build_screens(
+    api: &Arc<ApiClient>,
+    watch: &BeeWatch,
+    market_rx: Option<watch::Receiver<crate::economics_oracle::EconomicsSnapshot>>,
+) -> Vec<Box<dyn Component>> {
+    // ...existing 14 screens...
     let settlements_forensics = SettlementsForensics::new(
         watch.settlements_forensics(),
     );
@@ -245,7 +254,7 @@ If your screen has screen-specific keys, add them to
 fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)] {
     match active_screen {
         // ...existing...
-        10 => &[
+        14 => &[
             ("↑↓ / j k", "scroll one row"),
             ("PgUp / PgDn", "scroll ten rows"),
         ],
@@ -253,6 +262,13 @@ fn screen_keymap(active_screen: usize) -> &'static [(&'static str, &'static str)
     }
 }
 ```
+
+If your screen needs a verb category (so it appears under
+the right heading in the v1.10 paged help overlay), update
+`verb_category()` in `src/app.rs` too — the test
+`verb_category_covers_every_known_command` will fail
+loudly if you add a new `KNOWN_COMMANDS` entry without
+categorising it.
 
 ## 8. (Optional) Add a `:settlements` jump command
 

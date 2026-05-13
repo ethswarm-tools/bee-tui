@@ -82,7 +82,7 @@ agent that has no Bee node.
 | `readiness` | Gateway-proxy-style smoke test: `status == ok && radius in [1,30]`. The canonical "ready for traffic?" check. | `1` if unhealthy |
 | `version-check` | Reports Bee's `/health` API version vs. the bee-rs client's compiled-against version. | `1` on mismatch |
 | `inspect <ref>` | Universal "what is this thing?" — fetches one chunk and detects manifest / raw / feed. | `1` if not retrievable |
-| `durability-check <ref>` | Walks the chunk graph, reports `total/lost/errors/corrupt` with optional BMT verify + swarmscan cross-check. See [S13 Watchlist](../screens/s13-watchlist.md) for the full model. | `1` if any chunk is lost / errored / corrupt |
+| `durability-check <ref>` | Walks the chunk graph, reports `total/lost/errors/corrupt` with optional BMT verify + swarmscan cross-check. See [S12 Watchlist](../screens/s13-watchlist.md) for the full model. | `1` if any chunk is lost / errored / corrupt |
 | `upload-file <path> <batch>` | Single-file `POST /bzz`; 256 MiB cap; ext-based content-type guess. Emits `{"reference":"...","tag":N}`. | `1` on upload failure |
 | `upload-collection <dir> <batch>` | Recursive directory upload as a Swarm collection (tar `POST /bzz`); auto-detects `index.html`. Caps: 256 MiB / 10 000 entries. | `1` on upload failure |
 | `feed-probe <owner> <topic>` | Read-only `/feeds/{owner}/{topic}` lookup of the latest update. | `1` on lookup failure |
@@ -172,5 +172,5 @@ The `data.reference` field is part of the v1.5 stable surface.
 ## See also
 
 - [The `:command` bar](./bar.md) — the cockpit-mode counterpart to most of these verbs
-- [S13 Watchlist](../screens/s13-watchlist.md) — `:durability-check` model in depth
+- [S12 Watchlist](../screens/s13-watchlist.md) — `:durability-check` model in depth
 - [Stamp dry-run previews](./stamp-previews.md) — the stamp-economics verbs in cockpit form

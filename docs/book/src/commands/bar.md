@@ -77,7 +77,7 @@ target screen, but faster on a 14-screen carousel.
 | `:pubsub-filter <substring>` | [S15 — Pubsub](../screens/s15-pubsub.md) | Show only S15 rows whose channel/preview contains substring |
 | `:pubsub-filter-clear` | [S15 — Pubsub](../screens/s15-pubsub.md) | Remove the active S15 filter |
 | `:pubsub-replay <path>` | [S15 — Pubsub](../screens/s15-pubsub.md) | Load a prior session's pubsub-history JSONL into S15 |
-| `:manifest <ref>` | — | Open a Mantaray manifest for browsing (preloads root + jumps to S12 Manifests) |
+| `:manifest <ref>` | — | Open a Mantaray manifest for browsing (preloads root + jumps to S11 Manifests) |
 | `:inspect <ref>` | — | Universal "what is this thing?" — auto-detects manifest / raw chunk / feed manifest |
 | `:durability-check <ref>` | — | Walk every chunk of `<ref>` and report retrieved / lost / corrupt / network-seen counts |
 | `:plan-batch <prefix> [usage] [ttl] [extra-depth]` | [stamp-previews](./stamp-previews.md) | Run beekeeper-stamper's `Set` algorithm read-only — outputs PlanAction (None/Topup/Dilute/Both) |
@@ -91,7 +91,7 @@ target screen, but faster on a 14-screen carousel.
 | `:depth-table` | — | Print canonical depth → capacity table (no Bee call) |
 | `:gsoc-mine <overlay> <identifier>` | — | Local CPU work — find a PrivateKey whose SOC address matches `<overlay>` |
 | `:pss-target <overlay>` | — | Extract the 4-hex-char `target` prefix Bee accepts on `/pss/send` |
-| `:watchlist` (jump) | — | Jump to S13 Watchlist (history of `:durability-check` results) |
+| `:watchlist` (jump) | — | Jump to S12 Watchlist (history of `:durability-check` results) |
 | `:context <name>` (alias `:ctx`) | [context](./context.md) | Switch to a different node profile from your config |
 | `:context` | [context](./context.md) | List configured profiles (no switch) |
 | `:nodes` | [context](./context.md) | Open the node-picker overlay (also `Ctrl+N`) |

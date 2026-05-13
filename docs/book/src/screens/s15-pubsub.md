@@ -1,4 +1,8 @@
-# S15 — Pubsub watch
+# S14 — Pubsub watch
+
+> Earlier docs (and the file name `s15-pubsub.md`) called this
+> S15. The screen is now the **14th** (and last) tab — the file
+> name is kept for stable links.
 
 Live tail of PSS topic subscriptions and GSOC `(owner, identifier)`
 subscriptions, merged into a single chronological timeline.

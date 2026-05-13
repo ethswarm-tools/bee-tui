@@ -31,14 +31,20 @@ glance.
 
 ```
   UID    LABEL              ADDRESS         STATUS       %     SYNCED / TOTAL
-  142    backup-2026-05     0xabcd…ef       ✓ synced    100   8,192 / 8,192
+▸ 142    backup-2026-05     0xabcd…ef       ✓ synced    100   8,192 / 8,192
+        ref 0xabcd2c1e9f7a3b5d2c8e0f4a76b1c9d2e3f4a5b6c7d8e9f0a1b2c3d4e5f
   143    site-publish       0xdeadb…ef      ▒ pushing    74   1,247 / 1,684
   144    streaming-feed     —               · pending     0       0 / 0
   145    deep-archive       0xc0ffee…00     ▒ syncing    91   3,421 / 3,765
 ```
 
 Sorted: by `uid` descending, so the most recent upload is at
-the top. Sort key is stable across polls.
+the top. Sort key is stable across polls. Every row with an
+address gets a `ref 0x<full>` continuation line below it
+(v1.9.1+) so the full reference is reachable for copy without
+scrolling — the truncated `0xabcd…ef` in the table is for
+visual scan only. Pending tags (no address yet) suppress the
+continuation.
 
 | Column | Meaning |
 |---|---|

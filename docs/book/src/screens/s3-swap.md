@@ -53,7 +53,8 @@ The percentage in parens is `available / total` rounded.
 
 ```
   PEER          PAYOUT          ISSUED
-  cccccc…cccc   BZZ 1.5000      8412930
+▸ cccccc…cccc   BZZ 1.5000      8412930
+    peer 0xcccccc8e2f1a40d7a0bf6e1c0a8a2c91e3b…
   bbbbbb…bbbb   BZZ 0.7500      8412901
   aaaaaa…aaaa   never           —
 ```
@@ -67,18 +68,27 @@ If you want to cash out, this is the table to look at. The
 `PAYOUT` column is the cumulative sent-to-us amount; cashing
 moves it from off-chain to on-chain.
 
+The cursored row (`▸`) prints a `peer 0x<full>` continuation
+line so the full peer address is reachable for copy without
+scrolling away (added in v1.9.1 — early versions only showed
+the truncated `cccccc…cccc` form, which was insufficient when
+you actually needed to paste it into a block explorer).
+
 ## Pane 3 — Per-peer settlements
 
 ```
   PEER          RECV         SENT         NET
-  bbbbbb…bbbb   BZZ 8.0000   BZZ 1.5000   +6.5000
+▸ bbbbbb…bbbb   BZZ 8.0000   BZZ 1.5000   +6.5000
+    peer 0xbbbbbb4c9e7a31f5d2c08e914a72bef0a3b…
   cccccc…cccc   BZZ 0.4000   BZZ 0.9000   -0.5000
   ddddd…dddd   BZZ 2.1000   BZZ 1.9000   +0.2000  ⚠
 ```
 
 Sort: `|net|` descending so the most out-of-balance peer is
 at the top. A `⚠` flag marks rows where `|net| > 0.5 BZZ` —
-that's where cashout pressure builds up first.
+that's where cashout pressure builds up first. The cursored
+row gets the same `peer 0x<full>` continuation treatment as
+Pane 2 (v1.9.1).
 
 The `+` / `-` signs on net read at a glance:
 
@@ -101,6 +111,29 @@ based, not cheque-based). The header line shows the totals:
 
 These don't show up per-peer in Pane 3 — they're aggregated at
 the top of the snapshot.
+
+## Market tile (v1.4.0+, opt-in)
+
+Setting `[economics].enable_market_tile = true` in `config.toml`
+appends a fourth tile to the screen with cost-context numbers
+the chequebook itself doesn't carry:
+
+```
+  Market   xBZZ ≈ $0.4321   ·   gas 12.3 base + 1.0 tip = 13.3 gwei
+```
+
+- The **xBZZ price** comes from a public token service (no key,
+  no auth). Cached for 60 seconds.
+- The **basefee** and **tip** read the configured Gnosis JSON-RPC
+  endpoint (`[economics].gnosis_rpc_url`, required for the gas
+  half of the tile). Same 60 s cadence.
+
+The tile is always visible when enabled — no `Unknown` ladder —
+because the source feeds are external and a transient miss
+shouldn't blank the screen. Stale numbers render in `dim`; fresh
+numbers in `info`. The two underlying verbs `:price` and
+`:basefee` print the same numbers on demand, useful for a quick
+glance without flipping a config knob.
 
 ## Common scenarios
 

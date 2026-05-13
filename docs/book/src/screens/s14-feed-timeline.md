@@ -1,4 +1,8 @@
-# S14 — Feed Timeline
+# S13 — Feed Timeline
+
+> Earlier docs (and the file name `s14-feed-timeline.md`) called
+> this S14. The screen is now the **13th** tab — the file name
+> is kept for stable links.
 
 A scrollable history walk of a Swarm feed. Where v1.5's
 [`:feed-probe`](../commands/feed-probe.md) returns the latest

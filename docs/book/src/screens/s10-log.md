@@ -1,4 +1,13 @@
-# S10 — Command log
+# The bottom command-log pane
+
+> **Naming note.** This page is named `s10-log.md` for legacy
+> reasons. In v0.1 the command log *was* the tenth screen
+> (`S10`); since v0.9 it's been a persistent **pane at the
+> bottom of every screen**, not a screen of its own. The
+> current numbered screens are S1 Health through S14 Pubsub —
+> all 14 of them tab-cycled through the screen strip. The log
+> pane is always visible underneath. The file is kept at its
+> old path so existing bookmarks resolve.
 
 A lazygit-style append-only tail of every HTTP request the
 cockpit makes to Bee. The trust anchor and live tutorial:
