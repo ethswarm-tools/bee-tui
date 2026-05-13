@@ -175,6 +175,384 @@ pub struct App {
     /// Operator-trigger channel for the fleet poller's "re-poll now"
     /// signal (S15 row `r` key). Same lifetime as `fleet_rx`.
     fleet_resync_tx: tokio::sync::mpsc::UnboundedSender<()>,
+    /// Batch-economics modal state. Opened with `E` from anywhere
+    /// (anchored conceptually to S3 SWAP / S2 Stamps but the modal
+    /// floats over whichever screen is active). Drives `:topup-preview`
+    /// / `:dilute-preview` / `:extend-preview` / `:buy-preview` /
+    /// `:plan-batch` through a guided form, so operators don't have
+    /// to remember the arg order.
+    batch_modal: BatchModal,
+    /// Auto-restart watchdog state. `None` when bee-tui isn't acting
+    /// as Bee's supervisor or `[bee.supervisor].auto_restart = false`.
+    /// `Some` otherwise — tracks restart count + history (sliding
+    /// one-hour window for budget enforcement), the spawn parameters
+    /// to re-issue, and the next-allowed-restart timestamp.
+    supervisor_watchdog: Option<SupervisorWatchdog>,
+    /// Fleet-aggregate webhook state. Tracks per-node previous
+    /// status (so we only fire on transitions, not steady-state
+    /// failures) and the buffered pending alerts within the current
+    /// coalesce window. Active only when
+    /// `[fleet].aggregate_webhook_url` is set; otherwise the
+    /// struct's fields stay empty and `tick_fleet_aggregate` is a
+    /// cheap no-op.
+    fleet_aggregator: FleetAggregator,
+}
+
+/// Per-node previous status + the buffered pending alerts. The
+/// aggregator looks at the latest `FleetSnapshot` on every tick,
+/// notes any nodes that flipped to a worse status, buffers them,
+/// and fires one webhook per `[fleet].aggregate_window_secs`.
+#[derive(Debug, Default, Clone)]
+pub struct FleetAggregator {
+    /// Last seen status per node name. Used to detect transitions
+    /// (and to silence steady-state "still failing" noise).
+    pub last_status: std::collections::HashMap<String, crate::fleet::FleetStatus>,
+    /// Buffered alerts awaiting consolidation. Each entry: `(node,
+    /// from→to, why)`. Drained when the window elapses and we POST.
+    pub pending: Vec<FleetAlertEntry>,
+    /// Wall-clock when the current window opened. `None` means
+    /// "no pending alerts yet" — a transition will both buffer and
+    /// arm the window.
+    pub window_opened_at: Option<Instant>,
+    /// Most recent successful fire timestamp. Surfaced for tests +
+    /// future "last alert N min ago" UI.
+    pub last_fired_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FleetAlertEntry {
+    pub node: String,
+    pub from: crate::fleet::FleetStatus,
+    pub to: crate::fleet::FleetStatus,
+    pub why: Option<String>,
+}
+
+impl FleetAggregator {
+    /// Compare each row's current status to the recorded previous
+    /// and append any "worth alerting" transitions to `pending`.
+    /// Worth-alerting rules:
+    /// - Pass / Unknown → Warn / Fail (degradation)
+    /// - Warn → Fail (escalation)
+    /// - Fail → Pass / Warn (recovery; useful to know "we're back")
+    ///
+    /// Returns the number of new entries buffered.
+    pub fn ingest_snapshot(
+        &mut self,
+        snapshot: &crate::fleet::FleetSnapshot,
+        now: Instant,
+    ) -> usize {
+        use crate::fleet::FleetStatus;
+        let mut added = 0;
+        for row in &snapshot.rows {
+            let prev = self
+                .last_status
+                .get(&row.name)
+                .copied()
+                .unwrap_or(FleetStatus::Unknown);
+            // Persist the latest status regardless of whether we
+            // emit an alert — that's the comparison baseline for
+            // the next tick.
+            self.last_status.insert(row.name.clone(), row.status);
+            // Skip Unknown → anything (or anything → Unknown);
+            // those are cold-start / probe-loss transitions, not
+            // node-state changes.
+            if prev == FleetStatus::Unknown || row.status == FleetStatus::Unknown {
+                continue;
+            }
+            if prev == row.status {
+                continue;
+            }
+            // Worth-alerting filter:
+            let interesting = matches!(
+                (prev, row.status),
+                (
+                    FleetStatus::Pass,
+                    FleetStatus::Warn | FleetStatus::Fail,
+                ) | (FleetStatus::Warn, FleetStatus::Fail)
+                    | (FleetStatus::Fail, FleetStatus::Pass | FleetStatus::Warn)
+                    | (FleetStatus::Warn, FleetStatus::Pass)
+            );
+            if !interesting {
+                continue;
+            }
+            self.pending.push(FleetAlertEntry {
+                node: row.name.clone(),
+                from: prev,
+                to: row.status,
+                why: row.why.clone(),
+            });
+            added += 1;
+            if self.window_opened_at.is_none() {
+                self.window_opened_at = Some(now);
+            }
+        }
+        added
+    }
+
+    /// Should we fire the consolidated webhook now? Pure decision
+    /// driven by the window timer. Returns the drained pending list
+    /// (caller spawns the POST) and clears the window.
+    pub fn drain_if_window_elapsed(
+        &mut self,
+        now: Instant,
+        window: Duration,
+    ) -> Option<Vec<FleetAlertEntry>> {
+        let opened = self.window_opened_at?;
+        if now.duration_since(opened) < window {
+            return None;
+        }
+        if self.pending.is_empty() {
+            self.window_opened_at = None;
+            return None;
+        }
+        let drained = std::mem::take(&mut self.pending);
+        self.window_opened_at = None;
+        self.last_fired_at = Some(now);
+        Some(drained)
+    }
+
+    /// Build the human-readable message body. Pure — assertion-friendly.
+    pub fn format_message(entries: &[FleetAlertEntry]) -> String {
+        if entries.is_empty() {
+            return String::new();
+        }
+        let mut lines = Vec::with_capacity(entries.len() + 1);
+        let fail_count = entries
+            .iter()
+            .filter(|e| e.to == crate::fleet::FleetStatus::Fail)
+            .count();
+        let warn_count = entries
+            .iter()
+            .filter(|e| e.to == crate::fleet::FleetStatus::Warn)
+            .count();
+        let recovered_count = entries
+            .iter()
+            .filter(|e| {
+                e.to == crate::fleet::FleetStatus::Pass
+                    && (e.from == crate::fleet::FleetStatus::Fail
+                        || e.from == crate::fleet::FleetStatus::Warn)
+            })
+            .count();
+        let mut headline_parts = Vec::new();
+        if fail_count > 0 {
+            headline_parts.push(format!("{fail_count} fail"));
+        }
+        if warn_count > 0 {
+            headline_parts.push(format!("{warn_count} warn"));
+        }
+        if recovered_count > 0 {
+            headline_parts.push(format!("{recovered_count} recovered"));
+        }
+        lines.push(format!(
+            "Fleet alert: {}",
+            headline_parts.join(" · ")
+        ));
+        for e in entries {
+            let arrow = format!("{:?} → {:?}", e.from, e.to);
+            if let Some(why) = &e.why {
+                lines.push(format!("• {}: {arrow} ({why})", e.node));
+            } else {
+                lines.push(format!("• {}: {arrow}", e.node));
+            }
+        }
+        lines.join("\n")
+    }
+}
+
+/// Auto-restart state for the supervised Bee child. Pure state +
+/// pure decision functions; the actual restart-spawn is driven by
+/// `App::tick_supervisor_watchdog` so the I/O stays in `app.rs`.
+#[derive(Debug, Clone)]
+pub struct SupervisorWatchdog {
+    /// `[bee].bin` — kept so we can re-spawn on crash.
+    pub bin: std::path::PathBuf,
+    /// `[bee].config` — kept for the same reason.
+    pub config: std::path::PathBuf,
+    /// `[bee.logs]` snapshot, threaded through to each restart's
+    /// `BeeSupervisor::spawn` call.
+    pub logs: crate::config::BeeLogsConfig,
+    /// `[bee.supervisor]` policy.
+    pub policy: crate::config::BeeSupervisorConfig,
+    /// Wall-clock timestamps of every restart attempt. Pruned to
+    /// the last hour on every check so the sliding-window budget is
+    /// O(1) per tick on a sane fleet.
+    pub restart_history: std::collections::VecDeque<Instant>,
+    /// Earliest wall-clock at which the next restart may be
+    /// attempted. `None` means "no pending wait" — the watchdog
+    /// will try the next non-Running tick.
+    pub next_attempt_at: Option<Instant>,
+    /// Cumulative restart count across the session. Surfaced in the
+    /// top bar chip (`bee: running 4d3h (2 restarts)`). Doesn't
+    /// reset when `restart_history` slides; this is operator-facing.
+    pub restart_count: u32,
+}
+
+impl SupervisorWatchdog {
+    /// Number of restarts within the last hour. Pruning is done
+    /// here so callers don't have to remember; the structure stays
+    /// bounded.
+    pub fn restarts_last_hour(&mut self, now: Instant) -> u32 {
+        let cutoff = now.checked_sub(Duration::from_secs(3600));
+        if let Some(c) = cutoff {
+            while self
+                .restart_history
+                .front()
+                .map(|t| *t < c)
+                .unwrap_or(false)
+            {
+                self.restart_history.pop_front();
+            }
+        }
+        self.restart_history.len() as u32
+    }
+
+    /// Backoff for the *next* restart attempt: `initial * 2^count`
+    /// capped at `backoff_max_secs`. Pure — separated for testability.
+    pub fn backoff_for(&self, attempt_idx: u32) -> Duration {
+        let shift = attempt_idx.min(16); // 2^16 saturates fast
+        let secs = self
+            .policy
+            .backoff_initial_secs
+            .saturating_mul(1u64 << shift)
+            .min(self.policy.backoff_max_secs);
+        Duration::from_secs(secs.max(self.policy.backoff_initial_secs))
+    }
+
+    /// Should we attempt a restart right now? Pure decision over
+    /// the watchdog state — separated so it can be unit-tested
+    /// against fixture clocks.
+    pub fn should_attempt(&mut self, now: Instant) -> bool {
+        if !self.policy.auto_restart {
+            return false;
+        }
+        if let Some(wait_until) = self.next_attempt_at {
+            if now < wait_until {
+                return false;
+            }
+        }
+        let used = self.restarts_last_hour(now);
+        used < self.policy.max_restarts_per_hour
+    }
+
+    /// Record that a restart was attempted at `now`. Adds the
+    /// timestamp to history, increments the cumulative count, and
+    /// computes the next-allowed-restart time using the exponential
+    /// backoff curve.
+    pub fn record_attempt(&mut self, now: Instant) {
+        self.restart_history.push_back(now);
+        self.restart_count = self.restart_count.saturating_add(1);
+        let backoff = self.backoff_for(self.restart_count);
+        self.next_attempt_at = Some(now + backoff);
+    }
+
+    /// Human-readable status line for the top bar.
+    /// `bee running 4d3h (2 restarts)` / `bee: max restarts hit`.
+    pub fn top_bar_label(&self, running: bool, uptime: Option<Duration>) -> String {
+        if running {
+            let up = uptime
+                .map(format_duration_short)
+                .unwrap_or_else(|| "?".into());
+            if self.restart_count == 0 {
+                format!("bee running {up}")
+            } else {
+                format!(
+                    "bee running {up} ({} restart{})",
+                    self.restart_count,
+                    if self.restart_count == 1 { "" } else { "s" }
+                )
+            }
+        } else if self.restart_history.len() as u32 >= self.policy.max_restarts_per_hour {
+            format!(
+                "bee: max restarts ({}/{}) hit",
+                self.restart_history.len(),
+                self.policy.max_restarts_per_hour
+            )
+        } else {
+            "bee: restarting…".into()
+        }
+    }
+}
+
+/// Format a duration as a compact 2-unit label: `4d3h`, `12h5m`,
+/// `8m30s`. Used by the supervisor's top-bar chip.
+pub fn format_duration_short(d: Duration) -> String {
+    let secs = d.as_secs();
+    let days = secs / 86_400;
+    let hours = (secs % 86_400) / 3_600;
+    let mins = (secs % 3_600) / 60;
+    let s = secs % 60;
+    if days > 0 {
+        format!("{days}d{hours}h")
+    } else if hours > 0 {
+        format!("{hours}h{mins}m")
+    } else if mins > 0 {
+        format!("{mins}m{s}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
+/// State of the S3 batch-economics modal. Walks the operator through
+/// action selection → field entry → preview output, then dismisses
+/// on Enter/Esc. Pure-state — the actual previews run through the
+/// existing `run_*_preview` methods on App so there's no code
+/// duplication.
+#[derive(Debug, Default, Clone)]
+pub struct BatchModal {
+    pub visible: bool,
+    pub action: Option<BatchAction>,
+    /// One entry per committed field. `field_inputs.len()` == number
+    /// of fields the operator has confirmed; the active field is at
+    /// index `field_inputs.len()`.
+    pub field_inputs: Vec<String>,
+    /// Buffer for the currently-being-typed field. Committed into
+    /// `field_inputs` on Enter.
+    pub input_buffer: String,
+    /// Preview output once all fields are submitted. `None` while
+    /// the form is still being filled.
+    pub result: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchAction {
+    Topup,
+    Dilute,
+    Extend,
+    Buy,
+    Plan,
+}
+
+impl BatchAction {
+    pub fn verb(self) -> &'static str {
+        match self {
+            BatchAction::Topup => "topup-preview",
+            BatchAction::Dilute => "dilute-preview",
+            BatchAction::Extend => "extend-preview",
+            BatchAction::Buy => "buy-preview",
+            BatchAction::Plan => "plan-batch",
+        }
+    }
+
+    pub fn fields(self) -> &'static [&'static str] {
+        match self {
+            BatchAction::Topup => &["batch-prefix", "amount-PLUR-per-chunk"],
+            BatchAction::Dilute => &["batch-prefix", "new-depth"],
+            BatchAction::Extend => &["batch-prefix", "duration (e.g. 30d)"],
+            BatchAction::Buy => &["depth", "amount-PLUR-per-chunk"],
+            BatchAction::Plan => &["batch-prefix"],
+        }
+    }
+
+    pub fn from_char(c: char) -> Option<Self> {
+        match c.to_ascii_lowercase() {
+            't' => Some(BatchAction::Topup),
+            'd' => Some(BatchAction::Dilute),
+            'e' => Some(BatchAction::Extend),
+            'b' => Some(BatchAction::Buy),
+            'p' => Some(BatchAction::Plan),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -496,10 +874,15 @@ impl App {
             .as_ref()
             .map(|b| b.logs.clone())
             .unwrap_or_default();
-        let supervisor = match (bee_bin, bee_config) {
+        let bee_supervisor_policy = config
+            .bee
+            .as_ref()
+            .map(|b| b.supervisor.clone())
+            .unwrap_or_default();
+        let (supervisor, supervisor_watchdog) = match (bee_bin, bee_config) {
             (Some(bin), Some(cfg)) => {
                 eprintln!("bee-tui: spawning bee {bin:?} --config {cfg:?}");
-                let mut sup = BeeSupervisor::spawn(&bin, &cfg, bee_logs)?;
+                let mut sup = BeeSupervisor::spawn(&bin, &cfg, bee_logs.clone())?;
                 eprintln!(
                     "bee-tui: log → {} (will appear in the cockpit's bottom pane)",
                     sup.log_path().display()
@@ -510,7 +893,26 @@ impl App {
                 );
                 sup.wait_for_api(&api.url, BEE_API_READY_TIMEOUT).await?;
                 eprintln!("bee-tui: bee ready, opening cockpit");
-                Some(sup)
+                let watchdog = if bee_supervisor_policy.auto_restart {
+                    eprintln!(
+                        "bee-tui: auto-restart on — max {} per hour, backoff {}-{}s",
+                        bee_supervisor_policy.max_restarts_per_hour,
+                        bee_supervisor_policy.backoff_initial_secs,
+                        bee_supervisor_policy.backoff_max_secs,
+                    );
+                    Some(SupervisorWatchdog {
+                        bin: bin.clone(),
+                        config: cfg.clone(),
+                        logs: bee_logs.clone(),
+                        policy: bee_supervisor_policy.clone(),
+                        restart_history: std::collections::VecDeque::new(),
+                        next_attempt_at: None,
+                        restart_count: 0,
+                    })
+                } else {
+                    None
+                };
+                (Some(sup), watchdog)
             }
             (Some(_), None) | (None, Some(_)) => {
                 return Err(eyre!(
@@ -518,7 +920,7 @@ impl App {
                      Use --bee-bin AND --bee-config, or both fields in config.toml."
                 ));
             }
-            (None, None) => None,
+            (None, None) => (None, None),
         };
 
         // Spawn the watch / informer hub. Pollers attach to children
@@ -672,6 +1074,9 @@ impl App {
             help_page: HelpPage::Keys,
             fleet_rx,
             fleet_resync_tx,
+            batch_modal: BatchModal::default(),
+            supervisor_watchdog,
+            fleet_aggregator: FleetAggregator::default(),
         })
     }
 
@@ -739,8 +1144,10 @@ impl App {
         // a key that *closes* one (Esc on help) flips it the other
         // way but also shouldn't propagate. Either side of the
         // transition counts as "modal" for swallowing purposes.
-        let modal_before =
-            self.command_buffer.is_some() || self.help_visible || self.nodes_picker_visible;
+        let modal_before = self.command_buffer.is_some()
+            || self.help_visible
+            || self.nodes_picker_visible
+            || self.batch_modal.visible;
         match event {
             Event::Quit => action_tx.send(Action::Quit)?,
             Event::Tick => action_tx.send(Action::Tick)?,
@@ -749,8 +1156,10 @@ impl App {
             Event::Key(key) => self.handle_key_event(key)?,
             _ => {}
         }
-        let modal_after =
-            self.command_buffer.is_some() || self.help_visible || self.nodes_picker_visible;
+        let modal_after = self.command_buffer.is_some()
+            || self.help_visible
+            || self.nodes_picker_visible
+            || self.batch_modal.visible;
         // Non-key events (Tick / Resize / Render) always propagate
         // so screens keep refreshing under modals.
         let propagate = !((modal_before || modal_after) && matches!(event, Event::Key(_)));
@@ -860,6 +1269,26 @@ impl App {
                 .unwrap_or(0);
             self.nodes_picker_selected = active;
             self.nodes_picker_visible = true;
+            return Ok(());
+        }
+        // Batch-economics modal key routing. Once visible, the modal
+        // swallows every keystroke until Esc dismisses it — same
+        // discipline as help / picker.
+        if self.batch_modal.visible {
+            self.handle_batch_modal_key(key);
+            return Ok(());
+        }
+        // `E` opens the batch-economics modal. Captured at app level
+        // (not S3-only) because operators often start the preview
+        // flow from S2 Stamps too. Plain `e` stays free for any
+        // future in-screen use (today nothing binds plain `e`).
+        if matches!(key.code, crossterm::event::KeyCode::Char('E'))
+            && key.modifiers == crossterm::event::KeyModifiers::SHIFT
+        {
+            self.batch_modal = BatchModal {
+                visible: true,
+                ..Default::default()
+            };
             return Ok(());
         }
         // `?` opens the help overlay. We capture it at the app level
@@ -2970,6 +3399,192 @@ impl App {
         out
     }
 
+    /// Drive the batch-economics modal state machine on each key.
+    /// Three phases:
+    /// 1. **No action selected** — accept the `t/d/e/b/p` letter.
+    /// 2. **Filling fields** — append printable chars, Backspace
+    ///    deletes, Enter commits the field. After the last field
+    ///    commits we compute the preview by re-using the existing
+    ///    `run_*_preview` methods (whose verb-line parsers are the
+    ///    single source of truth for arg validation).
+    /// 3. **Result shown** — Enter / Esc dismiss.
+    fn handle_batch_modal_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+        if matches!(key.code, KeyCode::Esc) {
+            self.batch_modal = BatchModal::default();
+            return;
+        }
+        if self.batch_modal.result.is_some() {
+            // Phase 3: any Enter dismisses. Other keys are no-ops so
+            // an accidental keystroke doesn't trash the result.
+            if matches!(key.code, KeyCode::Enter) {
+                self.batch_modal = BatchModal::default();
+            }
+            return;
+        }
+        if self.batch_modal.action.is_none() {
+            // Phase 1: a single letter picks the action.
+            if let KeyCode::Char(c) = key.code {
+                if let Some(a) = BatchAction::from_char(c) {
+                    self.batch_modal.action = Some(a);
+                }
+            }
+            return;
+        }
+        // Phase 2: filling fields.
+        match key.code {
+            KeyCode::Char(c) => {
+                self.batch_modal.input_buffer.push(c);
+            }
+            KeyCode::Backspace => {
+                self.batch_modal.input_buffer.pop();
+            }
+            KeyCode::Enter => {
+                if self.batch_modal.input_buffer.trim().is_empty() {
+                    return;
+                }
+                let committed =
+                    std::mem::take(&mut self.batch_modal.input_buffer);
+                self.batch_modal.field_inputs.push(committed);
+                // If we filled every field, compute the preview.
+                let action = self.batch_modal.action.expect("phase guard");
+                if self.batch_modal.field_inputs.len() >= action.fields().len() {
+                    self.batch_modal.result = Some(self.compute_batch_modal_preview());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Reconstruct the verb-line from the modal inputs and dispatch
+    /// to the existing `run_*_preview` method. Returns the preview
+    /// text (or error message) ready to display in the modal's
+    /// result panel.
+    fn compute_batch_modal_preview(&self) -> String {
+        let Some(action) = self.batch_modal.action else {
+            return "internal error: no action selected".into();
+        };
+        let line = format!(
+            "{} {}",
+            action.verb(),
+            self.batch_modal.field_inputs.join(" ")
+        );
+        let status = match action {
+            BatchAction::Topup => self.run_topup_preview(&line),
+            BatchAction::Dilute => self.run_dilute_preview(&line),
+            BatchAction::Extend => self.run_extend_preview(&line),
+            BatchAction::Buy => self.run_buy_preview(&line),
+            BatchAction::Plan => self.run_plan_batch(&line),
+        };
+        match status {
+            CommandStatus::Info(s) => s,
+            CommandStatus::Err(s) => format!("error: {s}"),
+        }
+    }
+
+    /// Per-Tick auto-restart watchdog for the supervised Bee child.
+    /// No-op when `[bee.supervisor].auto_restart = false` or when
+    /// bee-tui isn't acting as the supervisor at all. When enabled
+    /// and the child has exited:
+    /// 1. Check the sliding one-hour restart budget. If exhausted,
+    ///    leave the supervisor dead and let the top-bar chip surface
+    ///    "max restarts hit" — operator intervention required.
+    /// 2. Check the exponential-backoff window. If we're still in
+    ///    it, wait this tick.
+    /// 3. Otherwise call `BeeSupervisor::spawn` (sync — just fork+exec)
+    ///    to replace the dead child. The new child's `/health` will
+    ///    come up on its own; we don't await it here because that
+    ///    would block the tick. The next tick's `try_wait` flip
+    ///    sets `bee_status` back to `Running` once Bee responds.
+    fn tick_supervisor_watchdog(&mut self) {
+        let Some(watchdog) = self.supervisor_watchdog.as_mut() else {
+            return;
+        };
+        if self.bee_status.is_running() {
+            return;
+        }
+        let now = Instant::now();
+        if !watchdog.should_attempt(now) {
+            return;
+        }
+        let bin = watchdog.bin.clone();
+        let cfg = watchdog.config.clone();
+        let logs = watchdog.logs.clone();
+        watchdog.record_attempt(now);
+        match BeeSupervisor::spawn(&bin, &cfg, logs) {
+            Ok(sup) => {
+                tracing::info!(
+                    "bee-supervisor: restart #{} spawned (next-allowed after backoff)",
+                    watchdog.restart_count
+                );
+                self.supervisor = Some(sup);
+                self.bee_status = BeeStatus::Running;
+            }
+            Err(e) => {
+                // Spawn-time failure (binary moved, FD exhaustion,
+                // ...). Don't replace self.supervisor with None —
+                // we want try_wait to keep reporting whatever the
+                // last status was. Just record the attempt and let
+                // the next tick try again after the backoff.
+                tracing::warn!("bee-supervisor: restart attempt failed: {e}");
+            }
+        }
+    }
+
+    /// Per-Tick fleet-aggregate webhook. No-op when
+    /// `[fleet].aggregate_webhook_url` is unset. When configured:
+    /// 1. Ingest the current fleet snapshot, buffering any
+    ///    worth-alerting status transitions.
+    /// 2. If the coalesce window has elapsed, drain the buffer
+    ///    and POST one consolidated message.
+    ///
+    /// Per-node `[alerts].webhook_url` keeps working independently
+    /// — fleet aggregation sits *on top of* that, not in place of.
+    fn tick_fleet_aggregate(&mut self) {
+        let url = match self.config.fleet.aggregate_webhook_url.as_deref() {
+            Some(u) if !u.is_empty() => u.to_string(),
+            _ => return,
+        };
+        let window = Duration::from_secs(self.config.fleet.aggregate_window_secs.max(1));
+        let snapshot = self.fleet_rx.borrow().clone();
+        let now = Instant::now();
+        self.fleet_aggregator.ingest_snapshot(&snapshot, now);
+        let Some(entries) = self.fleet_aggregator.drain_if_window_elapsed(now, window) else {
+            return;
+        };
+        let message = FleetAggregator::format_message(&entries);
+        tokio::spawn(async move {
+            let client = match reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .user_agent(concat!("bee-tui/", env!("CARGO_PKG_VERSION")))
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(target: "bee_tui::alerts", "fleet-aggregate client build failed: {e}");
+                    return;
+                }
+            };
+            // Slack/Discord-compatible payload: `{ "text": "..." }`.
+            // Same shape used by the per-node alerter, so operators
+            // can point both knobs at the same channel and get a
+            // coherent format.
+            let body = serde_json::json!({ "text": message });
+            match client.post(&url).json(&body).send().await {
+                Ok(resp) if resp.status().is_success() => {}
+                Ok(resp) => tracing::warn!(
+                    target: "bee_tui::alerts",
+                    "fleet-aggregate webhook returned non-2xx: {}",
+                    resp.status()
+                ),
+                Err(e) => tracing::warn!(
+                    target: "bee_tui::alerts",
+                    "fleet-aggregate webhook POST failed: {e}"
+                ),
+            }
+        });
+    }
+
     /// Per-Tick webhook alerter. No-op when `[alerts].webhook_url`
     /// is unset — operators get the cockpit's existing visual gates
     /// without any outbound traffic. When configured, we compute the
@@ -3014,6 +3629,11 @@ impl App {
                     if let Some(sup) = self.supervisor.as_mut() {
                         self.bee_status = sup.status();
                     }
+                    // Auto-restart watchdog. No-op when not
+                    // configured. When configured and Bee isn't
+                    // running, decides whether to respawn now or
+                    // wait out the backoff window.
+                    self.tick_supervisor_watchdog();
                     // Drain any newly-tailed Bee log lines into the
                     // log pane. Bounded loop — the channel is
                     // unbounded but try_recv stops at the first
@@ -3089,6 +3709,8 @@ impl App {
                     // configured (no clones, no work) — only computes
                     // gates and diffs when [alerts].webhook_url is set.
                     self.tick_alerts();
+                    // Fleet-aggregate webhook. Cheap when not configured.
+                    self.tick_fleet_aggregate();
                 }
                 Action::Quit => self.should_quit = true,
                 Action::Suspend => self.should_suspend = true,
@@ -3140,11 +3762,21 @@ impl App {
         let endpoint = self.api.url.clone();
         let last_ping = self.health_rx.borrow().last_ping;
         let now_utc = format_utc_now();
-        let bee_status_label = if self.supervisor.is_some() && !self.bee_status.is_running() {
-            // Only show the status when (a) we're acting as the
-            // supervisor and (b) something is wrong. Hiding the
-            // happy-path label keeps the metadata line uncluttered.
-            Some(self.bee_status.label())
+        let bee_status_label = if self.supervisor.is_some() {
+            let running = self.bee_status.is_running();
+            // With the watchdog active we always surface the chip so
+            // operators see uptime + restart count at a glance. Without
+            // a watchdog we keep the v1.11 behaviour: only show the
+            // chip when something is wrong, so a healthy cockpit's
+            // metadata line stays calm.
+            match self.supervisor_watchdog.as_ref() {
+                Some(w) => {
+                    let uptime = self.supervisor.as_ref().map(|s| s.uptime());
+                    Some((w.top_bar_label(running, uptime), running))
+                }
+                None if !running => Some((self.bee_status.label(), false)),
+                None => None,
+            }
         } else {
             None
         };
@@ -3180,6 +3812,8 @@ impl App {
                 )
             })
             .collect();
+        let batch_modal_visible = self.batch_modal.visible;
+        let batch_modal_state = self.batch_modal.clone();
         tui.draw(|frame| {
             use ratatui::layout::{Constraint, Layout};
             use ratatui::style::{Color, Modifier, Style};
@@ -3226,13 +3860,14 @@ impl App {
             // Append a Bee-process status chip iff the supervisor is
             // active AND something is wrong. Renders red so a crash
             // mid-session is impossible to miss in the top bar.
-            if let Some(label) = bee_status_label.as_ref() {
+            if let Some((label, running)) = bee_status_label.as_ref() {
                 metadata_spans.push(Span::raw("   "));
+                let bg = if *running { t.pass } else { t.fail };
                 metadata_spans.push(Span::styled(
                     format!(" {label} "),
                     Style::default()
                         .fg(Color::Black)
-                        .bg(t.fail)
+                        .bg(bg)
                         .add_modifier(Modifier::BOLD),
                 ));
             }
@@ -3356,6 +3991,9 @@ impl App {
                     nodes_picker_selected,
                     &theme,
                 );
+            }
+            if batch_modal_visible {
+                draw_batch_modal(frame, frame.area(), &batch_modal_state, &theme);
             }
         })?;
         Ok(())
@@ -3528,6 +4166,7 @@ fn build_help_keys_lines<'a>(
         ("1-9 / 0", "jump to S1-S9 / S10"),
         ("Alt+1..Alt+5", "jump to S11-S15"),
         ("Ctrl+N", "open node picker (also :nodes)"),
+        ("E", "open batch-economics modal (topup/dilute/extend/buy/plan)"),
         ("[ / ]", "previous / next log-pane tab"),
         ("+ / -", "grow / shrink log pane"),
         ("Shift+↑/↓", "scroll log pane (1 line); pauses auto-tail"),
@@ -3764,6 +4403,186 @@ fn draw_nodes_picker(
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme.accent))
                 .title(" nodes "),
+        ),
+        rect,
+    );
+}
+
+/// Render the batch-economics modal. Walks the operator through
+/// action choice → field entry → preview output, then dismisses on
+/// Enter / Esc. Same overlay-with-Clear treatment as the help and
+/// nodes-picker overlays.
+fn draw_batch_modal(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    state: &BatchModal,
+    theme: &theme::Theme,
+) {
+    use ratatui::layout::Rect;
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+    let w = area.width.min(72);
+    let h = area.height.min(16);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    match state.action {
+        None => {
+            lines.push(Line::from(Span::styled(
+                "  Pick an action:",
+                Style::default()
+                    .fg(theme.dim)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+            for (key, label, desc) in [
+                ("t", "topup-preview", "predict TTL gain from topping up an existing batch"),
+                ("d", "dilute-preview", "predict utilisation drop from a higher depth"),
+                ("e", "extend-preview", "what would N more seconds of TTL cost?"),
+                ("b", "buy-preview", "predict TTL of a fresh batch at (depth, amount)"),
+                ("p", "plan-batch", "unified topup + dilute recommendation"),
+            ] {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("[{key}]"),
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        format!("{label:<16}"),
+                        Style::default()
+                            .fg(theme.info)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(desc.to_string(), Style::default().fg(theme.dim)),
+                ]));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  Press the letter to choose · Esc cancels",
+                Style::default()
+                    .fg(theme.dim)
+                    .add_modifier(Modifier::ITALIC),
+            )));
+        }
+        Some(action) => {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!(":{} ", action.verb()),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "(Esc to cancel)",
+                    Style::default()
+                        .fg(theme.dim)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+            lines.push(Line::from(""));
+            // Committed fields
+            let fields = action.fields();
+            for (i, label) in fields.iter().enumerate() {
+                if let Some(value) = state.field_inputs.get(i) {
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("{label:<24}"),
+                            Style::default().fg(theme.dim),
+                        ),
+                        Span::raw(" "),
+                        Span::styled(
+                            value.clone(),
+                            Style::default()
+                                .fg(theme.info)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
+                } else if i == state.field_inputs.len() && state.result.is_none() {
+                    // Active prompt
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("{label:<24}"),
+                            Style::default()
+                                .fg(theme.accent)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(" "),
+                        Span::styled(
+                            format!("> {}_", state.input_buffer),
+                            Style::default().fg(theme.info),
+                        ),
+                    ]));
+                } else {
+                    // Future field, dim placeholder
+                    lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            format!("{label:<24}"),
+                            Style::default()
+                                .fg(theme.dim)
+                                .add_modifier(Modifier::ITALIC),
+                        ),
+                    ]));
+                }
+            }
+            if let Some(result) = &state.result {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Result:",
+                    Style::default()
+                        .fg(theme.dim)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for line in result.lines() {
+                    lines.push(Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(line.to_string(), Style::default().fg(theme.info)),
+                    ]));
+                }
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Enter / Esc to dismiss",
+                    Style::default()
+                        .fg(theme.dim)
+                        .add_modifier(Modifier::ITALIC),
+                )));
+            } else {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "  Type the value · Enter commits the field · Esc cancels",
+                    Style::default()
+                        .fg(theme.dim)
+                        .add_modifier(Modifier::ITALIC),
+                )));
+            }
+        }
+    }
+
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.accent))
+                .title(" batch economics "),
         ),
         rect,
     );
@@ -4405,5 +5224,329 @@ mod tests {
         assert_eq!(verb_category("watch-ref"), "durability");
         assert_eq!(verb_category("pubsub-pss"), "pubsub");
         assert_eq!(verb_category("nodes"), "cockpit");
+    }
+
+    // --- v1.12 SupervisorWatchdog tests ---
+
+    fn watchdog_with(policy: crate::config::BeeSupervisorConfig) -> SupervisorWatchdog {
+        SupervisorWatchdog {
+            bin: std::path::PathBuf::from("/usr/bin/true"),
+            config: std::path::PathBuf::from("/dev/null"),
+            logs: crate::config::BeeLogsConfig::default(),
+            policy,
+            restart_history: std::collections::VecDeque::new(),
+            next_attempt_at: None,
+            restart_count: 0,
+        }
+    }
+
+    #[test]
+    fn watchdog_should_attempt_returns_false_when_disabled() {
+        let mut w = watchdog_with(crate::config::BeeSupervisorConfig {
+            auto_restart: false,
+            max_restarts_per_hour: 6,
+            backoff_initial_secs: 1,
+            backoff_max_secs: 30,
+        });
+        assert!(!w.should_attempt(Instant::now()));
+    }
+
+    #[test]
+    fn watchdog_should_attempt_respects_backoff_window() {
+        let mut w = watchdog_with(crate::config::BeeSupervisorConfig {
+            auto_restart: true,
+            max_restarts_per_hour: 6,
+            backoff_initial_secs: 5,
+            backoff_max_secs: 30,
+        });
+        let t0 = Instant::now();
+        w.record_attempt(t0);
+        // Immediately after recording, we should be in the backoff
+        // window and not allowed to restart yet.
+        assert!(!w.should_attempt(t0 + Duration::from_secs(2)));
+        // After the backoff has elapsed, we are.
+        assert!(w.should_attempt(t0 + Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn watchdog_should_attempt_respects_budget() {
+        let mut w = watchdog_with(crate::config::BeeSupervisorConfig {
+            auto_restart: true,
+            max_restarts_per_hour: 2,
+            backoff_initial_secs: 1,
+            backoff_max_secs: 30,
+        });
+        let t0 = Instant::now();
+        w.record_attempt(t0);
+        w.record_attempt(t0 + Duration::from_secs(60));
+        // Budget hit; should refuse even past the backoff.
+        assert!(!w.should_attempt(t0 + Duration::from_secs(1000)));
+    }
+
+    #[test]
+    fn watchdog_backoff_grows_exponentially_capped() {
+        let w = watchdog_with(crate::config::BeeSupervisorConfig {
+            auto_restart: true,
+            max_restarts_per_hour: 100,
+            backoff_initial_secs: 1,
+            backoff_max_secs: 30,
+        });
+        assert_eq!(w.backoff_for(0), Duration::from_secs(1));
+        assert_eq!(w.backoff_for(1), Duration::from_secs(2));
+        assert_eq!(w.backoff_for(2), Duration::from_secs(4));
+        assert_eq!(w.backoff_for(3), Duration::from_secs(8));
+        assert_eq!(w.backoff_for(4), Duration::from_secs(16));
+        // Capped at backoff_max_secs.
+        assert_eq!(w.backoff_for(8), Duration::from_secs(30));
+        assert_eq!(w.backoff_for(100), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn watchdog_history_slides_after_hour() {
+        let mut w = watchdog_with(crate::config::BeeSupervisorConfig {
+            auto_restart: true,
+            max_restarts_per_hour: 6,
+            backoff_initial_secs: 1,
+            backoff_max_secs: 30,
+        });
+        let t0 = Instant::now();
+        w.record_attempt(t0);
+        assert_eq!(w.restarts_last_hour(t0 + Duration::from_secs(10)), 1);
+        // Slide forward past the one-hour mark — history should empty.
+        assert_eq!(w.restarts_last_hour(t0 + Duration::from_secs(3700)), 0);
+    }
+
+    #[test]
+    fn watchdog_top_bar_label_format() {
+        let w = watchdog_with(crate::config::BeeSupervisorConfig {
+            auto_restart: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            w.top_bar_label(true, Some(Duration::from_secs(60 * 60 * 25))),
+            "bee running 1d1h"
+        );
+        let mut w2 = w.clone();
+        w2.restart_count = 2;
+        assert_eq!(
+            w2.top_bar_label(true, Some(Duration::from_secs(120))),
+            "bee running 2m0s (2 restarts)"
+        );
+        let mut w3 = w.clone();
+        w3.restart_count = 1;
+        assert_eq!(
+            w3.top_bar_label(true, Some(Duration::from_secs(5))),
+            "bee running 5s (1 restart)"
+        );
+    }
+
+    #[test]
+    fn format_duration_short_thresholds() {
+        assert_eq!(format_duration_short(Duration::from_secs(45)), "45s");
+        assert_eq!(
+            format_duration_short(Duration::from_secs(60 * 5 + 30)),
+            "5m30s"
+        );
+        assert_eq!(
+            format_duration_short(Duration::from_secs(3600 * 4 + 60 * 12)),
+            "4h12m"
+        );
+        assert_eq!(
+            format_duration_short(Duration::from_secs(86_400 * 3 + 3_600 * 5)),
+            "3d5h"
+        );
+    }
+
+    // --- v1.12 FleetAggregator tests ---
+
+    fn fleet_row(name: &str, status: crate::fleet::FleetStatus) -> crate::fleet::FleetRow {
+        crate::fleet::FleetRow {
+            name: name.into(),
+            url: format!("http://{name}"),
+            default: false,
+            status,
+            peers: Some(50),
+            worst_ttl_secs: Some(86_400 * 30),
+            ping_ms: Some(10),
+            warming_up: false,
+            last_probe: Some(Instant::now()),
+            why: match status {
+                crate::fleet::FleetStatus::Fail => Some("unreachable".into()),
+                crate::fleet::FleetStatus::Warn => Some("warming up".into()),
+                _ => None,
+            },
+        }
+    }
+
+    fn fleet_snap(rows: Vec<crate::fleet::FleetRow>) -> crate::fleet::FleetSnapshot {
+        crate::fleet::FleetSnapshot {
+            rows,
+            last_update: Some(Instant::now()),
+        }
+    }
+
+    #[test]
+    fn aggregator_pass_to_fail_is_buffered() {
+        let mut agg = FleetAggregator::default();
+        let now = Instant::now();
+        // First snapshot establishes baseline (all Pass).
+        agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Pass)]),
+            now,
+        );
+        // Second snapshot flips to Fail.
+        let added = agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Fail)]),
+            now + Duration::from_secs(10),
+        );
+        assert_eq!(added, 1);
+        assert_eq!(agg.pending.len(), 1);
+        assert_eq!(agg.pending[0].to, crate::fleet::FleetStatus::Fail);
+    }
+
+    #[test]
+    fn aggregator_unknown_transitions_are_ignored() {
+        let mut agg = FleetAggregator::default();
+        let now = Instant::now();
+        // Cold-start: every row Unknown.
+        agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Unknown)]),
+            now,
+        );
+        // First real result: Pass. Unknown→Pass is not a transition
+        // worth alerting on (it's just "we finally got an answer").
+        let added = agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Pass)]),
+            now + Duration::from_secs(10),
+        );
+        assert_eq!(added, 0);
+        assert!(agg.pending.is_empty());
+    }
+
+    #[test]
+    fn aggregator_steady_state_failure_does_not_re_alert() {
+        let mut agg = FleetAggregator::default();
+        let now = Instant::now();
+        // Establish Pass baseline.
+        agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Pass)]),
+            now,
+        );
+        // Flip to Fail.
+        agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Fail)]),
+            now + Duration::from_secs(10),
+        );
+        // Steady Fail — should NOT add a second entry.
+        let added = agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Fail)]),
+            now + Duration::from_secs(20),
+        );
+        assert_eq!(added, 0);
+        assert_eq!(agg.pending.len(), 1);
+    }
+
+    #[test]
+    fn aggregator_recovery_is_alerted() {
+        let mut agg = FleetAggregator::default();
+        let now = Instant::now();
+        agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Pass)]),
+            now,
+        );
+        agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Fail)]),
+            now + Duration::from_secs(10),
+        );
+        let added = agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Pass)]),
+            now + Duration::from_secs(20),
+        );
+        assert_eq!(added, 1);
+        assert!(
+            agg.pending
+                .last()
+                .map(|e| e.from == crate::fleet::FleetStatus::Fail)
+                .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn aggregator_drain_waits_for_window() {
+        let mut agg = FleetAggregator::default();
+        let now = Instant::now();
+        agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Pass)]),
+            now,
+        );
+        agg.ingest_snapshot(
+            &fleet_snap(vec![fleet_row("a", crate::fleet::FleetStatus::Fail)]),
+            now + Duration::from_secs(10),
+        );
+        // Before the window: returns None.
+        assert!(
+            agg.drain_if_window_elapsed(
+                now + Duration::from_secs(20),
+                Duration::from_secs(60),
+            )
+            .is_none()
+        );
+        // After the window: returns the buffered entries.
+        let drained = agg
+            .drain_if_window_elapsed(
+                now + Duration::from_secs(120),
+                Duration::from_secs(60),
+            )
+            .expect("window elapsed");
+        assert_eq!(drained.len(), 1);
+        assert!(agg.pending.is_empty());
+        assert!(agg.window_opened_at.is_none());
+    }
+
+    #[test]
+    fn aggregator_format_message_consolidates_counts() {
+        let entries = vec![
+            FleetAlertEntry {
+                node: "prod-eu".into(),
+                from: crate::fleet::FleetStatus::Pass,
+                to: crate::fleet::FleetStatus::Fail,
+                why: Some("unreachable".into()),
+            },
+            FleetAlertEntry {
+                node: "prod-us".into(),
+                from: crate::fleet::FleetStatus::Pass,
+                to: crate::fleet::FleetStatus::Warn,
+                why: Some("only 2 peers (< 4)".into()),
+            },
+        ];
+        let msg = FleetAggregator::format_message(&entries);
+        assert!(msg.starts_with("Fleet alert: 1 fail · 1 warn"));
+        assert!(msg.contains("prod-eu"));
+        assert!(msg.contains("unreachable"));
+        assert!(msg.contains("prod-us"));
+    }
+
+    // --- v1.12 BatchAction tests ---
+
+    #[test]
+    fn batch_action_from_char_is_case_insensitive() {
+        assert_eq!(BatchAction::from_char('t'), Some(BatchAction::Topup));
+        assert_eq!(BatchAction::from_char('T'), Some(BatchAction::Topup));
+        assert_eq!(BatchAction::from_char('d'), Some(BatchAction::Dilute));
+        assert_eq!(BatchAction::from_char('p'), Some(BatchAction::Plan));
+        assert_eq!(BatchAction::from_char('x'), None);
+    }
+
+    #[test]
+    fn batch_action_fields_match_verb_arg_counts() {
+        // Each action's field list must match the # of positional
+        // args the corresponding verb parser expects (otherwise the
+        // modal will assemble an underfull or overfull line and the
+        // verb errors at runtime, not at the form boundary).
+        assert_eq!(BatchAction::Topup.fields().len(), 2);
+        assert_eq!(BatchAction::Dilute.fields().len(), 2);
+        assert_eq!(BatchAction::Extend.fields().len(), 2);
+        assert_eq!(BatchAction::Buy.fields().len(), 2);
+        assert_eq!(BatchAction::Plan.fields().len(), 1);
     }
 }

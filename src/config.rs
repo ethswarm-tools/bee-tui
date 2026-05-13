@@ -98,6 +98,13 @@ pub struct Config {
     /// for every PSS / GSOC message.
     #[serde(default)]
     pub pubsub: PubsubConfig,
+    /// `[fleet]` section — fleet-aggregate webhook. Off by default
+    /// (per-node `[alerts]` keeps firing). When `aggregate_webhook_url`
+    /// is set, on each fleet-poll tick bee-tui consolidates new
+    /// Warn/Fail status across nodes into one POST per
+    /// `aggregate_window_secs`.
+    #[serde(default)]
+    pub fleet: FleetConfig,
 }
 
 /// `[bee]` table from `config.toml`. Both fields are required so a
@@ -118,6 +125,67 @@ pub struct BeeConfig {
     /// rotation at 5 retained files (~320 MiB ceiling).
     #[serde(default)]
     pub logs: BeeLogsConfig,
+    /// `[bee.supervisor]` subsection — auto-restart policy applied
+    /// when bee-tui acts as Bee's parent (`[bee].bin` set). Absent
+    /// block keeps the v1.11 behaviour: log the crash, dim the top
+    /// bar chip, no restart.
+    #[serde(default)]
+    pub supervisor: BeeSupervisorConfig,
+}
+
+/// `[bee.supervisor]` table. Off by default — pre-v1.12 behaviour
+/// was "single-shot, no restart". Setting `auto_restart = true`
+/// turns on the watchdog with exponential backoff and a per-hour
+/// budget; everything else has a sensible default.
+#[derive(Clone, Debug, Deserialize)]
+pub struct BeeSupervisorConfig {
+    /// When `true`, bee-tui re-spawns Bee after the child exits
+    /// (any reason — clean exit, signal, OOM kill). When `false`
+    /// (default), the supervisor goes dim and reports the exit;
+    /// operators restart bee-tui to try again.
+    #[serde(default)]
+    pub auto_restart: bool,
+    /// Maximum restarts allowed within a rolling one-hour window.
+    /// Sliding budget that protects against restart storms (e.g.
+    /// Bee crashes on startup, gets relaunched immediately, crashes
+    /// again, ...). Default 6 — generous enough for "bad afternoon"
+    /// but tight enough that an unrecoverable failure stops within
+    /// a few minutes. Once exceeded, the watchdog stops respawning
+    /// until the window slides forward.
+    #[serde(default = "default_max_restarts_per_hour")]
+    pub max_restarts_per_hour: u32,
+    /// Initial backoff in seconds; doubles after each restart up to
+    /// `backoff_max_secs`. Default 1 — feels live for transient
+    /// failures, doesn't hammer the OS on fast crashloops.
+    #[serde(default = "default_backoff_initial_secs")]
+    pub backoff_initial_secs: u64,
+    /// Cap on the exponential backoff. Default 30 s — long enough
+    /// that an operator-investigating-a-bad-deploy can see the
+    /// restart is paused, short enough that recovery doesn't take
+    /// minutes after a transient issue resolves.
+    #[serde(default = "default_backoff_max_secs")]
+    pub backoff_max_secs: u64,
+}
+
+impl Default for BeeSupervisorConfig {
+    fn default() -> Self {
+        Self {
+            auto_restart: false,
+            max_restarts_per_hour: default_max_restarts_per_hour(),
+            backoff_initial_secs: default_backoff_initial_secs(),
+            backoff_max_secs: default_backoff_max_secs(),
+        }
+    }
+}
+
+fn default_max_restarts_per_hour() -> u32 {
+    6
+}
+fn default_backoff_initial_secs() -> u64 {
+    1
+}
+fn default_backoff_max_secs() -> u64 {
+    30
 }
 
 /// `[bee.logs]` table from `config.toml`. Bounds the size of the
@@ -311,6 +379,42 @@ impl Default for AlertsConfig {
 
 fn default_alerts_debounce_secs() -> u64 {
     crate::alerts::DEFAULT_DEBOUNCE_SECS
+}
+
+/// `[fleet]` table from `config.toml`. Off by default — the S15
+/// Fleet screen works regardless of whether this is configured;
+/// the only thing this section enables is the aggregate webhook
+/// that consolidates per-node alerts across the fleet.
+#[derive(Clone, Debug, Deserialize)]
+pub struct FleetConfig {
+    /// Slack / Discord-compatible incoming-webhook URL. When unset
+    /// (default), no fleet-aggregate alerts are sent and each
+    /// node's individual `[alerts].webhook_url` keeps working
+    /// untouched. When set, on each fleet-poll tick bee-tui buffers
+    /// new `Warn` / `Fail` status entries and fires ONE POST per
+    /// `aggregate_window_secs` consolidating the buffered states.
+    #[serde(default)]
+    pub aggregate_webhook_url: Option<String>,
+    /// Coalesce window for fleet-aggregate webhooks, in seconds.
+    /// During this window, all node-status changes are batched
+    /// into a single message. Default 60 — long enough that a
+    /// transient network blip across three nodes folds into one
+    /// alert, short enough that a real outage doesn't sit silent.
+    #[serde(default = "default_fleet_window_secs")]
+    pub aggregate_window_secs: u64,
+}
+
+impl Default for FleetConfig {
+    fn default() -> Self {
+        Self {
+            aggregate_webhook_url: None,
+            aggregate_window_secs: default_fleet_window_secs(),
+        }
+    }
+}
+
+fn default_fleet_window_secs() -> u64 {
+    60
 }
 
 /// `[ui]` table from `config.toml`. Every field has a sensible

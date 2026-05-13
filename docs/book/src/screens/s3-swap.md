@@ -176,6 +176,39 @@ changes at chain rate, no point hammering:
 - `/timesettlements`
 - `/chequebook/address` (once-ish — header data)
 
+## Batch economics modal (v1.12.0+)
+
+Press `E` (Shift+E) anywhere in the cockpit to open the
+batch-economics modal — a guided form that runs the same
+preview verbs (`:topup-preview` / `:dilute-preview` /
+`:extend-preview` / `:buy-preview` / `:plan-batch`) without
+making you remember argument order.
+
+```
+┌─ batch economics ─────────────────────────────────────────┐
+│   Pick an action:                                         │
+│                                                           │
+│   [t] topup-preview   predict TTL gain from topping up... │
+│   [d] dilute-preview  predict utilisation drop from depth │
+│   [e] extend-preview  what would N more seconds of TTL... │
+│   [b] buy-preview     predict TTL of a fresh batch at...  │
+│   [p] plan-batch      unified topup + dilute recommend... │
+│                                                           │
+│   Press the letter to choose · Esc cancels                │
+└───────────────────────────────────────────────────────────┘
+```
+
+Type the action letter, then fill the fields one at a time
+(`Enter` commits each field, `Esc` cancels at any point).
+After the last field, the preview output appears inline.
+`Enter` or `Esc` dismisses.
+
+The result of each preview is identical to the typed verb's
+status-line output — the modal builds the verb line under
+the hood and runs the same `run_*_preview` method. So you
+can use either path interchangeably depending on whether
+you remember the args.
+
 ## Keys
 
 S3 has no screen-specific keys (no drill yet — peer drill

@@ -14,6 +14,7 @@ offline reference.
 | `0` | Jump to S10 (Pins) |
 | `Alt+1` – `Alt+5` | Jump to S11 – S15 (Manifest, Watchlist, FeedTimeline, Pubsub, Fleet) |
 | `Ctrl+N` | Open node picker (also `:nodes`) |
+| `Shift+E` | Open the batch-economics modal (v1.12+) — guided form for topup/dilute/extend/buy/plan previews |
 | `[` / `]` | Previous / next tab on the bottom log pane (Errors / Warn / Info / Debug / Bee HTTP / bee::http / Cockpit). Persisted across launches. |
 | `+` / `-` | Grow / shrink the bottom log pane height by one line. Clamped to 4..24. Persisted across launches. |
 | `Shift+↑` / `Shift+↓` | Scroll the active log tab back / forward by one line. Pauses auto-tail; the title shows a `paused N ↑` indicator. |

@@ -96,13 +96,46 @@ default `[[nodes]]` entry. Use this when Bee runs under
 systemd / docker / k8s — bee-tui shouldn't spawn it then.
 
 If Bee crashes mid-session, a red `bee exited (code N)` chip
-appears in the top bar. There is no auto-restart — the
-operator decides whether to investigate (the captured log is
-the place to start) or quit and relaunch.
+appears in the top bar. Auto-restart is opt-in via the
+`[bee.supervisor]` subsection below — without it, the operator
+decides whether to investigate (the captured log is the place
+to start) or quit and relaunch.
 
 CLI flags `--bee-bin` and `--bee-config` override the
 `[bee]` block. Both must be set together; setting only one
 errors at startup.
+
+### `[bee.supervisor]` — auto-restart watchdog (v1.12+, optional)
+
+When `auto_restart = true`, bee-tui relaunches the supervised
+Bee process after it exits (any reason — clean exit, signal,
+OOM). Exponential backoff between attempts protects against
+fast crashloops; a sliding one-hour budget caps the noise if
+something fundamentally broken keeps the binary from staying
+up.
+
+```toml
+[bee.supervisor]
+auto_restart           = true   # default: false (no restart)
+max_restarts_per_hour  = 6      # sliding window budget
+backoff_initial_secs   = 1      # doubles on each attempt
+backoff_max_secs       = 30     # cap on backoff
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `auto_restart` | bool | `false` | When true, bee-tui re-spawns Bee after the child exits. |
+| `max_restarts_per_hour` | u32 | `6` | Maximum restart attempts within a rolling one-hour window. Once hit, the watchdog stops respawning until the window slides forward. |
+| `backoff_initial_secs` | u64 | `1` | Wait before the first restart attempt; doubles after each. |
+| `backoff_max_secs` | u64 | `30` | Hard cap on the exponential backoff. |
+
+With the watchdog active the top-bar chip changes from the
+old "show only on crash" behaviour to an always-visible
+`bee running 4d3h (2 restarts)` style label, so operators see
+both uptime and historical restart count at a glance. When
+the budget is exhausted the chip reads `bee: max restarts
+(6/6) hit` — an operator-actionable signal that "this isn't
+recovering on its own."
 
 ### `[metrics]` — Prometheus scrape endpoint (optional)
 
@@ -218,6 +251,46 @@ from `Unknown` (data-not-loaded-yet) are suppressed so cockpit
 startup never spams the channel. After firing for gate X, no further
 alert for X until `debounce_secs` elapses, regardless of how many
 times that gate flapped in between.
+
+### `[fleet]` — fleet-aggregate webhook (v1.12+, optional)
+
+Consolidates per-node alerts across the S15 Fleet into a
+single rolled-up POST, so operators running 5+ nodes don't
+get five individual Slack pings during a network blip.
+Sits **on top of** per-node `[alerts].webhook_url` — both
+keep working independently when both are set.
+
+```toml
+[fleet]
+aggregate_webhook_url   = "https://hooks.slack.com/services/T000/B000/YYY"
+aggregate_window_secs   = 60        # batch alerts within this window
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `aggregate_webhook_url` | string \| absent | absent | Slack / Discord-compatible incoming-webhook URL. When unset, no fleet-aggregate alerts; per-node `[alerts]` is unaffected. |
+| `aggregate_window_secs` | u64 | `60` | Coalesce window. Status transitions across all nodes are batched within this window into one message. |
+
+On every fleet-poll tick (every 10 seconds) bee-tui ingests
+the new snapshot, notes any nodes that **transitioned** to a
+worse status (`Pass → Warn / Fail`, `Warn → Fail`) or
+**recovered** (`Fail → Pass / Warn`), and buffers them. Once
+the coalesce window elapses, the buffer is drained and one
+POST goes out with a body like:
+
+```
+Fleet alert: 2 fail · 1 warn
+• prod-eu: Pass → Fail (unreachable)
+• staging: Pass → Fail (0 peers — isolated)
+• prod-us: Pass → Warn (stamp TTL under 7d — plan a topup)
+```
+
+Steady-state failures don't re-alert — once a node is
+recorded as `Fail`, you only get another message when it
+moves (recovers, or steps up to a different state). Cold
+start (`Unknown → anything`) is suppressed for the same
+reason `[alerts]` suppresses it: the cockpit just learning a
+real value isn't an alertable event.
 
 ### CLI overrides
 

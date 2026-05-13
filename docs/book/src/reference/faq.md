@@ -229,6 +229,27 @@ pinging on. The top bar shows `alerts ●` whenever it's
 configured. See [`config.md`](../config.md#alerts) and
 [S1 § Webhook alerts](../screens/s1-health.md#webhook-alerts-v140).
 
+### My 5-node fleet flaps; I get 5 Slack pings per blip. Help?
+
+Set `[fleet].aggregate_webhook_url` (v1.12+). bee-tui will
+buffer status transitions across all nodes for the
+`aggregate_window_secs` window (default 60s) and POST a single
+consolidated message ("Fleet alert: 2 fail · 1 warn · …"). Per-node
+`[alerts].webhook_url` keeps working independently — point both
+knobs at the same channel for high-detail per-node alerts plus a
+fleet-level digest, or keep them separate for "every-node →
+operator-Slack, aggregated → ops-channel" patterns.
+
+### Bee keeps crashing — can bee-tui restart it for me?
+
+Yes (v1.12+). When bee-tui spawns Bee (`[bee].bin` set), add
+`[bee.supervisor].auto_restart = true`. The watchdog re-spawns
+on any exit with exponential backoff (1s → 2s → 4s → 30s cap)
+and a sliding one-hour budget (default 6 restarts). The top-bar
+chip now shows uptime + restart count: `bee running 4d3h (2 restarts)`,
+turning red as `bee: max restarts (6/6) hit` when the budget is
+exhausted. See [`config.md` § [bee.supervisor]](../config.md#beesupervisor--auto-restart-watchdog-v12-optional).
+
 ### How do I run `:durability-check` continuously?
 
 `:watch-ref <ref> [interval-seconds]` runs the same check as a

@@ -11,6 +11,87 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.12.0] - 2026-05-13
+
+The "operator polish" minor release. Three additive features
+that each close a real workflow pain point:
+
+1. **Batch-economics modal** turns the most-used numeric workflow
+   (predict-the-cost-of-X) from "type a six-arg verb line" into
+   "press `Shift+E` and answer four prompts."
+2. **Supervised Bee auto-restart watchdog** with exponential
+   backoff + sliding-hour budget closes the v1.x gap where bee-tui
+   would log a crash and go dim instead of relaunching Bee.
+3. **Fleet-aggregate webhook** consolidates per-node alerts across
+   the S15 fleet into a single rolled-up POST — operators running
+   5+ nodes stop getting five Slack pings per network blip.
+
+### Added
+
+- **Batch-economics modal** (`Shift+E` from anywhere) — opens a
+  centred overlay that walks the operator through action choice
+  (`t/d/e/b/p` for topup / dilute / extend / buy / plan-batch),
+  field-by-field entry of the verb's positional args, and
+  shows the preview output inline. The modal reuses the existing
+  `run_*_preview` methods on `App` so there's zero code
+  duplication — the modal just assembles the verb line and
+  dispatches. Help-overlay row added (`E` row in the Keys page).
+- **`[bee.supervisor]` config section** — when
+  `auto_restart = true` (default `false`), bee-tui watches the
+  supervised Bee child via the existing `BeeSupervisor` and
+  re-spawns it on exit. Exponential backoff
+  (`backoff_initial_secs` doubling up to `backoff_max_secs`, both
+  configurable) protects against fast crashloops; a sliding
+  one-hour `max_restarts_per_hour` budget (default 6) stops the
+  watchdog cold when something is fundamentally broken. The
+  top-bar Bee chip now shows `bee running 4d3h (2 restarts)` when
+  the watchdog is on (with green background while running) and
+  `bee: max restarts (6/6) hit` when the budget is exhausted.
+  Without the watchdog the v1.11 chip behaviour (red-on-crash
+  only) is preserved.
+- **`[fleet]` config section** with
+  `aggregate_webhook_url` + `aggregate_window_secs` (default
+  60s) — on every fleet-poll tick bee-tui ingests the new
+  snapshot, notes any nodes that transitioned to a worse or
+  recovered status, and buffers them. After the coalesce window
+  elapses, one consolidated POST goes out with a body like
+  `Fleet alert: 2 fail · 1 warn …`. Steady-state failures don't
+  re-alert; `Unknown` cold-start transitions are suppressed.
+  Per-node `[alerts].webhook_url` keeps working independently
+  — both can coexist for "per-node detail to operator-Slack +
+  fleet digest to ops-channel" patterns.
+
+### Added — supporting
+
+- `Action::SwitchContext(String)` was added in v1.11.0; v1.12 keeps
+  it unchanged. The new modal and watchdog touch no semver-stable
+  surface — both are gated by new optional config sections that
+  default to off.
+- `BatchAction` enum + `BatchModal` state struct on `App`.
+- `SupervisorWatchdog` struct + `format_duration_short` helper.
+- `FleetAggregator` struct + `FleetAlertEntry` + pure
+  `ingest_snapshot` / `drain_if_window_elapsed` / `format_message`.
+
+### Internals
+
+- `App::with_overrides` now returns both a `BeeSupervisor` and an
+  optional `SupervisorWatchdog`; the loops at `App::run` (tick
+  handler) call `tick_supervisor_watchdog()` after the existing
+  `try_wait` status refresh.
+- `tick_fleet_aggregate()` joins the existing tick sequence
+  alongside `tick_alerts()` — both are no-ops when their
+  respective webhook URLs are unset, so the cost is one
+  `Option::is_none()` per tick.
+
+### Notes
+
+- Tests: 459 lib tests (was 444), +15 covering watchdog backoff
+  curves + budget enforcement, aggregator transition rules
+  (Pass↔Fail / steady-state suppression / Unknown ignoring /
+  recovery), message formatting, and `BatchAction` parsing.
+- Semver-stable surfaces untouched. All new functionality is
+  gated by opt-in config sections.
+
 ## [1.11.0] - 2026-05-13
 
 The "fleet view" minor release. Closes the v1.x design gap

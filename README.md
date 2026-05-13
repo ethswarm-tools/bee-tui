@@ -276,12 +276,14 @@ Runtime theme switching (`:theme <name>`) lands in v0.6.
 
 ## Status
 
-**v1.11.0** on crates.io (May 2026). Fifteen-screen cockpit with drill panes,
+**v1.12.0** on crates.io (May 2026). Fifteen-screen cockpit with drill panes,
 53 cockpit verbs (24 also exposed as `--once` CI verbs), simultaneous fleet
-view, node-picker overlay, top-bar awareness chips, paged help, webhook health
-alerts, manifest browser, durability + feed timeline + pubsub watches,
-recursive uploads, multi-node, theme system, ASCII fallback, scrollbars, `?`
-help overlay, and prebuilt installers for all five major targets.
+view, fleet-aggregate webhook, supervised Bee auto-restart watchdog,
+node-picker overlay, top-bar awareness chips, paged help, batch-economics
+modal, webhook health alerts, manifest browser, durability + feed timeline +
+pubsub watches, recursive uploads, multi-node, theme system, ASCII fallback,
+scrollbars, `?` help overlay, and prebuilt installers for all five major
+targets.
 
 | Version | Scope | State |
 |---|---|---|
@@ -300,6 +302,7 @@ help overlay, and prebuilt installers for all five major targets.
 | v1.9.1 | `:context`-switch daemon cleanup + alert-state reset, full-hex continuation lines on S3 SWAP / S4 Lottery / S9 Tags, mdBook catch-up + refreshed VHS GIFs | ✅ shipped |
 | v1.10.0 | Node picker overlay (`Ctrl+N` / `:nodes`), top-bar awareness chips (`subs` / `watch` / `alerts`), numeric screen hotkeys, paged help overlay with verb catalogue | ✅ shipped |
 | v1.11.0 | S15 Fleet view — simultaneous multi-node health roll-up (3-endpoint probe per node every 10 s, Enter to switch context to the cursored row), `:fleet` verb, `Alt+5` hotkey | ✅ shipped |
+| v1.12.0 | Batch-economics modal (`Shift+E`, guided form for topup/dilute/extend/buy/plan previews), `[bee.supervisor].auto_restart` watchdog with exponential backoff + sliding-hour budget + uptime/restart chip, `[fleet].aggregate_webhook_url` for consolidated multi-node alerts | ✅ shipped |
 
 Backed by [bee-rs](https://github.com/ethswarm-tools/bee-rs) v1.6 (full
 coverage of the Bee 8.0.0 OpenAPI surface). Full screen specs in
@@ -311,8 +314,8 @@ coverage of the Bee 8.0.0 OpenAPI surface). Full screen specs in
 - [crossterm](https://github.com/crossterm-rs/crossterm) — terminal backend
 - [Tokio](https://tokio.rs/) — async runtime
 - [bee-rs ≥ 1.6](https://crates.io/crates/bee-rs) — Bee API client
-- 444 lib + insta integration tests cover every gate / status ladder / drill view / scroll
-  edge / glyph slot / verb category exhaustiveness / fleet aggregation
+- 459 lib + insta integration tests cover every gate / status ladder / drill view / scroll
+  edge / glyph slot / verb category exhaustiveness / fleet aggregation / supervisor backoff
 - MSRV 1.85, `clippy --all-targets -- -D warnings` clean
 
 ## Contributing

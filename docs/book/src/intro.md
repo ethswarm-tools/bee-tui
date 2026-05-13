@@ -37,6 +37,16 @@ exists to address:
   (v1.11+) polls every configured node every 10 s and surfaces the
   aggregate status / peers / worst stamp TTL / ping per row. Enter
   on a row switches context to that node's per-screen detail.
+- **"5 nodes flap and I get 5 Slack pings."** — v1.12's
+  `[fleet].aggregate_webhook_url` consolidates per-node status
+  transitions into a single rolled-up POST per coalesce window.
+- **"Bee keeps crashing; can the cockpit restart it?"** — v1.12's
+  `[bee.supervisor].auto_restart` adds an exponential-backoff
+  watchdog with a per-hour budget; the top-bar chip shows uptime
+  and historical restart count.
+- **"Run a topup-preview without remembering the arg order."** —
+  v1.12's `Shift+E` opens a guided modal that builds the verb line
+  field-by-field and shows the result inline.
 - **"Is anything running in the background?"** — top-bar awareness
   chips (`subs N`, `watch N`, `alerts ●`, v1.10+) appear whenever
   a pubsub subscription, a `:watch-ref` daemon, or webhook alerting
