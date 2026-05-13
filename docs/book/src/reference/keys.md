@@ -14,6 +14,7 @@ offline reference.
 | `0` | Jump to S10 (Pins) |
 | `Alt+1` – `Alt+5` | Jump to S11 – S15 (Manifest, Watchlist, FeedTimeline, Pubsub, Fleet) |
 | `Ctrl+N` | Open node picker (also `:nodes`) |
+| `Ctrl+Alt+N` | Open notification history overlay (v1.14+) — see [`:notifications`](#the-notification-history-overlay) |
 | `Shift+E` | Open the batch-economics modal (v1.12+) — guided form for topup/dilute/extend/buy/plan previews |
 | `Shift+L` | Toggle fullscreen log pane (v1.13+) — collapses the active screen so the log pane fills the middle of the cockpit. Press again to return. |
 | `/` | Open the log-pane filter prompt (v1.13+) — case-insensitive substring; `Enter` commits, `Esc` cancels. With an active filter, `Esc` (no prompt open) clears it. |
@@ -172,6 +173,24 @@ cockpit updates to show the new profile and endpoint; any
 against the previous node are cancelled (they don't follow the
 context — re-issue the verbs against the new node if you want them
 there too).
+
+## The notification history overlay
+
+`Ctrl+Alt+N` (or `:notifications`) opens a centred overlay listing the
+most recent 200 alert transitions the cockpit has observed, newest
+first. Same source as the toast overlay (and the optional
+webhook / desktop notification sinks): every gate transition (S1
+health gates + S15 fleet rows) becomes one entry, severity-coloured.
+
+| Key | Effect |
+|---|---|
+| `Esc` | Close |
+
+Toasts appear in the top-right corner whenever a new transition is
+ingested. They auto-dismiss after `[notifications].toast_seconds`
+(default 8 s) and are capped at 3 visible at once. Disable them by
+setting `[notifications].toast_enabled = false` in `config.toml` —
+the history overlay still works.
 
 ## The help overlay
 

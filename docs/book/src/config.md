@@ -292,6 +292,39 @@ start (`Unknown → anything`) is suppressed for the same
 reason `[alerts]` suppresses it: the cockpit just learning a
 real value isn't an alertable event.
 
+### `[notifications]` — in-cockpit notification center (v1.14+, optional)
+
+Surface every alert transition the cockpit observes — the same
+ones [`[alerts]`](#alerts--webhook-ping-when-a-health-gate-flips-optional)
+and [`[fleet]`](#fleet--fleet-aggregate-webhook-v112-optional) gate
+behind webhooks — without leaving the terminal. Three sinks, each
+opt-in:
+
+```toml
+[notifications]
+toast_enabled  = true   # default; top-right ephemeral toast on every transition
+toast_seconds  = 8      # default; how long each toast lingers
+desktop        = false  # libnotify / D-Bus desktop notifications (Linux)
+bell           = "off"  # "off" | "warn" | "fail" — terminal bell threshold
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `toast_enabled` | bool | `true` | Show top-right toasts (max 3 visible). Disable to keep just the history overlay + optional desktop / bell. |
+| `toast_seconds` | u64 | `8` | Toast lifetime before auto-dismiss. |
+| `desktop` | bool | `false` | Forward `Fail` / `Warn` transitions to the OS notification center (`notify-rust` with the pure-Rust zbus backend — no `libdbus` dependency). Silently no-ops if no D-Bus session is reachable; never panics. |
+| `bell` | string | `"off"` | Terminal-bell threshold. `"off"` never beeps. `"warn"` beeps on `Warn`+`Fail`. `"fail"` beeps on `Fail` only. Recovery transitions never beep. |
+
+Regardless of these settings, the **notification history** overlay
+(`Ctrl+Alt+N` or `:notifications`) always shows the last 200
+transitions newest-first — that ring buffer is unconditional, so
+you can disable every sink above and still have an in-cockpit audit
+log of every gate flip the session has seen.
+
+The history overlay and toasts share their source with `[alerts]` and
+`[fleet]`: same diff pipeline, just a different sink. You can run all
+three in parallel — webhook + toast + desktop — or any subset.
+
 ### CLI overrides
 
 Three command-line flags override the config file:

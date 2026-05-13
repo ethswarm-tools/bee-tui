@@ -105,6 +105,11 @@ pub struct Config {
     /// `aggregate_window_secs`.
     #[serde(default)]
     pub fleet: FleetConfig,
+    /// `[notifications]` section — in-cockpit notification center.
+    /// Toast overlay + history are on by default; desktop +
+    /// terminal-bell escalations are opt-in.
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
 }
 
 /// `[bee]` table from `config.toml`. Both fields are required so a
@@ -415,6 +420,71 @@ impl Default for FleetConfig {
 
 fn default_fleet_window_secs() -> u64 {
     60
+}
+
+/// `[notifications]` table — v1.14 in-cockpit notification center.
+/// Three layers, each independently configurable:
+/// 1. `toast_enabled` (default `true`) shows a transient top-right
+///    overlay for `toast_seconds` (default 8).
+/// 2. `desktop` (default `false`) fires libnotify-style OS
+///    notifications via `notify-rust` (zbus on Linux, no system lib
+///    dep). Operators in a tmux pane / hidden window can see
+///    cockpit events without flipping focus.
+/// 3. `bell` (`"off"` / `"fail"` / `"warn"`, default `"off"`) emits
+///    a terminal BEL on the matching severities. Loud — opt-in
+///    only.
+///
+/// The notification history overlay (`Ctrl+Alt+N` / `:notifications`)
+/// is always available; nothing in this section turns it off.
+#[derive(Clone, Debug, Deserialize)]
+pub struct NotificationsConfig {
+    /// In-cockpit transient toast in the top-right corner. Default
+    /// `true` — the toast is the operator-attention surface the
+    /// cockpit didn't have before v1.14. Set `false` if you find
+    /// it intrusive; the history overlay still records everything.
+    #[serde(default = "default_toast_enabled")]
+    pub toast_enabled: bool,
+    /// How long (seconds) a toast stays on screen before auto-
+    /// dismissing. Default 8 — long enough to read, short enough
+    /// to not clutter mid-workflow. Clamped to ≥1 at runtime.
+    #[serde(default = "default_toast_seconds")]
+    pub toast_seconds: u64,
+    /// Fire a libnotify / OS-level notification for Fail / Warn
+    /// events. Default `false` — OS notifications are intrusive
+    /// and operators in a busy environment shouldn't get them
+    /// unsolicited. When set, errors (no dbus session, etc.)
+    /// log a single warning and the rest of the pipeline keeps
+    /// running.
+    #[serde(default)]
+    pub desktop: bool,
+    /// Terminal-bell threshold. `"off"` (default), `"fail"` (BEL
+    /// on Fail only), `"warn"` (BEL on Fail + Warn). Anything else
+    /// is treated as `"off"`. Recovery events never ring the bell
+    /// — operators don't want their terminal flashing on the
+    /// happy news.
+    #[serde(default = "default_bell")]
+    pub bell: String,
+}
+
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            toast_enabled: default_toast_enabled(),
+            toast_seconds: default_toast_seconds(),
+            desktop: false,
+            bell: default_bell(),
+        }
+    }
+}
+
+fn default_toast_enabled() -> bool {
+    true
+}
+fn default_toast_seconds() -> u64 {
+    8
+}
+fn default_bell() -> String {
+    "off".into()
 }
 
 /// `[ui]` table from `config.toml`. Every field has a sensible

@@ -11,6 +11,101 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.14.0] - 2026-05-13
+
+The "notification center" minor release. Operators kept asking
+"can the cockpit tell me the moment a gate flips, not just when
+I happen to glance at the screen?" — v1.14 wires every alert
+transition the diff pipeline already produces into three local
+sinks alongside the existing webhook escalation.
+
+### Added
+
+- **In-cockpit toast overlay.** Top-right of the screen, max 3
+  visible at once, auto-dismiss after `toast_seconds` (default
+  8 s). Severity-coloured (`Fail` red, `Warn` yellow, recovery
+  green, `Info` blue) and headlined with the gate + state
+  transition + optional `why` continuation from the underlying
+  `Alert`. Toggle with `[notifications].toast_enabled` (default
+  on).
+- **Notification history overlay.** `Ctrl+Alt+N` (or the
+  `:notifications` verb) opens a centred overlay showing the
+  last 200 transitions newest-first. Always on regardless of
+  the other sinks — the ring buffer records every transition
+  so you can audit a session even with all toasts/desktop/bell
+  disabled.
+- **Desktop notifications.** Opt in with
+  `[notifications].desktop = true`. Forwards `Fail` and `Warn`
+  transitions to the OS notification center via `notify-rust`
+  with the **pure-Rust zbus backend** (`features = ["z"]`) —
+  no `libdbus-1-dev` build dependency, no `libdbus.so` at run
+  time. Silently no-ops when no D-Bus session is reachable;
+  never panics.
+- **Terminal bell.** `[notifications].bell = "warn" | "fail"`
+  emits a `\x07` on the relevant transitions; `"off"` (default)
+  stays quiet. Recoveries never beep.
+- **Fleet transitions feed the same pipeline.** Per-node fleet
+  status changes (S15) ingest into the notification center the
+  same way per-gate `Alert`s do — toasts, history, desktop,
+  bell all light up identically for `prod-eu: Pass → Fail`.
+  The existing `[fleet].aggregate_webhook_url` coalescing is
+  unchanged; the notification center is an additional sink, not
+  a replacement.
+
+### Added — supporting
+
+- `src/notifications.rs` module: `NotificationCenter`,
+  `Notification`, `NotificationSeverity { Fail, Warn, Recovery,
+  Info }`, with `ingest` / `purge_expired` / `visible_toasts` /
+  `history_newest_first` / `should_bell` /
+  `fire_desktop_notification`. Pure-function surface (no
+  globals, no I/O outside `fire_desktop_notification`) so the
+  module test suite covers it without spinning up the app.
+- `[notifications]` config block in `bee_tui.toml` — four
+  fields with sensible defaults (toasts on, desktop off, bell
+  off).
+- Free functions `severity_from_alert(&Alert)` and
+  `severity_from_fleet_entry(&FleetAlertEntry)` exposed `pub`
+  so the test module pins the gate-status → severity mapping
+  without setting up an `App`.
+- Help-overlay Keys page lists `Ctrl+Alt+N`; `:notifications`
+  appears in `KNOWN_COMMANDS` under the `cockpit` category.
+
+### Internals
+
+- `App::tick_alerts` no longer gates on `[alerts].webhook_url`
+  for *ingestion* — the diff still runs unconditionally, and
+  every produced `Alert` feeds `NotificationCenter::ingest`
+  before the webhook escalation runs. Same source, two sinks.
+- `App::tick_fleet_aggregate` similarly forks: per-row
+  transitions go to the notification center on every poll
+  while the existing window-coalesced webhook stays opt-in.
+- `purge_expired(Instant::now())` runs on every `Tick` so
+  expired toasts drop out without waiting for the next
+  alert.
+- `modal_before` / `modal_after` in `App::handle_events`
+  include `notifications_overlay_visible` so help / picker /
+  batch modal / log filter / notification history are all
+  treated identically — per-screen keys are swallowed while
+  any overlay has focus.
+- `notify-rust = { version = "4", default-features = false,
+  features = ["z"] }` — explicitly opts into the zbus
+  backend. Default features pull in `libdbus-sys` (C-FFI),
+  which would fail at build time on hosts without
+  `libdbus-1-dev`.
+
+### Notes
+
+- Tests: 477 lib tests (was 467), +10 — 8 in
+  `notifications::tests` covering the ingest / history-cap /
+  toast-cap / purge / bell-threshold / severity stable-label
+  surface, plus 2 in `app::tests` pinning the
+  `Alert → NotificationSeverity` and
+  `FleetAlertEntry → NotificationSeverity` translations.
+- Semver-stable surfaces untouched. `[alerts]` and `[fleet]`
+  config sections keep their existing semantics; the
+  notification center is purely additive.
+
 ## [1.13.0] - 2026-05-13
 
 The "log-pane viewing polish" minor release. Two additions

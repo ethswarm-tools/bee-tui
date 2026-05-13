@@ -30,6 +30,7 @@ pub mod logging;
 pub mod manifest_walker;
 pub mod metrics;
 pub mod metrics_server;
+pub mod notifications;
 pub mod once;
 pub mod pprof_bundle;
 pub mod pubsub;

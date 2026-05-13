@@ -200,6 +200,7 @@ Designed for cron, monitoring, and CI gates.
 | `0` | jump to S10 (Pins) |
 | `Alt+1` – `Alt+5` | jump to S11 – S15 (Manifest, Watchlist, FeedTimeline, Pubsub, Fleet) |
 | `Ctrl+N` | open the node picker (also `:nodes`) |
+| `Ctrl+Alt+N` | open the notification history overlay (v1.14+, also `:notifications`) |
 | `Shift+E` | open the batch-economics modal (v1.12+) |
 | `Shift+L` | toggle fullscreen log pane (v1.13+) |
 | `/` | filter the log pane (v1.13+) — case-insensitive substring |
@@ -279,14 +280,15 @@ Runtime theme switching (`:theme <name>`) lands in v0.6.
 
 ## Status
 
-**v1.13.0** on crates.io (May 2026). Fifteen-screen cockpit with drill panes,
-53 cockpit verbs (24 also exposed as `--once` CI verbs), simultaneous fleet
-view, fleet-aggregate webhook, supervised Bee auto-restart watchdog,
-fullscreen log mode + inline log filter, node-picker overlay, top-bar
-awareness chips, paged help, batch-economics modal, webhook health alerts,
-manifest browser, durability + feed timeline + pubsub watches, recursive
-uploads, multi-node, theme system, ASCII fallback, scrollbars, `?` help
-overlay, and prebuilt installers for all five major targets.
+**v1.14.0** on crates.io (May 2026). Fifteen-screen cockpit with drill panes,
+54 cockpit verbs (24 also exposed as `--once` CI verbs), simultaneous fleet
+view, in-cockpit notification center (toasts + history overlay + optional
+desktop / terminal-bell sinks), fleet-aggregate webhook, supervised Bee
+auto-restart watchdog, fullscreen log mode + inline log filter, node-picker
+overlay, top-bar awareness chips, paged help, batch-economics modal, webhook
+health alerts, manifest browser, durability + feed timeline + pubsub watches,
+recursive uploads, multi-node, theme system, ASCII fallback, scrollbars, `?`
+help overlay, and prebuilt installers for all five major targets.
 
 | Version | Scope | State |
 |---|---|---|
@@ -307,6 +309,7 @@ overlay, and prebuilt installers for all five major targets.
 | v1.11.0 | S15 Fleet view — simultaneous multi-node health roll-up (3-endpoint probe per node every 10 s, Enter to switch context to the cursored row), `:fleet` verb, `Alt+5` hotkey | ✅ shipped |
 | v1.12.0 | Batch-economics modal (`Shift+E`, guided form for topup/dilute/extend/buy/plan previews), `[bee.supervisor].auto_restart` watchdog with exponential backoff + sliding-hour budget + uptime/restart chip, `[fleet].aggregate_webhook_url` for consolidated multi-node alerts | ✅ shipped |
 | v1.13.0 | Log-pane viewing polish — `Shift+L` toggles fullscreen log mode (collapses active screen so log pane fills the middle), `/` opens inline case-insensitive substring filter with live match-count chip + Esc-to-clear | ✅ shipped |
+| v1.14.0 | Notification center — every gate / fleet transition feeds a top-right toast overlay + `Ctrl+Alt+N` history overlay (last 200, always on). Opt-in desktop notifications (libnotify / D-Bus, pure-Rust zbus backend so no `libdbus` dep) + terminal-bell threshold (`fail` / `warn`). Sits alongside `[alerts]` / `[fleet]` webhooks — same diff pipeline, additional sinks. | ✅ shipped |
 
 Backed by [bee-rs](https://github.com/ethswarm-tools/bee-rs) v1.6 (full
 coverage of the Bee 8.0.0 OpenAPI surface). Full screen specs in

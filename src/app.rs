@@ -201,6 +201,17 @@ pub struct App {
     /// while this is on. Toggled by the same key — same data,
     /// same tabs, same filter; just bigger.
     log_fullscreen: bool,
+    /// In-cockpit notification center. Ingests every alert the
+    /// existing `tick_alerts` and `tick_fleet_aggregate` produce,
+    /// surfaces them as top-right toasts, persists them in a 200-
+    /// entry ring buffer for the history overlay, and optionally
+    /// escalates to OS notifications / terminal bell per
+    /// `[notifications]` config.
+    notifications: crate::notifications::NotificationCenter,
+    /// True while the `Ctrl+Alt+N` (or `:notifications`) history
+    /// overlay is visible. Same modal discipline as help / picker /
+    /// batch modal — keystrokes other than Esc are swallowed.
+    notifications_overlay_visible: bool,
 }
 
 /// Per-node previous status + the buffered pending alerts. The
@@ -750,6 +761,10 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
         "nodes",
         "open the node picker (Ctrl-N) — switch between [[nodes]]",
     ),
+    (
+        "notifications",
+        "open the notification history overlay (Ctrl+Alt+N)",
+    ),
     ("quit", "Exit the cockpit"),
 ];
 
@@ -1083,6 +1098,8 @@ impl App {
             supervisor_watchdog,
             fleet_aggregator: FleetAggregator::default(),
             log_fullscreen: false,
+            notifications: crate::notifications::NotificationCenter::default(),
+            notifications_overlay_visible: false,
         })
     }
 
@@ -1153,6 +1170,7 @@ impl App {
         let modal_before = self.command_buffer.is_some()
             || self.help_visible
             || self.nodes_picker_visible
+            || self.notifications_overlay_visible
             || self.batch_modal.visible
             || self.log_pane.filter_prompt_visible();
         match event {
@@ -1166,6 +1184,7 @@ impl App {
         let modal_after = self.command_buffer.is_some()
             || self.help_visible
             || self.nodes_picker_visible
+            || self.notifications_overlay_visible
             || self.batch_modal.visible
             || self.log_pane.filter_prompt_visible();
         // Non-key events (Tick / Resize / Render) always propagate
@@ -1295,6 +1314,25 @@ impl App {
             && self.log_pane.active_filter().is_some()
         {
             self.log_pane.clear_filter();
+            return Ok(());
+        }
+        // Notifications history overlay routing (must precede the
+        // Ctrl-N picker so Ctrl-Alt-N doesn't fall through to it).
+        if self.notifications_overlay_visible {
+            if matches!(key.code, crossterm::event::KeyCode::Esc) {
+                self.notifications_overlay_visible = false;
+            }
+            return Ok(());
+        }
+        // `Ctrl+Alt+N` opens the notification-history overlay.
+        // Mirrors the `:notifications` verb. Same modal pattern as
+        // help / picker: keys other than Esc are swallowed while
+        // it's open.
+        if matches!(key.code, crossterm::event::KeyCode::Char('n'))
+            && key.modifiers
+                == (crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT)
+        {
+            self.notifications_overlay_visible = true;
             return Ok(());
         }
         // Ctrl-N opens the node-picker overlay (mirrors `:nodes`).
@@ -1780,6 +1818,9 @@ impl App {
                     .unwrap_or(0);
                 self.nodes_picker_selected = active;
                 self.nodes_picker_visible = true;
+            }
+            "notifications" => {
+                self.notifications_overlay_visible = true;
             }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
@@ -3593,14 +3634,60 @@ impl App {
     /// Per-node `[alerts].webhook_url` keeps working independently
     /// — fleet aggregation sits *on top of* that, not in place of.
     fn tick_fleet_aggregate(&mut self) {
-        let url = match self.config.fleet.aggregate_webhook_url.as_deref() {
-            Some(u) if !u.is_empty() => u.to_string(),
-            _ => return,
-        };
         let window = Duration::from_secs(self.config.fleet.aggregate_window_secs.max(1));
         let snapshot = self.fleet_rx.borrow().clone();
         let now = Instant::now();
-        self.fleet_aggregator.ingest_snapshot(&snapshot, now);
+        // Detect new transitions every tick. The notification
+        // center consumes them immediately (one toast per node
+        // transition); the webhook aggregator coalesces them
+        // across the window for downstream pings.
+        let new_transitions =
+            self.fleet_aggregator.ingest_snapshot(&snapshot, now);
+        if new_transitions > 0 {
+            // Snapshot just the tail of `pending` we appended this
+            // tick — older entries already fired into toasts on
+            // earlier ticks.
+            let pending = self.fleet_aggregator.pending.clone();
+            let new_entries: Vec<&FleetAlertEntry> = pending
+                .iter()
+                .rev()
+                .take(new_transitions)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            for entry in new_entries {
+                let severity = severity_from_fleet_entry(entry);
+                let headline =
+                    format!("fleet/{}: {:?} → {:?}", entry.node, entry.from, entry.to);
+                self.notifications.ingest(
+                    crate::notifications::Notification {
+                        at: now,
+                        severity,
+                        headline,
+                        why: entry.why.clone(),
+                    },
+                    &self.config.notifications,
+                    now,
+                );
+            }
+        }
+        // Webhook escalation: only when [fleet].aggregate_webhook_url
+        // is set. The window controls how often this fires; toasts
+        // above fired per-transition already.
+        let Some(url) = self
+            .config
+            .fleet
+            .aggregate_webhook_url
+            .as_deref()
+            .filter(|u| !u.is_empty())
+            .map(|u| u.to_string())
+        else {
+            // No webhook — still drain the window so the
+            // aggregator doesn't accumulate stale entries forever.
+            let _ = self.fleet_aggregator.drain_if_window_elapsed(now, window);
+            return;
+        };
         let Some(entries) = self.fleet_aggregator.drain_if_window_elapsed(now, window) else {
             return;
         };
@@ -3644,22 +3731,48 @@ impl App {
     /// against the previous Tick's status, and POST one webhook per
     /// transition that survives the per-gate debounce.
     fn tick_alerts(&mut self) {
-        let url = match self.config.alerts.webhook_url.as_deref() {
-            Some(u) if !u.is_empty() => u.to_string(),
-            _ => return,
-        };
         let health = self.health_rx.borrow().clone();
         let topology = self.watch.topology().borrow().clone();
         let stamps = self.watch.stamps().borrow().clone();
         let gates = Health::gates_for_with_stamps(&health, Some(&topology), Some(&stamps));
         let alerts = self.alert_state.diff_and_record(&gates);
-        for alert in alerts {
-            let url = url.clone();
-            tokio::spawn(async move {
-                if let Err(e) = crate::alerts::fire(&url, &alert).await {
-                    tracing::warn!(target: "bee_tui::alerts", "webhook fire failed: {e}");
-                }
-            });
+        // Always feed alerts into the in-cockpit notification
+        // center (v1.14). The webhook fire below is opt-in, but
+        // toasts and the history overlay should reflect every
+        // gate transition the cockpit detects regardless.
+        let now = Instant::now();
+        for alert in &alerts {
+            let severity = severity_from_alert(alert);
+            let headline = format!("{}: {:?} → {:?}", alert.gate, alert.from, alert.to);
+            let why = alert.why.clone();
+            self.notifications.ingest(
+                crate::notifications::Notification {
+                    at: now,
+                    severity,
+                    headline,
+                    why,
+                },
+                &self.config.notifications,
+                now,
+            );
+        }
+        // Webhook escalation: only when [alerts].webhook_url is set.
+        if let Some(url) = self
+            .config
+            .alerts
+            .webhook_url
+            .as_deref()
+            .filter(|u| !u.is_empty())
+            .map(|u| u.to_string())
+        {
+            for alert in alerts {
+                let url = url.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = crate::alerts::fire(&url, &alert).await {
+                        tracing::warn!(target: "bee_tui::alerts", "webhook fire failed: {e}");
+                    }
+                });
+            }
         }
     }
 
@@ -3763,6 +3876,9 @@ impl App {
                     self.tick_alerts();
                     // Fleet-aggregate webhook. Cheap when not configured.
                     self.tick_fleet_aggregate();
+                    // Drop expired toasts so the overlay slot
+                    // empties once auto-dismiss elapses.
+                    self.notifications.purge_expired(Instant::now());
                 }
                 Action::Quit => self.should_quit = true,
                 Action::Suspend => self.should_suspend = true,
@@ -3867,6 +3983,13 @@ impl App {
         let batch_modal_visible = self.batch_modal.visible;
         let batch_modal_state = self.batch_modal.clone();
         let log_fullscreen = self.log_fullscreen;
+        let visible_toasts = self.notifications.visible_toasts();
+        let notifications_overlay_visible = self.notifications_overlay_visible;
+        let notifications_history = if notifications_overlay_visible {
+            self.notifications.history_newest_first()
+        } else {
+            Vec::new()
+        };
         tui.draw(|frame| {
             use ratatui::layout::{Constraint, Layout};
             use ratatui::style::{Color, Modifier, Style};
@@ -4071,6 +4194,21 @@ impl App {
             if batch_modal_visible {
                 draw_batch_modal(frame, frame.area(), &batch_modal_state, &theme);
             }
+            // Top-right toast stack — drawn after every modal so
+            // alerts still register even with help / picker open.
+            // Skipped when the operator has the history overlay
+            // open (they're already looking at notifications).
+            if !visible_toasts.is_empty() && !notifications_overlay_visible {
+                draw_toasts(frame, frame.area(), &visible_toasts, &theme);
+            }
+            if notifications_overlay_visible {
+                draw_notifications_overlay(
+                    frame,
+                    frame.area(),
+                    &notifications_history,
+                    &theme,
+                );
+            }
         })?;
         Ok(())
     }
@@ -4242,6 +4380,10 @@ fn build_help_keys_lines<'a>(
         ("1-9 / 0", "jump to S1-S9 / S10"),
         ("Alt+1..Alt+5", "jump to S11-S15"),
         ("Ctrl+N", "open node picker (also :nodes)"),
+        (
+            "Ctrl+Alt+N",
+            "open notification history overlay (also :notifications)",
+        ),
         ("E", "open batch-economics modal (topup/dilute/extend/buy/plan)"),
         ("Shift+L", "toggle fullscreen log pane (collapses active screen)"),
         ("/", "filter the log pane (case-insensitive substring)"),
@@ -4322,7 +4464,7 @@ fn verb_category(name: &str) -> &'static str {
         "check-version" | "config-doctor" | "diagnose" | "loggers" | "set-logger" => {
             "diagnostics & config"
         }
-        "context" | "nodes" | "quit" => "cockpit",
+        "context" | "nodes" | "notifications" | "quit" => "cockpit",
         _ => "other",
     }
 }
@@ -4666,6 +4808,204 @@ fn draw_batch_modal(
     );
 }
 
+/// Render the top-right toast stack. Up to
+/// `crate::notifications::MAX_VISIBLE_TOASTS` cards, each one ~3
+/// rows tall (border + headline + dim why-line). The stack is
+/// anchored 1 column / 1 row from the screen's top-right corner
+/// so it never collides with the metadata line or the tab strip
+/// at the top. Skips render when there's nothing to show.
+fn draw_toasts(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    toasts: &[crate::notifications::Notification],
+    theme: &theme::Theme,
+) {
+    use crate::notifications::NotificationSeverity;
+    use ratatui::layout::Rect;
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+    if toasts.is_empty() {
+        return;
+    }
+    let toast_w = 48u16.min(area.width.saturating_sub(2));
+    if toast_w < 20 {
+        return; // Terminal too narrow for a useful toast.
+    }
+    let mut y_cursor = area.y.saturating_add(2); // below metadata + tabs
+    for n in toasts {
+        let why_present = n.why.is_some();
+        let h: u16 = if why_present { 4 } else { 3 };
+        if y_cursor.saturating_add(h) > area.y + area.height {
+            break; // Out of vertical room.
+        }
+        let x = area
+            .x
+            .saturating_add(area.width)
+            .saturating_sub(toast_w + 1);
+        let rect = Rect {
+            x,
+            y: y_cursor,
+            width: toast_w,
+            height: h,
+        };
+        let (sev_fg, sev_bg) = match n.severity {
+            NotificationSeverity::Fail => (Color::Black, theme.fail),
+            NotificationSeverity::Warn => (Color::Black, theme.warn),
+            NotificationSeverity::Recovery => (Color::Black, theme.pass),
+            NotificationSeverity::Info => (Color::Black, theme.info),
+        };
+        let mut body_lines: Vec<Line> = Vec::with_capacity(2);
+        body_lines.push(Line::from(vec![
+            Span::styled(
+                format!(" {} ", n.severity.label()),
+                Style::default()
+                    .fg(sev_fg)
+                    .bg(sev_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                truncate_for_toast(&n.headline, (toast_w as usize).saturating_sub(10)),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        if let Some(why) = &n.why {
+            body_lines.push(Line::from(Span::styled(
+                truncate_for_toast(why, (toast_w as usize).saturating_sub(4)),
+                Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC),
+            )));
+        }
+        let border_style = Style::default().fg(sev_bg);
+        frame.render_widget(Clear, rect);
+        frame.render_widget(
+            Paragraph::new(body_lines)
+                .block(Block::default().borders(Borders::ALL).border_style(border_style)),
+            rect,
+        );
+        y_cursor = y_cursor.saturating_add(h);
+    }
+}
+
+fn truncate_for_toast(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// Render the centered notification-history overlay. Newest first
+/// (operator wants reverse chronological scan).
+fn draw_notifications_overlay(
+    frame: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    history: &[crate::notifications::Notification],
+    theme: &theme::Theme,
+) {
+    use crate::notifications::NotificationSeverity;
+    use ratatui::layout::Rect;
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+    let w = area.width.min(80);
+    let h = area.height.min(28);
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let rect = Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    };
+
+    let mut lines: Vec<Line> = Vec::with_capacity(history.len() + 4);
+    lines.push(Line::from(Span::styled(
+        format!("  {} notifications this session (newest first)", history.len()),
+        Style::default()
+            .fg(theme.dim)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    if history.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (nothing yet — alerts fire when health gates change)",
+            Style::default()
+                .fg(theme.dim)
+                .add_modifier(Modifier::ITALIC),
+        )));
+    } else {
+        let now = std::time::Instant::now();
+        for n in history {
+            let sev_fg = match n.severity {
+                NotificationSeverity::Fail => theme.fail,
+                NotificationSeverity::Warn => theme.warn,
+                NotificationSeverity::Recovery => theme.pass,
+                NotificationSeverity::Info => theme.info,
+            };
+            let age = format_age(now.duration_since(n.at));
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!("{:<5}", n.severity.label()),
+                    Style::default().fg(sev_fg).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" {age:>6}  "),
+                    Style::default().fg(theme.dim),
+                ),
+                Span::styled(n.headline.clone(), Style::default().add_modifier(Modifier::BOLD)),
+            ]));
+            if let Some(why) = &n.why {
+                lines.push(Line::from(vec![
+                    Span::raw("              "),
+                    Span::styled(
+                        why.clone(),
+                        Style::default()
+                            .fg(theme.dim)
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ]));
+            }
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Esc to dismiss",
+        Style::default()
+            .fg(theme.dim)
+            .add_modifier(Modifier::ITALIC),
+    )));
+
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.accent))
+                .title(" notifications "),
+        ),
+        rect,
+    );
+}
+
+fn format_age(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
+
 fn format_help_row<'a>(
     key: &'a str,
     desc: &'a str,
@@ -4826,6 +5166,38 @@ fn build_screens(
 }
 
 /// Build the 4104-byte (8 + 4096) synthetic chunk that
+/// Translate a per-gate `Alert` to the notification center's
+/// severity ladder. `Pass` outcomes are recoveries; `Warn` and
+/// `Fail` keep their semantics. Pure — exposed so the test module
+/// can pin every variant without setting up an `App`.
+pub fn severity_from_alert(alert: &crate::alerts::Alert) -> crate::notifications::NotificationSeverity {
+    use crate::components::health::GateStatus;
+    use crate::notifications::NotificationSeverity;
+    match alert.to {
+        GateStatus::Fail => NotificationSeverity::Fail,
+        GateStatus::Warn => NotificationSeverity::Warn,
+        GateStatus::Pass => NotificationSeverity::Recovery,
+        GateStatus::Unknown => NotificationSeverity::Info,
+    }
+}
+
+/// Translate a fleet-aggregator transition entry to the
+/// notification center's severity ladder. Mirrors
+/// [`severity_from_alert`] but for the fleet view's per-row
+/// transitions.
+pub fn severity_from_fleet_entry(
+    entry: &FleetAlertEntry,
+) -> crate::notifications::NotificationSeverity {
+    use crate::fleet::FleetStatus;
+    use crate::notifications::NotificationSeverity;
+    match entry.to {
+        FleetStatus::Fail => NotificationSeverity::Fail,
+        FleetStatus::Warn => NotificationSeverity::Warn,
+        FleetStatus::Pass => NotificationSeverity::Recovery,
+        FleetStatus::Unknown => NotificationSeverity::Info,
+    }
+}
+
 /// `:probe-upload` ships at Bee. Timestamp-randomised so each
 /// invocation produces a unique chunk address — Bee's
 /// content-addressing dedup would otherwise short-circuit the
@@ -5302,6 +5674,7 @@ mod tests {
         assert_eq!(verb_category("watch-ref"), "durability");
         assert_eq!(verb_category("pubsub-pss"), "pubsub");
         assert_eq!(verb_category("nodes"), "cockpit");
+        assert_eq!(verb_category("notifications"), "cockpit");
     }
 
     // --- v1.12 SupervisorWatchdog tests ---
@@ -5626,5 +5999,65 @@ mod tests {
         assert_eq!(BatchAction::Extend.fields().len(), 2);
         assert_eq!(BatchAction::Buy.fields().len(), 2);
         assert_eq!(BatchAction::Plan.fields().len(), 1);
+    }
+
+    // --- v1.14 notification severity translation tests ---
+
+    #[test]
+    fn severity_from_alert_maps_every_gate_status() {
+        use crate::alerts::Alert;
+        use crate::components::health::GateStatus;
+        use crate::notifications::NotificationSeverity;
+        let mk = |to: GateStatus| Alert {
+            gate: "ChainConnected".into(),
+            from: GateStatus::Pass,
+            to,
+            value: "test".into(),
+            why: None,
+        };
+        assert_eq!(
+            severity_from_alert(&mk(GateStatus::Fail)),
+            NotificationSeverity::Fail
+        );
+        assert_eq!(
+            severity_from_alert(&mk(GateStatus::Warn)),
+            NotificationSeverity::Warn
+        );
+        assert_eq!(
+            severity_from_alert(&mk(GateStatus::Pass)),
+            NotificationSeverity::Recovery
+        );
+        assert_eq!(
+            severity_from_alert(&mk(GateStatus::Unknown)),
+            NotificationSeverity::Info
+        );
+    }
+
+    #[test]
+    fn severity_from_fleet_entry_maps_every_fleet_status() {
+        use crate::fleet::FleetStatus;
+        use crate::notifications::NotificationSeverity;
+        let mk = |to: FleetStatus| FleetAlertEntry {
+            node: "prod-eu".into(),
+            from: FleetStatus::Pass,
+            to,
+            why: None,
+        };
+        assert_eq!(
+            severity_from_fleet_entry(&mk(FleetStatus::Fail)),
+            NotificationSeverity::Fail
+        );
+        assert_eq!(
+            severity_from_fleet_entry(&mk(FleetStatus::Warn)),
+            NotificationSeverity::Warn
+        );
+        assert_eq!(
+            severity_from_fleet_entry(&mk(FleetStatus::Pass)),
+            NotificationSeverity::Recovery
+        );
+        assert_eq!(
+            severity_from_fleet_entry(&mk(FleetStatus::Unknown)),
+            NotificationSeverity::Info
+        );
     }
 }

@@ -51,6 +51,12 @@ exists to address:
   `Shift+L` toggles a fullscreen log view (active screen collapses),
   and `/` opens an inline case-insensitive substring filter with a
   live match-count.
+- **"Tell me the moment a gate flips, even if I'm in another
+  window."** — v1.14's notification center surfaces every gate
+  transition as a top-right toast and keeps the last 200 in a
+  history overlay (`Ctrl+Alt+N`). Optional desktop notifications
+  via libnotify / D-Bus + terminal-bell threshold (`fail` /
+  `warn`) make sure you don't miss a `Fail` while heads-down.
 - **"Is anything running in the background?"** — top-bar awareness
   chips (`subs N`, `watch N`, `alerts ●`, v1.10+) appear whenever
   a pubsub subscription, a `:watch-ref` daemon, or webhook alerting

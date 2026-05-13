@@ -321,6 +321,30 @@ follows you across tabs (`[` / `]`), so the same needle
 applies whether you're looking at Errors, Bee HTTP, or the
 cockpit-own log.
 
+### How do notifications work?
+
+Three sinks (v1.14+), all driven by the same alert diff pipeline
+that powers `[alerts]` / `[fleet]` webhooks:
+
+- **In-cockpit toasts** — top-right, max 3 visible, auto-dismiss
+  after `[notifications].toast_seconds` (default 8 s). Severity
+  colour follows the target gate state (`Fail` red, `Warn` yellow,
+  recovery green, `Info` blue). Disable with `toast_enabled = false`.
+- **History overlay** — `Ctrl+Alt+N` (or `:notifications`) opens
+  a centred ring buffer of the last 200 transitions, newest first.
+  Always on, regardless of the other sinks.
+- **Desktop notifications** — opt in with `desktop = true`. Uses
+  `notify-rust` with its pure-Rust zbus backend, so there's no
+  `libdbus` dependency at build or run time. Linux/D-Bus only;
+  silently no-ops elsewhere and never panics.
+- **Terminal bell** — `bell = "warn"` beeps on Warn/Fail
+  transitions; `bell = "fail"` only on Fail. Recoveries never beep.
+
+All four are independent of `[alerts].webhook_url` — webhooks can
+stay on for the team channel while toasts + desktop bell handle the
+single operator's local console. No sink is required; the history
+overlay still records every transition.
+
 ## Things the cockpit deliberately won't do
 
 ### "Why can't I cash out cheques from the cockpit?"
