@@ -11,6 +11,80 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.9.1] - 2026-05-13
+
+The "context-switch correctness + documentation catch-up" patch.
+Two bugs that only surface when an operator hops between nodes via
+`:context` are now closed, and three address-display gaps on S3 /
+S4 / S9 were filled in. No surface changes; semver-stable APIs
+untouched.
+
+The release also brings the mdBook user manual and the rendered
+VHS demo GIFs back in sync with the v1.2-v1.9 cockpit surface —
+operators landing on the docs site or README now see screens and
+verbs that actually exist in the shipped binary.
+
+### Fixed
+
+- **`:context` switch leaked pubsub + watch daemons to the new node** —
+  prior to v1.9.1, switching contexts kept both `pubsub_subs` and
+  `watch_refs` populated; the background tasks they hold reference an
+  `Arc<ApiClient>` bound to the *previous* node, so PSS/GSOC frames
+  and `:durability-check` results from the old node continued to
+  arrive at the freshly-built S15 / `:watch-ref` screens after the
+  switch. `switch_context` now drains and cancels both maps, so a
+  fresh context starts with no inherited subscribers or watchers.
+- **`:context` switch carried stale `alert_state` across nodes** —
+  per-gate transition memory used to log webhook alerts for
+  Health/Connectivity/Capacity/Cheques/Reserve/StampsTTL gates
+  survived the switch, which could fire spurious webhooks (or
+  suppress legitimate ones) when the new node's gate readings
+  differed from the old. `switch_context` now installs a fresh
+  `AlertState` scoped to the new context.
+- **Full chunk references / peer addresses now reachable on S3 / S4 / S9** —
+  every screen with addresses must expose them in full somewhere
+  (truncation in table columns is fine; the full hex has to be
+  reachable without scrolling away). Three screens were missing the
+  continuation-line treatment introduced for S8:
+  - S3 SWAP — `CheckRow` / `SettlementRow` now carry `peer_full`;
+    the per-row continuation line emits `peer 0x<full>`.
+  - S4 Lottery — `:rchash` result no longer truncates to an
+    8-char prefix; the result row emits a `hash 0x<full>`
+    continuation line.
+  - S9 Tags — `TagRow` now carries `address_full`; the per-row
+    continuation line emits `ref 0x<full>` (suppressed for
+    Pending tags whose address is empty).
+  11 insta snapshots were regenerated to lock the new layout.
+
+### Docs
+
+- **mdBook catch-up across v1.2 – v1.9** — `config.md` gains a
+  `[pubsub]` section (history file, rotation, filter); `bar.md`
+  documents 17 verbs added across v1.2-v1.9 (`:manifest*`,
+  `:inspect`, `:durability-check`, `:plan-batch`, `:check-version`,
+  `:config-doctor`, `:price`, `:basefee`, utility verbs,
+  `:pubsub-filter*`, `:pubsub-replay`, `:grantees-list`);
+  `keys.md` documents S11 through S15 keymaps; intro / first-run /
+  README screen counts updated from "nine" to "fourteen".
+- **Three new mdBook pages** — S12 Manifests, S13 Watchlist, and
+  the `--once` CI mode page. SUMMARY.md de-duplicated (the
+  `s14-feed-timeline` / `s15-pubsub` pages were referenced under
+  both Screens and Commands, which broke `mdbook build`).
+- **VHS demo refresh** — `cold-start.tape` now walks all 14
+  screens (was 9); 5 new tapes added (S12 Manifests, S13
+  Watchlist via `:durability-check`, S14 Feed Timeline, S15
+  Pubsub, `--once` CI mode). All 9 GIFs (~6 MiB total) re-rendered
+  against a live Sepolia node. README adds "Data screens (v1.2+)"
+  and "CI mode (v1.3+)" sections embedding the new GIFs.
+
+### Notes
+
+- Tests: 422 lib tests, unchanged (the fix is at the app-state
+  layer; the snapshot suite covers the address-display regression).
+- Semver-stable surfaces (`view_for` / `compute_*_view`,
+  `watch::*` snapshot shapes, CLI flags, `[ui]` config, `--once`
+  exit codes + JSON shape) untouched.
+
 ## [1.9.0] - 2026-05-08
 
 The "pubsub durability" release. Two small follow-ups close the
