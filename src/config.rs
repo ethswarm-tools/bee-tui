@@ -1,6 +1,10 @@
 #![allow(dead_code)] // Remove this once you start using the code
 
-use std::{collections::HashMap, env, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    path::PathBuf,
+};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use directories::ProjectDirs;
@@ -583,25 +587,28 @@ impl Config {
             .set_default("data_dir", data_dir.to_str().unwrap())?
             .set_default("config_dir", config_dir.to_str().unwrap())?;
 
-        let config_files = [
-            ("config.json5", config::FileFormat::Json5),
-            ("config.json", config::FileFormat::Json),
-            ("config.yaml", config::FileFormat::Yaml),
-            ("config.toml", config::FileFormat::Toml),
-            ("config.ini", config::FileFormat::Ini),
-        ];
+        let search_dirs = config_search_dirs();
         let mut found_config = false;
-        for (file, format) in &config_files {
-            let source = config::File::from(config_dir.join(file))
-                .format(*format)
-                .required(false);
-            builder = builder.add_source(source);
-            if config_dir.join(file).exists() {
-                found_config = true
+        'search: for dir in &search_dirs {
+            for (file, format) in &CONFIG_FILE_CANDIDATES {
+                let path = dir.join(file);
+                if path.exists() {
+                    builder = builder
+                        .add_source(config::File::from(path).format(*format).required(false));
+                    found_config = true;
+                    break 'search;
+                }
             }
         }
         if !found_config {
-            error!("No configuration file found. Application may not behave as expected");
+            error!(
+                "No configuration file found. Searched: {}. Application may not behave as expected",
+                search_dirs
+                    .iter()
+                    .map(|d| d.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
         }
 
         let mut cfg: Self = builder.build()?.try_deserialize()?;
@@ -635,14 +642,68 @@ pub fn get_data_dir() -> PathBuf {
     }
 }
 
-pub fn get_config_dir() -> PathBuf {
-    if let Some(s) = CONFIG_FOLDER.clone() {
-        s
-    } else if let Some(proj_dirs) = project_directory() {
+/// Config file names bee-tui recognises, in precedence order. The first
+/// one present in a search directory wins.
+const CONFIG_FILE_CANDIDATES: [(&str, config::FileFormat); 5] = [
+    ("config.json5", config::FileFormat::Json5),
+    ("config.json", config::FileFormat::Json),
+    ("config.yaml", config::FileFormat::Yaml),
+    ("config.toml", config::FileFormat::Toml),
+    ("config.ini", config::FileFormat::Ini),
+];
+
+/// The platform-native config directory: XDG on Linux, `Application
+/// Support` on macOS, Known Folders on Windows. Last-resort entry in
+/// [`config_search_dirs`].
+fn platform_config_dir() -> PathBuf {
+    if let Some(proj_dirs) = project_directory() {
         proj_dirs.config_local_dir().to_path_buf()
     } else {
         PathBuf::from(".").join(".config")
     }
+}
+
+fn dedup_dirs(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    dirs.into_iter()
+        .filter(|d| seen.insert(d.clone()))
+        .collect()
+}
+
+/// Ordered list of directories searched for a config file. The first
+/// directory that holds a recognised `config.*` file wins. `~/.config/
+/// bee-tui` is searched on *every* platform — so macOS and Windows devs
+/// don't have to hunt down the platform-native path.
+pub fn config_search_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(explicit) = CONFIG_FOLDER.clone() {
+        dirs.push(explicit);
+    }
+    if let Some(base) = directories::BaseDirs::new() {
+        dirs.push(base.home_dir().join(".config").join("bee-tui"));
+    }
+    dirs.push(platform_config_dir());
+    dedup_dirs(dirs)
+}
+
+/// The directory a config file was actually found in — the first entry
+/// of [`config_search_dirs`] that contains a recognised config file.
+/// `None` when no config file exists anywhere on the search path.
+pub fn resolved_config_dir() -> Option<PathBuf> {
+    config_search_dirs().into_iter().find(|dir| {
+        CONFIG_FILE_CANDIDATES
+            .iter()
+            .any(|(file, _)| dir.join(file).exists())
+    })
+}
+
+/// The config directory bee-tui uses: the resolved one if a config file
+/// exists, otherwise the explicit `BEE_TUI_CONFIG` override, otherwise
+/// the platform-native default.
+pub fn get_config_dir() -> PathBuf {
+    resolved_config_dir()
+        .or_else(|| CONFIG_FOLDER.clone())
+        .unwrap_or_else(platform_config_dir)
 }
 
 fn project_directory() -> Option<ProjectDirs> {
@@ -983,6 +1044,36 @@ mod tests {
     fn test_parse_style_default() {
         let style = parse_style("");
         assert_eq!(style, Style::default());
+    }
+
+    #[test]
+    fn dedup_dirs_keeps_first_occurrence_in_order() {
+        let dirs = vec![
+            PathBuf::from("/a"),
+            PathBuf::from("/b"),
+            PathBuf::from("/a"),
+            PathBuf::from("/c"),
+            PathBuf::from("/b"),
+        ];
+        assert_eq!(
+            dedup_dirs(dirs),
+            vec![
+                PathBuf::from("/a"),
+                PathBuf::from("/b"),
+                PathBuf::from("/c"),
+            ]
+        );
+    }
+
+    #[test]
+    fn config_search_dirs_includes_dot_config_bee_tui() {
+        // ~/.config/bee-tui must be on the search path on every platform
+        // so macOS / Windows devs don't need the platform-native dir.
+        let dirs = config_search_dirs();
+        assert!(
+            dirs.iter().any(|d| d.ends_with(".config/bee-tui")),
+            "expected ~/.config/bee-tui in search path, got {dirs:?}"
+        );
     }
 
     #[test]

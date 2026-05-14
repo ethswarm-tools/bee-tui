@@ -11,6 +11,26 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.15.1] - 2026-05-14
+
+Config-discovery quality-of-life patch, driven by macOS testing.
+
+### Changed
+
+- **`~/.config/bee-tui/` is now searched on every platform.** The
+  config directory is resolved from an ordered search path —
+  `$BEE_TUI_CONFIG` → `~/.config/bee-tui/` → the platform-native
+  directory (`~/Library/Application Support/com.ethswarm-tools.bee-tui`
+  on macOS, XDG on Linux, Known Folders on Windows) — first directory
+  with a recognised `config.*` file wins. macOS and Windows operators
+  can now keep their config in `~/.config/bee-tui/config.toml` like
+  Linux users, instead of hunting down the space-laden Application
+  Support path. Existing configs in the platform-native directory keep
+  working unchanged.
+- **`bee-tui --version` reports the resolved config directory** — the
+  directory a config file was actually found in, or, when none exists,
+  the full list of directories that were searched.
+
 ## [1.15.0] - 2026-05-14
 
 The "external log tailing" minor release. Closes a real

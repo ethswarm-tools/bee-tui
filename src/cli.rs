@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::config::{get_config_dir, get_data_dir};
+use crate::config::{config_search_dirs, get_data_dir, resolved_config_dir};
 
 #[derive(Parser, Debug)]
 #[command(author, version = version(), about)]
@@ -101,7 +101,17 @@ pub fn version() -> String {
     let author = clap::crate_authors!();
 
     // let current_exe_path = PathBuf::from(clap::crate_name!()).display().to_string();
-    let config_dir_path = get_config_dir().display().to_string();
+    let config_dir_path = match resolved_config_dir() {
+        Some(dir) => dir.display().to_string(),
+        None => format!(
+            "(no config file found — searched: {})",
+            config_search_dirs()
+                .iter()
+                .map(|d| d.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
     let data_dir_path = get_data_dir().display().to_string();
 
     format!(

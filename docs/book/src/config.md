@@ -9,17 +9,32 @@ config.
 
 ## Where the config lives
 
-bee-tui looks for `config.toml` in this order, taking the
-first hit:
+bee-tui searches an ordered list of **directories** for a
+`config.toml` (or `config.json5` / `.json` / `.yaml` / `.ini`),
+taking the first directory that has one:
 
-1. The path in the `BEE_TUI_CONFIG` environment variable, if set
-2. `$XDG_CONFIG_HOME/bee-tui/config.toml`
-3. `~/.config/bee-tui/config.toml`
+1. `$BEE_TUI_CONFIG`, if set — **a directory**, not a file path;
+   bee-tui looks for `config.toml` *inside* it.
+2. `~/.config/bee-tui/` — **on every platform**, including macOS
+   and Windows.
+3. The platform-native config directory:
+   - **Linux**: `$XDG_CONFIG_HOME/bee-tui/` (i.e. `~/.config/bee-tui/`)
+   - **macOS**: `~/Library/Application Support/com.ethswarm-tools.bee-tui/`
+   - **Windows**: `%APPDATA%\com.ethswarm-tools\bee-tui\`
 4. (built-in default — single `local` node, no token)
+
+> **macOS / Windows.** Entry 2 means you can keep your config at
+> `~/.config/bee-tui/config.toml` like a Linux user — you do not
+> need to touch the platform-native path. (Before v1.15.1 only
+> the platform-native directory was searched.)
+
+`bee-tui --version` prints the directory a config was actually
+loaded from — or, if none was found, every directory it searched.
+That's the fastest way to confirm where to put the file.
 
 The directory does **not** need to exist before launch;
 bee-tui only reads, never writes. Create it yourself the
-first time:
+first time — this works on every platform:
 
 ```sh
 mkdir -p ~/.config/bee-tui
