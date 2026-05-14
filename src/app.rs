@@ -847,6 +847,9 @@ pub struct AppOverrides {
     pub ascii: bool,
     /// Force the mono palette.
     pub no_color: bool,
+    /// `--config` CLI override — load this exact config file instead
+    /// of searching the standard directories.
+    pub config_file: Option<PathBuf>,
     /// `--bee-bin` CLI override.
     pub bee_bin: Option<PathBuf>,
     /// `--bee-config` CLI override.
@@ -938,7 +941,7 @@ impl App {
         let (durability_tx, durability_rx) = mpsc::unbounded_channel();
         let (feed_timeline_tx, feed_timeline_rx) = mpsc::unbounded_channel();
         let (pubsub_msg_tx, pubsub_msg_rx) = mpsc::unbounded_channel();
-        let config = Config::new()?;
+        let config = Config::load(overrides.config_file.as_deref())?;
 
         // Optional pubsub history-file writer. Failures here aren't
         // fatal — the live tail keeps working without persistence —

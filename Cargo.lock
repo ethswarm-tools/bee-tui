@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "bee-tui"
-version = "1.15.1"
+version = "1.15.2"
 dependencies = [
  "anyhow",
  "bee-rs",

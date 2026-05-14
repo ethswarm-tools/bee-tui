@@ -9,9 +9,22 @@ config.
 
 ## Where the config lives
 
-bee-tui searches an ordered list of **directories** for a
-`config.toml` (or `config.json5` / `.json` / `.yaml` / `.ini`),
-taking the first directory that has one:
+The fastest way to load a specific file is the `--config` flag
+(v1.15.2+) — it points **straight at the file**, no directory
+search, no fixed file name:
+
+```sh
+bee-tui --config ~/work/bee-nodes.toml
+bee-tui --config ./staging.yaml --once readiness   # also works in --once mode
+```
+
+The file must exist and end in a recognised extension (`.toml`,
+`.json5`, `.json`, `.yaml` / `.yml`, `.ini`); bee-tui errors out
+cleanly if it doesn't, rather than silently falling back.
+
+Without `--config`, bee-tui searches an ordered list of
+**directories** for a `config.toml` (or `config.json5` / `.json`
+/ `.yaml` / `.ini`), taking the first directory that has one:
 
 1. `$BEE_TUI_CONFIG`, if set — **a directory**, not a file path;
    bee-tui looks for `config.toml` *inside* it.

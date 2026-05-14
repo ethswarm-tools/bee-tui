@@ -3,7 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     env,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -579,7 +579,17 @@ lazy_static! {
 }
 
 impl Config {
+    /// Load config from the standard directory search path
+    /// (see [`config_search_dirs`]).
     pub fn new() -> color_eyre::Result<Self, config::ConfigError> {
+        Self::load(None)
+    }
+
+    /// Load config. When `explicit_file` is `Some`, that exact file is
+    /// loaded — it must exist and have a recognised extension, and the
+    /// directory search is skipped entirely. This backs the `--config`
+    /// CLI flag. When `None`, the standard search path is used.
+    pub fn load(explicit_file: Option<&Path>) -> color_eyre::Result<Self, config::ConfigError> {
         let default_config: Config = json5::from_str(CONFIG).unwrap();
         let data_dir = get_data_dir();
         let config_dir = get_config_dir();
@@ -587,28 +597,50 @@ impl Config {
             .set_default("data_dir", data_dir.to_str().unwrap())?
             .set_default("config_dir", config_dir.to_str().unwrap())?;
 
-        let search_dirs = config_search_dirs();
-        let mut found_config = false;
-        'search: for dir in &search_dirs {
-            for (file, format) in &CONFIG_FILE_CANDIDATES {
-                let path = dir.join(file);
-                if path.exists() {
-                    builder = builder
-                        .add_source(config::File::from(path).format(*format).required(false));
-                    found_config = true;
-                    break 'search;
+        if let Some(file) = explicit_file {
+            let format = format_from_extension(file).ok_or_else(|| {
+                config::ConfigError::Message(format!(
+                    "unrecognised config file extension for {} — expected one of: \
+                     toml, json5, json, yaml, yml, ini",
+                    file.display()
+                ))
+            })?;
+            if !file.exists() {
+                return Err(config::ConfigError::Message(format!(
+                    "config file not found: {}",
+                    file.display()
+                )));
+            }
+            builder = builder.add_source(
+                config::File::from(file.to_path_buf())
+                    .format(format)
+                    .required(true),
+            );
+        } else {
+            let search_dirs = config_search_dirs();
+            let mut found_config = false;
+            'search: for dir in &search_dirs {
+                for (file, format) in &CONFIG_FILE_CANDIDATES {
+                    let path = dir.join(file);
+                    if path.exists() {
+                        builder = builder
+                            .add_source(config::File::from(path).format(*format).required(false));
+                        found_config = true;
+                        break 'search;
+                    }
                 }
             }
-        }
-        if !found_config {
-            error!(
-                "No configuration file found. Searched: {}. Application may not behave as expected",
-                search_dirs
-                    .iter()
-                    .map(|d| d.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
+            if !found_config {
+                error!(
+                    "No configuration file found. Searched: {}. \
+                     Application may not behave as expected",
+                    search_dirs
+                        .iter()
+                        .map(|d| d.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
         }
 
         let mut cfg: Self = builder.build()?.try_deserialize()?;
@@ -651,6 +683,26 @@ const CONFIG_FILE_CANDIDATES: [(&str, config::FileFormat); 5] = [
     ("config.toml", config::FileFormat::Toml),
     ("config.ini", config::FileFormat::Ini),
 ];
+
+/// Map a config file path to its [`config::FileFormat`] by extension.
+/// Returns `None` for an unrecognised or missing extension. Backs the
+/// `--config <file>` flag, which (unlike the directory search) has no
+/// fixed file name to key the format off.
+fn format_from_extension(path: &Path) -> Option<config::FileFormat> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "toml" => Some(config::FileFormat::Toml),
+        "json5" => Some(config::FileFormat::Json5),
+        "json" => Some(config::FileFormat::Json),
+        "yaml" | "yml" => Some(config::FileFormat::Yaml),
+        "ini" => Some(config::FileFormat::Ini),
+        _ => None,
+    }
+}
 
 /// The platform-native config directory: XDG on Linux, `Application
 /// Support` on macOS, Known Folders on Windows. Last-resort entry in
@@ -1063,6 +1115,33 @@ mod tests {
                 PathBuf::from("/c"),
             ]
         );
+    }
+
+    #[test]
+    fn format_from_extension_maps_known_extensions() {
+        use config::FileFormat;
+        assert_eq!(
+            format_from_extension(Path::new("a/b/config.toml")),
+            Some(FileFormat::Toml)
+        );
+        assert_eq!(
+            format_from_extension(Path::new("nodes.JSON5")),
+            Some(FileFormat::Json5)
+        );
+        assert_eq!(
+            format_from_extension(Path::new("nodes.yml")),
+            Some(FileFormat::Yaml)
+        );
+        assert_eq!(
+            format_from_extension(Path::new("nodes.yaml")),
+            Some(FileFormat::Yaml)
+        );
+        assert_eq!(
+            format_from_extension(Path::new("nodes.ini")),
+            Some(FileFormat::Ini)
+        );
+        assert_eq!(format_from_extension(Path::new("nodes.conf")), None);
+        assert_eq!(format_from_extension(Path::new("nodes")), None);
     }
 
     #[test]

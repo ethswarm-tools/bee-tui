@@ -25,8 +25,9 @@
 //! pipelines without parsing TUI output. `bee-tui --once readiness`
 //! is the canonical "is my Bee node ready for traffic?" smoke test.
 
+use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -116,10 +117,26 @@ impl OnceResult {
     }
 }
 
+/// `--config <file>` override for `--once` mode. Set once at the top
+/// of [`run`]; read by [`load_config`]. A process-global is fine here:
+/// `--once` runs a single verb and exits.
+static CONFIG_OVERRIDE: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Load config for a `--once` verb, honouring the `--config` override.
+fn load_config() -> color_eyre::Result<Config, config::ConfigError> {
+    Config::load(CONFIG_OVERRIDE.get().and_then(|o| o.as_deref()))
+}
+
 /// Top-level entrypoint for `--once`. Fetches what the chosen verb
 /// needs (or nothing for pure-local ones), runs the verb, prints
 /// the result, returns the exit code.
-pub async fn run(verb: &str, args: &[String], json_output: bool) -> ExitCode {
+pub async fn run(
+    verb: &str,
+    args: &[String],
+    json_output: bool,
+    config_file: Option<PathBuf>,
+) -> ExitCode {
+    let _ = CONFIG_OVERRIDE.set(config_file);
     let result = dispatch(verb, args).await;
     print_result(&result, json_output);
     result.status.exit_code()
@@ -254,7 +271,7 @@ fn once_gsoc_mine(args: &[String]) -> OnceResult {
 /// Returns the friendly UsageError for callers to surface when the
 /// config is missing.
 fn build_api() -> Result<Arc<ApiClient>, OnceResult> {
-    let config = match Config::new() {
+    let config = match load_config() {
         Ok(c) => c,
         Err(e) => {
             return Err(OnceResult::usage(
@@ -1027,7 +1044,7 @@ async fn once_price() -> OnceResult {
 /// on success — gas fluctuates, gating CI on a threshold should
 /// happen at the workflow level.
 async fn once_basefee() -> OnceResult {
-    let url = match Config::new().ok().and_then(|c| c.economics.gnosis_rpc_url) {
+    let url = match load_config().ok().and_then(|c| c.economics.gnosis_rpc_url) {
         Some(u) => u,
         None => {
             return OnceResult::usage("basefee", "set [economics].gnosis_rpc_url in config.toml");
@@ -1055,7 +1072,7 @@ async fn once_basefee() -> OnceResult {
 fn once_config_doctor(args: &[String]) -> OnceResult {
     let path: std::path::PathBuf = match args.first() {
         Some(p) => std::path::PathBuf::from(p),
-        None => match Config::new().ok().and_then(|c| c.bee.map(|b| b.config)) {
+        None => match load_config().ok().and_then(|c| c.bee.map(|b| b.config)) {
             Some(p) => p,
             None => {
                 return OnceResult::usage(

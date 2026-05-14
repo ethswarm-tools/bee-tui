@@ -29,6 +29,15 @@ pub struct Cli {
     #[arg(long)]
     pub no_color: bool,
 
+    /// Path to a config **file** to load, bypassing the directory
+    /// search entirely. Unlike `BEE_TUI_CONFIG` (which is a
+    /// *directory* bee-tui looks inside), this points straight at the
+    /// file: `bee-tui --config ./my-nodes.toml`. The file must exist
+    /// and end in a recognised extension — `.toml`, `.json5`, `.json`,
+    /// `.yaml` / `.yml`, or `.ini`.
+    #[arg(short = 'c', long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
     /// Path to a `bee` binary to spawn before opening the cockpit.
     /// When set together with `--bee-config`, bee-tui starts Bee as
     /// a child process, captures its log into a temp file, waits for

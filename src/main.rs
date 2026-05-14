@@ -18,7 +18,7 @@ async fn main() -> color_eyre::Result<ExitCode> {
     // emit only its single line of stdout so shell pipelines can
     // grep cleanly without filtering log noise.
     if let Some(verb) = args.once.as_deref() {
-        let code = bee_tui::once::run(verb, &args.once_args, args.json).await;
+        let code = bee_tui::once::run(verb, &args.once_args, args.json, args.config.clone()).await;
         return Ok(code);
     }
 
@@ -29,6 +29,7 @@ async fn main() -> color_eyre::Result<ExitCode> {
         AppOverrides {
             ascii: args.ascii,
             no_color: args.no_color,
+            config_file: args.config,
             bee_bin: args.bee_bin,
             bee_config: args.bee_config,
             bee_log: args.bee_log,

@@ -11,6 +11,19 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.15.2] - 2026-05-14
+
+### Added
+
+- **`--config <file>` CLI flag.** Points bee-tui straight at a
+  config *file*, bypassing the directory search entirely — unlike
+  `BEE_TUI_CONFIG`, which is a *directory* bee-tui looks inside.
+  The file must exist and end in a recognised extension (`.toml`,
+  `.json5`, `.json`, `.yaml` / `.yml`, `.ini`); a missing file or
+  unknown extension fails fast with a clear message instead of
+  silently falling back to the search path. Works in `--once`
+  mode too (`bee-tui --config ./staging.toml --once readiness`).
+
 ## [1.15.1] - 2026-05-14
 
 Config-discovery quality-of-life patch, driven by macOS testing.

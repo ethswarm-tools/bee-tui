@@ -76,8 +76,11 @@ Point bee-tui at a running Bee node:
 # Default config talks to http://localhost:1633
 bee-tui
 
-# Or point at a remote node via env
-BEE_TUI_CONFIG=~/.config/bee-tui/config.toml bee-tui
+# Point at a specific config file (v1.15.2+) — straight at the file
+bee-tui --config ~/work/bee-nodes.toml
+
+# Or set the config *directory* via env (BEE_TUI_CONFIG is a dir, not a file)
+BEE_TUI_CONFIG=~/.config/bee-tui bee-tui
 
 # Force ASCII glyphs (Windows Terminal pre-Win11, screen readers, broken SSH chains)
 bee-tui --ascii
