@@ -204,6 +204,11 @@ pub struct LogPane {
     /// they type (without re-committing on every keystroke).
     /// Committed into `filter` on Enter.
     filter_prompt: Option<String>,
+    /// Operator-facing explanation shown on the empty Bee-side tabs
+    /// when log auto-discovery found a local Bee but *can't* capture
+    /// its log (e.g. it logs to a bare terminal). `None` falls back
+    /// to the generic "no bee log source" placeholder.
+    log_source_hint: Option<String>,
 }
 
 impl LogPane {
@@ -221,6 +226,7 @@ impl LogPane {
             h_scroll_offset: 0,
             filter: None,
             filter_prompt: None,
+            log_source_hint: None,
         }
     }
 
@@ -245,6 +251,14 @@ impl LogPane {
     /// log line)"). Called once at startup; cheap to call repeatedly.
     pub fn set_spawn_active(&mut self, active: bool) {
         self.spawn_active = active;
+    }
+
+    /// Set the operator-facing hint shown on empty Bee-side tabs when
+    /// a local Bee was found but its log can't be captured. `None`
+    /// clears it (back to the generic placeholder). Set by `App` from
+    /// log auto-discovery at startup and on every `:context` switch.
+    pub fn set_log_source_hint(&mut self, hint: Option<String>) {
+        self.log_source_hint = hint;
     }
 
     /// Cycle to the next tab (left → right, wrapping). Returns the
@@ -504,7 +518,13 @@ impl Component for LogPane {
         let raw_lines: Vec<Line> = match active {
             LogTab::SelfHttp => render_self_http(&self.self_http_entries, t),
             LogTab::Cockpit => render_cockpit(&self.cockpit_entries, t),
-            tab => render_bee_tab(&self.bee_buffers, tab, self.spawn_active, t),
+            tab => render_bee_tab(
+                &self.bee_buffers,
+                tab,
+                self.spawn_active,
+                self.log_source_hint.as_deref(),
+                t,
+            ),
         };
         let filter_active = self.filter.as_deref();
         let lines: Vec<Line> = match filter_active {
@@ -557,7 +577,13 @@ impl Component for LogPane {
             let preview_lines: Vec<Line> = match active {
                 LogTab::SelfHttp => render_self_http(&self.self_http_entries, t),
                 LogTab::Cockpit => render_cockpit(&self.cockpit_entries, t),
-                tab => render_bee_tab(&self.bee_buffers, tab, self.spawn_active, t),
+                tab => render_bee_tab(
+                    &self.bee_buffers,
+                    tab,
+                    self.spawn_active,
+                    self.log_source_hint.as_deref(),
+                    t,
+                ),
             };
             let preview_matches = if buf.trim().is_empty() {
                 preview_lines.len()
@@ -567,18 +593,14 @@ impl Component for LogPane {
             let prompt_line = Line::from(vec![
                 Span::styled(
                     "  /",
-                    Style::default()
-                        .fg(t.accent)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(buf, Style::default().fg(t.info)),
                 Span::styled("_", Style::default().fg(t.dim)),
                 Span::raw("   "),
                 Span::styled(
                     format!("{preview_matches} matches · Enter commits · Esc cancels"),
-                    Style::default()
-                        .fg(t.dim)
-                        .add_modifier(Modifier::ITALIC),
+                    Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
                 ),
             ]);
             frame.render_widget(Paragraph::new(prompt_line), chunks[0]);
@@ -701,9 +723,7 @@ fn tab_title_line<'a>(
         let count = filter_match_count.unwrap_or(0);
         spans.push(Span::styled(
             format!(" /{q} · {count} matches "),
-            Style::default()
-                .fg(t.info)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(t.info).add_modifier(Modifier::BOLD),
         ));
     }
     Line::from(spans)
@@ -784,6 +804,7 @@ fn render_bee_tab<'a>(
     bufs: &'a BeeLogBuffers,
     tab: LogTab,
     spawn_active: bool,
+    log_source_hint: Option<&str>,
     t: &theme::Theme,
 ) -> Vec<Line<'a>> {
     let buf = match bufs.buffer_for(tab) {
@@ -791,14 +812,34 @@ fn render_bee_tab<'a>(
         None => return Vec::new(),
     };
     if buf.is_empty() {
-        let msg = if spawn_active {
-            "  (awaiting bee log entries on this severity…)"
-        } else {
-            "  (no bee child — set [bee] in config or pass --bee-bin / --bee-config)"
-        };
+        let dim = Style::default().fg(t.dim).add_modifier(Modifier::ITALIC);
+        if spawn_active {
+            return vec![Line::from(Span::styled(
+                "  (awaiting bee log entries on this severity…)",
+                dim,
+            ))];
+        }
+        if let Some(hint) = log_source_hint {
+            // Auto-discovery found a local Bee it can't tail — show
+            // the explanation, one sentence per line so it stays
+            // readable in the narrow pane.
+            let head = Style::default().fg(t.warn).add_modifier(Modifier::BOLD);
+            let mut lines = vec![Line::from(Span::styled(
+                "  log auto-discovery — can't capture this Bee's log:",
+                head,
+            ))];
+            for sentence in hint.split_inclusive(". ") {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", sentence.trim()),
+                    dim,
+                )));
+            }
+            return lines;
+        }
         return vec![Line::from(Span::styled(
-            msg,
-            Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
+            "  (no bee log source — spawn Bee via [bee] / --bee-bin, or tail an \
+             external Bee with [[nodes]].log_file / log_command)",
+            dim,
         ))];
     }
     buf.iter()

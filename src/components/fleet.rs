@@ -92,7 +92,10 @@ impl Fleet {
     /// Name of the row the cursor is on, used by App to drive
     /// Enter-to-switch.
     pub fn selected_name(&self) -> Option<String> {
-        self.snapshot.rows.get(self.selected).map(|r| r.name.clone())
+        self.snapshot
+            .rows
+            .get(self.selected)
+            .map(|r| r.name.clone())
     }
 
     pub fn cursor_down(&mut self) {
@@ -147,10 +150,7 @@ fn row_view(r: &FleetRow, active_name: &str) -> FleetRowView {
         FleetStatus::Fail => "fail".into(),
         FleetStatus::Unknown => "…loading".into(),
     };
-    let peers_label = r
-        .peers
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "—".into());
+    let peers_label = r.peers.map(|p| p.to_string()).unwrap_or_else(|| "—".into());
     let ttl_label = r
         .worst_ttl_secs
         .map(format_ttl)
@@ -277,11 +277,7 @@ impl Component for Fleet {
             lines.push(Line::from(vec![
                 Span::styled(cursor.to_string(), row_style),
                 Span::styled(
-                    format!(
-                        "{:<14} {:<42} ",
-                        truncate(&name_col, 14),
-                        url_col,
-                    ),
+                    format!("{:<14} {:<42} ", truncate(&name_col, 14), url_col,),
                     row_style,
                 ),
                 Span::styled(
@@ -293,7 +289,10 @@ impl Component for Fleet {
                     },
                 ),
                 Span::styled(
-                    format!(" {:>6} {:>10} {:>8}", row.peers_label, row.ttl_label, row.ping_label),
+                    format!(
+                        " {:>6} {:>10} {:>8}",
+                        row.peers_label, row.ttl_label, row.ping_label
+                    ),
                     row_style,
                 ),
             ]));
@@ -302,9 +301,7 @@ impl Component for Fleet {
                     Span::raw("      "),
                     Span::styled(
                         format!("└─ {why}"),
-                        Style::default()
-                            .fg(t.dim)
-                            .add_modifier(Modifier::ITALIC),
+                        Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
                     ),
                 ]));
             }

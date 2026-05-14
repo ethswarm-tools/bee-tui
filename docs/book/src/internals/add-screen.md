@@ -236,7 +236,7 @@ fn build_screens(
     watch: &BeeWatch,
     market_rx: Option<watch::Receiver<crate::economics_oracle::EconomicsSnapshot>>,
 ) -> Vec<Box<dyn Component>> {
-    // ...existing 14 screens...
+    // ...existing 15 screens...
     let settlements_forensics = SettlementsForensics::new(
         watch.settlements_forensics(),
     );

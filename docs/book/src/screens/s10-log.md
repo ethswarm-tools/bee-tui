@@ -201,9 +201,18 @@ reading the OpenAPI spec.
 - **Internal state changes** — only HTTP calls. The
   cockpit's own snapshot diffs / cache invalidations don't
   appear here.
-- **Bee server logs** — these are Bee's internal logs, not
-  cockpit logs. Use `journalctl -u bee` or whatever your
-  Bee deployment uses.
+- **Bee server logs (on the `bee::http` tab)** — that tab is
+  bee-tui's *own* outbound HTTP calls. Bee's own log output
+  shows up on the **Errors / Warn / Info / Debug / Bee HTTP**
+  tabs instead — when bee-tui has a log source. As of v1.15
+  that's usually automatic for a local node: bee-tui spawned
+  Bee (`[bee]` / `--bee-bin`), or auto-discovery found the
+  local Bee process and tailed its log file / systemd journal /
+  docker logs, or you set `[[nodes]].log_file` / `log_command`
+  (or `--bee-log` / `--bee-log-cmd`) explicitly. When the tabs
+  *are* empty, the placeholder says why — including the
+  actionable case where a local Bee logs to a bare terminal
+  that can't be captured.
 
 ## Cadence
 

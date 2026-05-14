@@ -181,6 +181,9 @@ most recent 200 alert transitions the cockpit has observed, newest
 first. Same source as the toast overlay (and the optional
 webhook / desktop notification sinks): every gate transition (S1
 health gates + S15 fleet rows) becomes one entry, severity-coloured.
+A problem that was *already* true at launch (a batch already near
+expiry) is surfaced too, as an "at startup" entry — the overlay
+isn't blind to pre-existing state (v1.15+).
 
 | Key | Effect |
 |---|---|
@@ -191,6 +194,12 @@ ingested. They auto-dismiss after `[notifications].toast_seconds`
 (default 8 s) and are capped at 3 visible at once. Disable them by
 setting `[notifications].toast_enabled = false` in `config.toml` —
 the history overlay still works.
+
+Because toasts auto-dismiss, the top-bar awareness row also carries
+a **`notif N` chip** (v1.15+) — a persistent, warn-coloured count of
+notifications that have arrived since you last opened the history.
+It's hidden at zero and cleared to zero the moment you open the
+overlay, so it doubles as your "have I seen everything?" indicator.
 
 ## The help overlay
 

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -13,6 +13,7 @@ use tracing::{debug, info};
 use crate::{
     action::Action,
     api::ApiClient,
+    bee_log_discover::{self, BeeLogSource, DiscoveryResult},
     bee_supervisor::{BeeStatus, BeeSupervisor},
     components::{
         Component,
@@ -109,9 +110,16 @@ pub struct App {
     /// of the crash-handling spec — show, don't auto-restart).
     bee_status: BeeStatus,
     /// Receiver paired with the bee-log tailer task. `None` when
-    /// the cockpit isn't acting as the supervisor (no log file to
-    /// tail). Drained on each Tick into the LogPane.
+    /// there is no log source — not the supervisor, and the active
+    /// node has no `log_file`. Drained on each Tick into the LogPane.
     bee_log_rx: Option<mpsc::UnboundedReceiver<(LogTab, BeeLogLine)>>,
+    /// Cancellation handle for the *external* bee-log tailer (the
+    /// one following a configured `[[nodes]].log_file`). `Some` only
+    /// in external-tail mode; `switch_context` cancels it and spawns
+    /// a fresh tailer for the new node. The supervisor's own tailer
+    /// is not tracked here — it lives for the whole session under
+    /// `root_cancel`.
+    bee_log_tailer_cancel: Option<CancellationToken>,
     /// Channel for async-completing `:command` results. Verbs that
     /// can't return their answer synchronously (e.g. `:probe-upload`
     /// which has to wait on an HTTP round-trip) hand a clone of the
@@ -281,10 +289,8 @@ impl FleetAggregator {
             // Worth-alerting filter:
             let interesting = matches!(
                 (prev, row.status),
-                (
-                    FleetStatus::Pass,
-                    FleetStatus::Warn | FleetStatus::Fail,
-                ) | (FleetStatus::Warn, FleetStatus::Fail)
+                (FleetStatus::Pass, FleetStatus::Warn | FleetStatus::Fail,)
+                    | (FleetStatus::Warn, FleetStatus::Fail)
                     | (FleetStatus::Fail, FleetStatus::Pass | FleetStatus::Warn)
                     | (FleetStatus::Warn, FleetStatus::Pass)
             );
@@ -359,10 +365,7 @@ impl FleetAggregator {
         if recovered_count > 0 {
             headline_parts.push(format!("{recovered_count} recovered"));
         }
-        lines.push(format!(
-            "Fleet alert: {}",
-            headline_parts.join(" · ")
-        ));
+        lines.push(format!("Fleet alert: {}", headline_parts.join(" · ")));
         for e in entries {
             let arrow = format!("{:?} → {:?}", e.from, e.to);
             if let Some(why) = &e.why {
@@ -804,6 +807,32 @@ fn filter_command_suggestions<'a>(
         .collect()
 }
 
+/// Resolve the line to execute when Enter is pressed in the command
+/// bar. If a suggestion is highlighted in the filtered picker, the
+/// line is that suggestion's name plus any args typed after the
+/// first token — so arrowing the picker and pressing Enter runs the
+/// *selected* command, not the half-typed prefix in the buffer.
+/// When nothing matches, the raw buffer is returned unchanged so
+/// `execute_command` can report it as an unknown command. Pure for
+/// testability.
+fn resolve_command_line(buffer: &str, suggestion_index: usize) -> String {
+    let matches = filter_command_suggestions(buffer, KNOWN_COMMANDS);
+    match matches.get(suggestion_index) {
+        Some((name, _)) => {
+            let rest = buffer
+                .split_once(char::is_whitespace)
+                .map(|(_, tail)| tail)
+                .unwrap_or("");
+            if rest.is_empty() {
+                (*name).to_string()
+            } else {
+                format!("{name} {rest}")
+            }
+        }
+        None => buffer.to_string(),
+    }
+}
+
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
     #[default]
@@ -822,6 +851,15 @@ pub struct AppOverrides {
     pub bee_bin: Option<PathBuf>,
     /// `--bee-config` CLI override.
     pub bee_config: Option<PathBuf>,
+    /// `--bee-log` CLI override — tail this external Bee log file.
+    /// Applies to the active node at startup; overrides that node's
+    /// `[[nodes]].log_file`. Ignored when `bee_bin` is set.
+    pub bee_log: Option<PathBuf>,
+    /// `--bee-log-cmd` CLI override — tail the stdout of this shell
+    /// command for the active node at startup. Overrides that node's
+    /// `[[nodes]].log_command`, and takes precedence over `bee_log`.
+    /// Ignored when `bee_bin` is set.
+    pub bee_log_cmd: Option<String>,
 }
 
 /// Default timeout for waiting on `/health` after spawning Bee.
@@ -829,6 +867,57 @@ pub struct AppOverrides {
 /// budget here saves the operator from one false "didn't come up"
 /// alarm. Override later via config if needed.
 const BEE_API_READY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Pick the external bee-log source for a node. CLI overrides
+/// (startup-only) win over the node's `[[nodes]]` config; within
+/// each tier a command beats a file. `None` means no source — the
+/// Bee-side log tabs stay empty for this node.
+fn resolve_bee_log_source(
+    cli_cmd: Option<&str>,
+    cli_file: Option<&Path>,
+    node_cmd: Option<&str>,
+    node_file: Option<&Path>,
+) -> Option<BeeLogSource> {
+    if let Some(c) = cli_cmd {
+        return Some(BeeLogSource::Command(c.to_string()));
+    }
+    if let Some(f) = cli_file {
+        return Some(BeeLogSource::File(f.to_path_buf()));
+    }
+    if let Some(c) = node_cmd {
+        return Some(BeeLogSource::Command(c.to_string()));
+    }
+    if let Some(f) = node_file {
+        return Some(BeeLogSource::File(f.to_path_buf()));
+    }
+    None
+}
+
+/// Spawn the right tailer for a resolved [`BeeLogSource`] under a
+/// child of `root_cancel`. Returns the receiver the App drains every
+/// Tick plus the cancel token `switch_context` uses to stop this
+/// tailer before re-pointing at the next node.
+fn spawn_bee_log_tailer(
+    source: BeeLogSource,
+    root_cancel: &CancellationToken,
+) -> (
+    mpsc::UnboundedReceiver<(LogTab, BeeLogLine)>,
+    CancellationToken,
+) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let cancel = root_cancel.child_token();
+    match source {
+        BeeLogSource::File(path) => {
+            // External file: tail from EOF — it pre-exists and may
+            // be huge, so replaying from byte 0 would flood the pane.
+            crate::bee_log_tailer::spawn(path, tx, cancel.clone(), true);
+        }
+        BeeLogSource::Command(cmd) => {
+            crate::bee_log_tailer::spawn_command(cmd, tx, cancel.clone());
+        }
+    }
+    (rx, cancel)
+}
 
 impl App {
     pub async fn new(tick_rate: f64, frame_rate: f64) -> color_eyre::Result<Self> {
@@ -879,6 +968,12 @@ impl App {
             .active_node()
             .ok_or_else(|| eyre!("no Bee node configured (config.nodes is empty)"))?;
         let api = Arc::new(ApiClient::from_node(node)?);
+        // The active node's declarative log source (file path +
+        // command), captured before the `node` borrow ends. Feeds the
+        // bee-log tailer when bee-tui connects to an external
+        // (un-supervised) Bee.
+        let active_node_log_file = node.log_file.clone();
+        let active_node_log_command = node.log_command.clone();
 
         // Resolve the bee paths: CLI flags > [bee] config block > unset.
         let bee_bin = overrides
@@ -996,25 +1091,82 @@ impl App {
             initial_tab,
             persisted.log_pane_height,
         );
-        log_pane.set_spawn_active(supervisor.is_some());
         if let Some(c) = log_capture::cockpit_handle() {
             log_pane.set_cockpit_capture(c);
         }
 
-        // Spawn the bee-log tailer if we own the supervisor. The
-        // tailer parses each new line of the captured Bee log and
-        // forwards `(LogTab, BeeLogLine)` pairs down an mpsc the
-        // App drains every Tick. Inherits root_cancel so quit
-        // unwinds it the same way as every other spawned task.
-        let bee_log_rx = supervisor.as_ref().map(|sup| {
+        // Resolve where the Bee-side log tabs get their content.
+        // Skipped in supervisor mode (the supervised child's captured
+        // log is tailed instead). Otherwise: explicit config wins
+        // (`--bee-log-cmd` / `--bee-log` / `[[nodes]].log_command` /
+        // `log_file`); failing that, auto-discovery inspects the
+        // local Bee process via `/proc` to find where its stdout
+        // goes. A `log_source_hint` carries the operator-facing
+        // explanation when a local Bee was found but its log can't
+        // be captured (e.g. it logs to a bare terminal).
+        let (external_log_source, log_source_hint) = if supervisor.is_some() {
+            (None, None)
+        } else {
+            match resolve_bee_log_source(
+                overrides.bee_log_cmd.as_deref(),
+                overrides.bee_log.as_deref(),
+                active_node_log_command.as_deref(),
+                active_node_log_file.as_deref(),
+            ) {
+                Some(src) => (Some(src), None),
+                None => match bee_log_discover::discover(&api.url) {
+                    DiscoveryResult::Found(src) => (Some(src), None),
+                    DiscoveryResult::Unsupported(msg) => (None, Some(msg)),
+                    DiscoveryResult::NotApplicable => (None, None),
+                },
+            }
+        };
+        // The Bee-side log tabs have a real source whenever either a
+        // supervisor or an external tailer is wired up — drives the
+        // placeholder text ("awaiting…" vs. "no bee log source").
+        log_pane.set_spawn_active(supervisor.is_some() || external_log_source.is_some());
+        // Surface the outcome on the Cockpit log tab (and thus in
+        // `:diagnose` bundles) so it's traceable without watching
+        // the Bee-side placeholder.
+        match &external_log_source {
+            Some(BeeLogSource::File(p)) => {
+                tracing::info!("bee log: tailing file {}", p.display())
+            }
+            Some(BeeLogSource::Command(c)) => {
+                tracing::info!("bee log: tailing command `{c}`")
+            }
+            None => {}
+        }
+        if let Some(hint) = &log_source_hint {
+            tracing::warn!("bee log auto-discovery: {hint}");
+        }
+        log_pane.set_log_source_hint(log_source_hint);
+
+        // Spawn the bee-log tailer. Two mutually-exclusive cases:
+        //   - supervisor mode: tail the captured child log from
+        //     byte 0 (fresh file — we want Bee's startup logs).
+        //   - external mode: tail a configured file (from EOF) or a
+        //     command's stdout — see `spawn_bee_log_tailer`.
+        // The tailer forwards `(LogTab, BeeLogLine)` pairs down an
+        // mpsc the App drains every Tick. `bee_log_tailer_cancel` is
+        // retained only for the external case so `switch_context`
+        // can stop + re-spawn it for the new node; the supervisor's
+        // tailer lives for the whole session under `root_cancel`.
+        let (bee_log_rx, bee_log_tailer_cancel) = if let Some(sup) = supervisor.as_ref() {
             let (tx, rx) = mpsc::unbounded_channel();
             crate::bee_log_tailer::spawn(
                 sup.log_path().to_path_buf(),
                 tx,
                 root_cancel.child_token(),
+                false,
             );
-            rx
-        });
+            (Some(rx), None)
+        } else if let Some(source) = external_log_source {
+            let (rx, cancel) = spawn_bee_log_tailer(source, &root_cancel);
+            (Some(rx), Some(cancel))
+        } else {
+            (None, None)
+        };
 
         // Optional Prometheus `/metrics` endpoint. Off by default;
         // when `[metrics].enabled = true` we spawn the server under
@@ -1077,6 +1229,7 @@ impl App {
             supervisor,
             bee_status: BeeStatus::Running,
             bee_log_rx,
+            bee_log_tailer_cancel,
             cmd_status_tx,
             cmd_status_rx,
             durability_tx,
@@ -1191,9 +1344,33 @@ impl App {
         // so screens keep refreshing under modals.
         let propagate = !((modal_before || modal_after) && matches!(event, Event::Key(_)));
         if propagate {
-            for component in self.iter_components_mut() {
-                if let Some(action) = component.handle_events(Some(event.clone()))? {
-                    action_tx.send(action)?;
+            match event {
+                // Key events reach ONLY the active screen. Delivering
+                // them to every screen let a *background* screen act
+                // on a keystroke meant for the foreground one — most
+                // visibly, S15 Fleet's `Enter` → switch-context
+                // binding fired on *every* Enter (drilling a peer on
+                // S6, expanding a manifest fork on S11, …), which
+                // rebuilt all screens and discarded the action the
+                // operator actually wanted. Per-screen keymaps are
+                // inherently about the screen the operator is looking
+                // at, so this is also just correct.
+                Event::Key(_) => {
+                    if let Some(screen) = self.screens.get_mut(self.current_screen) {
+                        if let Some(action) = screen.handle_events(Some(event))? {
+                            action_tx.send(action)?;
+                        }
+                    }
+                }
+                // Tick / Render / Resize reach every component so
+                // background screens keep their data fresh and the
+                // log pane keeps ticking.
+                _ => {
+                    for component in self.iter_components_mut() {
+                        if let Some(action) = component.handle_events(Some(event.clone()))? {
+                            action_tx.send(action)?;
+                        }
+                    }
                 }
             }
         }
@@ -1333,6 +1510,9 @@ impl App {
                 == (crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT)
         {
             self.notifications_overlay_visible = true;
+            // Opening the overlay = the operator has now seen
+            // everything; clear the top-bar unread chip.
+            self.notifications.mark_all_read();
             return Ok(());
         }
         // Ctrl-N opens the node-picker overlay (mirrors `:nodes`).
@@ -1594,7 +1774,9 @@ impl App {
                 self.command_suggestion_index = 0;
             }
             KeyCode::Enter => {
-                let line = std::mem::take(buf);
+                // Run the picker's highlighted suggestion, not the
+                // raw buffer — see `resolve_command_line`.
+                let line = resolve_command_line(buf, self.command_suggestion_index);
                 self.command_buffer = None;
                 self.command_suggestion_index = 0;
                 self.execute_command(&line)?;
@@ -1821,6 +2003,7 @@ impl App {
             }
             "notifications" => {
                 self.notifications_overlay_visible = true;
+                self.notifications.mark_all_read();
             }
             "context" | "ctx" => {
                 let target = trimmed.split_whitespace().nth(1).unwrap_or("");
@@ -3197,6 +3380,49 @@ impl App {
         self.watch = new_watch;
         self.health_rx = new_health_rx;
         self.screens = new_screens;
+        // Re-point the external bee-log tailer at the new node's log
+        // source. Skipped entirely when bee-tui owns the supervisor:
+        // the supervised child's log stays relevant no matter which
+        // profile the operator is viewing, so its tailer is left
+        // running. In external mode: cancel the old node's tailer,
+        // then resolve the new node's source — explicit
+        // `log_command` / `log_file` config first, then `/proc`
+        // auto-discovery — and spawn a fresh tailer (or record the
+        // "can't capture" hint). The `--bee-log*` CLI overrides are
+        // startup-only knobs, so `None` is passed for the CLI tier.
+        if self.supervisor.is_none() {
+            if let Some(c) = self.bee_log_tailer_cancel.take() {
+                c.cancel();
+            }
+            let resolved = match resolve_bee_log_source(
+                None,
+                None,
+                node.log_command.as_deref(),
+                node.log_file.as_deref(),
+            ) {
+                Some(src) => DiscoveryResult::Found(src),
+                None => bee_log_discover::discover(&self.api.url),
+            };
+            let hint = match resolved {
+                DiscoveryResult::Found(source) => {
+                    let (rx, cancel) = spawn_bee_log_tailer(source, &self.root_cancel);
+                    self.bee_log_rx = Some(rx);
+                    self.bee_log_tailer_cancel = Some(cancel);
+                    None
+                }
+                DiscoveryResult::Unsupported(msg) => {
+                    self.bee_log_rx = None;
+                    Some(msg)
+                }
+                DiscoveryResult::NotApplicable => {
+                    self.bee_log_rx = None;
+                    None
+                }
+            };
+            self.log_pane
+                .set_spawn_active(self.bee_log_tailer_cancel.is_some());
+            self.log_pane.set_log_source_hint(hint);
+        }
         // Keep the same tab index so the operator stays on the
         // screen they were looking at — same data shape, new node.
         Ok(())
@@ -3536,8 +3762,7 @@ impl App {
                 if self.batch_modal.input_buffer.trim().is_empty() {
                     return;
                 }
-                let committed =
-                    std::mem::take(&mut self.batch_modal.input_buffer);
+                let committed = std::mem::take(&mut self.batch_modal.input_buffer);
                 self.batch_modal.field_inputs.push(committed);
                 // If we filled every field, compute the preview.
                 let action = self.batch_modal.action.expect("phase guard");
@@ -3641,8 +3866,7 @@ impl App {
         // center consumes them immediately (one toast per node
         // transition); the webhook aggregator coalesces them
         // across the window for downstream pings.
-        let new_transitions =
-            self.fleet_aggregator.ingest_snapshot(&snapshot, now);
+        let new_transitions = self.fleet_aggregator.ingest_snapshot(&snapshot, now);
         if new_transitions > 0 {
             // Snapshot just the tail of `pending` we appended this
             // tick — older entries already fired into toasts on
@@ -3658,8 +3882,7 @@ impl App {
                 .collect();
             for entry in new_entries {
                 let severity = severity_from_fleet_entry(entry);
-                let headline =
-                    format!("fleet/{}: {:?} → {:?}", entry.node, entry.from, entry.to);
+                let headline = format!("fleet/{}: {:?} → {:?}", entry.node, entry.from, entry.to);
                 self.notifications.ingest(
                     crate::notifications::Notification {
                         at: now,
@@ -3743,7 +3966,15 @@ impl App {
         let now = Instant::now();
         for alert in &alerts {
             let severity = severity_from_alert(alert);
-            let headline = format!("{}: {:?} → {:?}", alert.gate, alert.from, alert.to);
+            // `Unknown → X` here is a *first observation* of an
+            // already-adverse gate (see `Alert::is_worth_notifying`),
+            // not a live transition — phrase it as a startup snapshot
+            // rather than the misleading "Unknown → Warn".
+            let headline = if alert.from == GateStatus::Unknown {
+                format!("{}: {:?} at startup", alert.gate, alert.to)
+            } else {
+                format!("{}: {:?} → {:?}", alert.gate, alert.from, alert.to)
+            };
             let why = alert.why.clone();
             self.notifications.ingest(
                 crate::notifications::Notification {
@@ -3756,7 +3987,10 @@ impl App {
                 now,
             );
         }
-        // Webhook escalation: only when [alerts].webhook_url is set.
+        // Webhook escalation: only when [alerts].webhook_url is set,
+        // and only for real transitions — `is_worth_alerting` filters
+        // out the initial-adverse "at startup" notifications above so
+        // a cockpit restart doesn't re-spam the channel.
         if let Some(url) = self
             .config
             .alerts
@@ -3765,7 +3999,7 @@ impl App {
             .filter(|u| !u.is_empty())
             .map(|u| u.to_string())
         {
-            for alert in alerts {
+            for alert in alerts.into_iter().filter(|a| a.is_worth_alerting()) {
                 let url = url.clone();
                 tokio::spawn(async move {
                     if let Err(e) = crate::alerts::fire(&url, &alert).await {
@@ -3959,6 +4193,10 @@ impl App {
             .webhook_url
             .as_deref()
             .is_some_and(|u| !u.is_empty());
+        // Unread-notification count — the persistent, glanceable cue
+        // a toast can't be (toasts auto-dismiss). Cleared to 0 when
+        // the operator opens the `Ctrl+Alt+N` history overlay.
+        let unread_notifs = self.notifications.unread_count();
         // Node picker overlay state — clamp the cursor every render
         // so a config reload that shrunk `nodes` can't leave it
         // pointing past the end.
@@ -4005,10 +4243,10 @@ impl App {
             // the operator never loses sight of context or input.
             let chunks = if log_fullscreen {
                 Layout::vertical([
-                    Constraint::Length(2),  // top-bar (metadata + tabs)
-                    Constraint::Length(0),  // (hidden screen body)
-                    Constraint::Length(1),  // command bar / status line
-                    Constraint::Min(0),     // log pane fills the rest
+                    Constraint::Length(2), // top-bar (metadata + tabs)
+                    Constraint::Length(0), // (hidden screen body)
+                    Constraint::Length(1), // command bar / status line
+                    Constraint::Min(0),    // log pane fills the rest
                 ])
                 .split(frame.area())
             } else {
@@ -4091,6 +4329,17 @@ impl App {
                 metadata_spans.push(Span::styled(
                     "●",
                     Style::default().fg(t.pass).add_modifier(Modifier::BOLD),
+                ));
+            }
+            // Unread-notification chip. Hidden at zero; coloured warn
+            // so a new alert is noticeable at a glance even if the
+            // operator missed the toast. `Ctrl+Alt+N` clears it.
+            if unread_notifs > 0 {
+                metadata_spans.push(Span::raw("   "));
+                metadata_spans.push(Span::styled("notif ", Style::default().fg(t.dim)));
+                metadata_spans.push(Span::styled(
+                    format!("{unread_notifs}"),
+                    Style::default().fg(t.warn).add_modifier(Modifier::BOLD),
                 ));
             }
             let metadata_line = Line::from(metadata_spans);
@@ -4202,12 +4451,7 @@ impl App {
                 draw_toasts(frame, frame.area(), &visible_toasts, &theme);
             }
             if notifications_overlay_visible {
-                draw_notifications_overlay(
-                    frame,
-                    frame.area(),
-                    &notifications_history,
-                    &theme,
-                );
+                draw_notifications_overlay(frame, frame.area(), &notifications_history, &theme);
             }
         })?;
         Ok(())
@@ -4384,8 +4628,14 @@ fn build_help_keys_lines<'a>(
             "Ctrl+Alt+N",
             "open notification history overlay (also :notifications)",
         ),
-        ("E", "open batch-economics modal (topup/dilute/extend/buy/plan)"),
-        ("Shift+L", "toggle fullscreen log pane (collapses active screen)"),
+        (
+            "E",
+            "open batch-economics modal (topup/dilute/extend/buy/plan)",
+        ),
+        (
+            "Shift+L",
+            "toggle fullscreen log pane (collapses active screen)",
+        ),
         ("/", "filter the log pane (case-insensitive substring)"),
         ("[ / ]", "previous / next log-pane tab"),
         ("+ / -", "grow / shrink log pane"),
@@ -4660,16 +4910,30 @@ fn draw_batch_modal(
         None => {
             lines.push(Line::from(Span::styled(
                 "  Pick an action:",
-                Style::default()
-                    .fg(theme.dim)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             for (key, label, desc) in [
-                ("t", "topup-preview", "predict TTL gain from topping up an existing batch"),
-                ("d", "dilute-preview", "predict utilisation drop from a higher depth"),
-                ("e", "extend-preview", "what would N more seconds of TTL cost?"),
-                ("b", "buy-preview", "predict TTL of a fresh batch at (depth, amount)"),
+                (
+                    "t",
+                    "topup-preview",
+                    "predict TTL gain from topping up an existing batch",
+                ),
+                (
+                    "d",
+                    "dilute-preview",
+                    "predict utilisation drop from a higher depth",
+                ),
+                (
+                    "e",
+                    "extend-preview",
+                    "what would N more seconds of TTL cost?",
+                ),
+                (
+                    "b",
+                    "buy-preview",
+                    "predict TTL of a fresh batch at (depth, amount)",
+                ),
                 ("p", "plan-batch", "unified topup + dilute recommendation"),
             ] {
                 lines.push(Line::from(vec![
@@ -4683,9 +4947,7 @@ fn draw_batch_modal(
                     Span::raw(" "),
                     Span::styled(
                         format!("{label:<16}"),
-                        Style::default()
-                            .fg(theme.info)
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
                     ),
                     Span::raw("  "),
                     Span::styled(desc.to_string(), Style::default().fg(theme.dim)),
@@ -4722,16 +4984,11 @@ fn draw_batch_modal(
                 if let Some(value) = state.field_inputs.get(i) {
                     lines.push(Line::from(vec![
                         Span::raw("  "),
-                        Span::styled(
-                            format!("{label:<24}"),
-                            Style::default().fg(theme.dim),
-                        ),
+                        Span::styled(format!("{label:<24}"), Style::default().fg(theme.dim)),
                         Span::raw(" "),
                         Span::styled(
                             value.clone(),
-                            Style::default()
-                                .fg(theme.info)
-                                .add_modifier(Modifier::BOLD),
+                            Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
                         ),
                     ]));
                 } else if i == state.field_inputs.len() && state.result.is_none() {
@@ -4767,9 +5024,7 @@ fn draw_batch_modal(
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "  Result:",
-                    Style::default()
-                        .fg(theme.dim)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
                 )));
                 for line in result.lines() {
                     lines.push(Line::from(vec![
@@ -4874,14 +5129,19 @@ fn draw_toasts(
         if let Some(why) = &n.why {
             body_lines.push(Line::from(Span::styled(
                 truncate_for_toast(why, (toast_w as usize).saturating_sub(4)),
-                Style::default().fg(theme.dim).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(theme.dim)
+                    .add_modifier(Modifier::ITALIC),
             )));
         }
         let border_style = Style::default().fg(sev_bg);
         frame.render_widget(Clear, rect);
         frame.render_widget(
-            Paragraph::new(body_lines)
-                .block(Block::default().borders(Borders::ALL).border_style(border_style)),
+            Paragraph::new(body_lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(border_style),
+            ),
             rect,
         );
         y_cursor = y_cursor.saturating_add(h);
@@ -4925,15 +5185,16 @@ fn draw_notifications_overlay(
 
     let mut lines: Vec<Line> = Vec::with_capacity(history.len() + 4);
     lines.push(Line::from(Span::styled(
-        format!("  {} notifications this session (newest first)", history.len()),
-        Style::default()
-            .fg(theme.dim)
-            .add_modifier(Modifier::BOLD),
+        format!(
+            "  {} notifications this session (newest first)",
+            history.len()
+        ),
+        Style::default().fg(theme.dim).add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
     if history.is_empty() {
         lines.push(Line::from(Span::styled(
-            "  (nothing yet — alerts fire when health gates change)",
+            "  (nothing yet — notifications fire on health-gate problems)",
             Style::default()
                 .fg(theme.dim)
                 .add_modifier(Modifier::ITALIC),
@@ -4954,11 +5215,11 @@ fn draw_notifications_overlay(
                     format!("{:<5}", n.severity.label()),
                     Style::default().fg(sev_fg).add_modifier(Modifier::BOLD),
                 ),
+                Span::styled(format!(" {age:>6}  "), Style::default().fg(theme.dim)),
                 Span::styled(
-                    format!(" {age:>6}  "),
-                    Style::default().fg(theme.dim),
+                    n.headline.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(n.headline.clone(), Style::default().add_modifier(Modifier::BOLD)),
             ]));
             if let Some(why) = &n.why {
                 lines.push(Line::from(vec![
@@ -5144,8 +5405,7 @@ fn build_screens(
     let watchlist = Watchlist::new();
     let feed_timeline = FeedTimeline::new();
     let pubsub_screen = Pubsub::new();
-    let fleet =
-        crate::components::fleet::Fleet::new(fleet_rx, api.name.clone(), fleet_resync_tx);
+    let fleet = crate::components::fleet::Fleet::new(fleet_rx, api.name.clone(), fleet_resync_tx);
     vec![
         Box::new(health),
         Box::new(stamps),
@@ -5170,7 +5430,9 @@ fn build_screens(
 /// severity ladder. `Pass` outcomes are recoveries; `Warn` and
 /// `Fail` keep their semantics. Pure — exposed so the test module
 /// can pin every variant without setting up an `App`.
-pub fn severity_from_alert(alert: &crate::alerts::Alert) -> crate::notifications::NotificationSeverity {
+pub fn severity_from_alert(
+    alert: &crate::alerts::Alert,
+) -> crate::notifications::NotificationSeverity {
     use crate::components::health::GateStatus;
     use crate::notifications::NotificationSeverity;
     match alert.to {
@@ -5622,6 +5884,39 @@ mod tests {
     }
 
     #[test]
+    fn resolve_command_line_expands_highlighted_suggestion() {
+        // The bug: typing a prefix, arrowing the picker, then Enter
+        // ran the half-typed prefix. Enter must run the *selected*
+        // suggestion instead. `pe` filters to a single match,
+        // `peers` — index 0 — so Enter resolves to the full verb.
+        assert_eq!(resolve_command_line("pe", 0), "peers");
+    }
+
+    #[test]
+    fn resolve_command_line_respects_the_selected_index() {
+        // `pi` matches `pins` then `pins-check` (KNOWN_COMMANDS
+        // order). Arrowing down to index 1 must resolve to the
+        // second entry, not the first.
+        assert_eq!(resolve_command_line("pi", 0), "pins");
+        assert_eq!(resolve_command_line("pi", 1), "pins-check");
+    }
+
+    #[test]
+    fn resolve_command_line_keeps_args_after_the_verb() {
+        // A fully-typed command with args: the highlighted
+        // suggestion supplies the verb, the rest of the buffer is
+        // preserved as-is.
+        assert_eq!(resolve_command_line("context lab", 0), "context lab");
+    }
+
+    #[test]
+    fn resolve_command_line_falls_back_to_raw_buffer_when_no_match() {
+        // No suggestion matches → return the buffer untouched so
+        // `execute_command` can report it as unknown.
+        assert_eq!(resolve_command_line("zzz-not-a-verb", 0), "zzz-not-a-verb");
+    }
+
+    #[test]
     fn probe_chunk_is_4104_bytes_with_correct_span() {
         // span(8) + payload(4096) = 4104, span = 4096 little-endian.
         let chunk = build_synthetic_probe_chunk();
@@ -5936,18 +6231,12 @@ mod tests {
         );
         // Before the window: returns None.
         assert!(
-            agg.drain_if_window_elapsed(
-                now + Duration::from_secs(20),
-                Duration::from_secs(60),
-            )
-            .is_none()
+            agg.drain_if_window_elapsed(now + Duration::from_secs(20), Duration::from_secs(60),)
+                .is_none()
         );
         // After the window: returns the buffered entries.
         let drained = agg
-            .drain_if_window_elapsed(
-                now + Duration::from_secs(120),
-                Duration::from_secs(60),
-            )
+            .drain_if_window_elapsed(now + Duration::from_secs(120), Duration::from_secs(60))
             .expect("window elapsed");
         assert_eq!(drained.len(), 1);
         assert!(agg.pending.is_empty());

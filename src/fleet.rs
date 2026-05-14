@@ -270,7 +270,10 @@ async fn probe_node(node: NodeConfig) -> FleetRow {
                 ping_ms: None,
                 warming_up: false,
                 last_probe: Some(Instant::now()),
-                why: Some(format!("probe timed out after {}s", PROBE_TIMEOUT.as_secs())),
+                why: Some(format!(
+                    "probe timed out after {}s",
+                    PROBE_TIMEOUT.as_secs()
+                )),
             };
         }
     };
@@ -303,7 +306,15 @@ async fn probe_node(node: NodeConfig) -> FleetRow {
             .and_then(|t| if t >= 0 { Some(t as u64) } else { None })
     });
 
-    aggregate(name, url, default, ping_ms, warming_up, peers, worst_ttl_secs)
+    aggregate(
+        name,
+        url,
+        default,
+        ping_ms,
+        warming_up,
+        peers,
+        worst_ttl_secs,
+    )
 }
 
 /// Pure: take the probed numbers, return a `FleetRow` with the
@@ -534,12 +545,16 @@ mod tests {
                 name: "a".into(),
                 url: "http://a".into(),
                 token: None,
+                log_file: None,
+                log_command: None,
                 default: true,
             },
             NodeConfig {
                 name: "b".into(),
                 url: "http://b".into(),
                 token: None,
+                log_file: None,
+                log_command: None,
                 default: false,
             },
         ];

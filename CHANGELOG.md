@@ -11,6 +11,170 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.15.0] - 2026-05-14
+
+The "external log tailing" minor release. Closes a real
+operator gap: connecting bee-tui to an already-running Bee
+(the default, un-supervised path) left the bottom log pane's
+Bee-side tabs empty — bee-tui had no way to know where an
+external Bee writes its logs. v1.15 fixes that — automatically
+where it can, with explicit config where it can't.
+
+### Added
+
+- **Local log auto-discovery.** Run plain `bee-tui` against a
+  local node and the cockpit now *finds* that Bee's log on its
+  own — no config. It locates the PID listening on the API
+  port (via `/proc/net/tcp{,6}` + an fd-inode scan), then
+  inspects `/proc/<pid>/fd/1` (Bee logs to stdout):
+  - points to a **file** → tails it directly
+  - process is under **systemd** → `journalctl -u <unit> -f`
+  - process is in **docker** → `docker logs -f <id>`
+  - points to a **terminal** / `/dev/null` → can't capture it,
+    so the Bee-side tabs show a precise explanation + fix
+    (e.g. *"Bee PID 382845 logs to a terminal (/dev/pts/7) —
+    restart it with output redirected, or use `--bee-bin`"*)
+    instead of staying silently empty.
+  Linux-only (it needs `/proc`); a no-op elsewhere. Explicit
+  config (below) always overrides it. The chosen source — or
+  the can't-capture reason — is also logged to the Cockpit tab,
+  so it lands in `:diagnose` bundles.
+- **`[[nodes]].log_file`.** Per-node path to a Bee log file.
+  When set and bee-tui is *not* spawning Bee itself, the
+  cockpit tails this file to populate the bottom pane's
+  Bee-side tabs (Errors / Warn / Info / Debug / Bee HTTP).
+  Per-node by design — `:context`-switching follows the new
+  node's source, cancelling the old node's tailer and
+  spawning a fresh one.
+- **`[[nodes]].log_command`.** Per-node shell command whose
+  **stdout** streams the node's log — `journalctl -u bee -f`,
+  `docker logs -f bee 2>&1`, `kubectl logs -f bee-0`,
+  `ssh host 'tail -f /var/log/bee.log'`. For a Bee whose log
+  *file* the cockpit can't read directly: remote host,
+  container, restricted permissions. Run via `sh -c`, so
+  pipes / quoting / redirects work as typed. The child is
+  killed on quit / context-switch. Takes precedence over
+  `log_file` when both are set.
+- **`--bee-log <PATH>` and `--bee-log-cmd <CMD>` CLI flags.**
+  Override `log_file` / `log_command` on the active node at
+  startup — handy for a one-off without editing config.
+  `--bee-log-cmd` takes precedence over `--bee-log`; both are
+  ignored when `--bee-bin` is set (supervisor mode wins) and
+  neither affects non-active `[[nodes]]` entries.
+- **Start-at-EOF tailing mode.** External log *files* pre-exist
+  and can be gigabytes; replaying them from byte 0 would flood
+  the ring buffers and stall startup. The file tailer now seeks
+  to end-of-file when attaching to an external log — only lines
+  written after the cockpit attaches are surfaced. The
+  supervisor path is unchanged (byte 0, so Bee's startup logs
+  still come through — the capture file is fresh anyway).
+  Command sources are inherently live so no seek applies.
+- **Top-bar `notif N` unread chip.** The notification center's
+  toasts auto-dismiss after a few seconds — easy to miss if
+  you're not looking. A `notif N` chip now sits in the top-bar
+  awareness row (next to `subs` / `watch` / `alerts`), warn-
+  coloured, showing how many notifications have arrived since
+  you last opened the history. Hidden at zero; cleared to zero
+  when you open the `Ctrl+Alt+N` history overlay (or run
+  `:notifications`). A persistent, glanceable cue a toast can't
+  be.
+
+### Internals
+
+- New `bee_log_discover` module: `discover(url) -> DiscoveryResult`
+  (`Found` / `Unsupported(msg)` / `NotApplicable`). Linux impl
+  is `/proc`-only — no new dependency, no external commands run
+  during discovery (it only *returns* a command string for the
+  systemd / docker cases). `BeeLogSource` moved here from `app`.
+  Pure helpers (`split_host_port`, `parse_proc_net_line`,
+  `classify_fd_link`, `parse_cgroup`) are unit-tested; cgroup
+  parsing handles both v1 and v2 layouts and user-vs-system
+  units.
+- `LogPane` gains `log_source_hint: Option<String>` — the
+  auto-discovery "can't capture" explanation, rendered one
+  sentence per line on the empty Bee-side tabs.
+- `bee_log_tailer::spawn` gains a `start_at_eof: bool`
+  parameter. `false` = byte-0 (supervisor), `true` = seek to
+  EOF (external file). A failed seek logs a warning and
+  degrades to byte-0 rather than erroring.
+- New `bee_log_tailer::spawn_command` — spawns the command via
+  the platform shell (`sh -c` / `cmd /C`), tails the child's
+  stdout with `BufReader::lines`, and kills the child on
+  cancel / receiver-drop (`kill_on_drop` is the panic-path
+  safety net). stderr is discarded — sources that log to
+  stderr should `2>&1` in the command string. Shares the
+  parser + the Bee-HTTP-tab filter with the file tailer.
+- `App` gains `bee_log_tailer_cancel: Option<CancellationToken>`,
+  retained only in external mode so `switch_context` can stop
+  the old tailer before spawning the new node's. The
+  supervisor's tailer is untracked — it lives for the whole
+  session under `root_cancel`.
+- New `BeeLogSource` enum (`File` / `Command`) +
+  `resolve_bee_log_source` (CLI tier beats config tier;
+  command beats file within a tier) + `spawn_bee_log_tailer`
+  helper, shared by `with_overrides` and `switch_context`.
+  `log_pane`'s `spawn_active` flag (placeholder text) now
+  reflects *any* log source, not just the supervisor.
+- `AppOverrides` gains `bee_log: Option<PathBuf>` +
+  `bee_log_cmd: Option<String>`; `NodeConfig` gains
+  `log_file: Option<PathBuf>` + `log_command: Option<String>`.
+
+### Fixed
+
+- **Notifications now surface problems present at startup.** The
+  notification center fed only on gate *transitions* — a batch
+  that was already near expiry when the cockpit launched never
+  "transitioned" into `Warn` (it started there), so no toast
+  fired and the `Ctrl+Alt+N` history stayed empty. New
+  `Alert::is_worth_notifying` is a superset of
+  `is_worth_alerting`: it also includes the first observation of
+  an already-adverse gate (`Unknown → Warn/Fail`). The
+  notification center ingests those; **webhooks deliberately do
+  not** (`is_worth_alerting` still gates the webhook path), so a
+  cockpit restart never re-spams Slack. The initial-adverse
+  notification also doesn't consume the per-gate debounce budget,
+  so a later real escalation still fires. Resolved per-gate (not
+  a global flag), so it works even when gate data loads
+  staggered.
+- **Key events now reach only the active screen.** The event
+  loop delivered every keystroke to *every* screen, not just
+  the one in front. The most visible casualty: the S15 Fleet
+  screen's `Enter` → switch-context binding fired on *every*
+  Enter — so drilling a peer on S6, expanding a manifest fork
+  on S11, opening a batch drill on S2, etc. all silently
+  triggered a context-switch instead, rebuilding every screen
+  and discarding the drill the operator had just opened (a
+  one-frame "flicker" back to the table). Regression introduced
+  in v1.11.0 with the Fleet screen. Per-screen keymaps are
+  inherently about the foreground screen, so key events are now
+  routed to the active screen alone; Tick / Render / Resize
+  still reach every component.
+- **Command bar: Enter now runs the highlighted picker
+  suggestion.** Pressing `:`, typing a prefix, arrowing the
+  suggestion picker, then pressing Enter previously executed
+  the raw half-typed buffer (e.g. `pe`) instead of the
+  selected command (`peers`) — so the command silently did
+  nothing. Enter now resolves against the picker the same way
+  Tab does: the highlighted suggestion's verb plus any args
+  typed after it. Extracted as the pure `resolve_command_line`
+  helper. (Bug predates v1.15; fixed here since v1.15 is the
+  next release.)
+
+### Notes
+
+- Tests: 497 lib tests (was 477), +20 — start-at-EOF file mode,
+  command mode (forwarding + cancel-kills-child), the
+  command-bar Enter resolution (`resolve_command_line`), the
+  `bee_log_discover` pure helpers (URL split, `/proc/net/tcp`
+  line parse, fd-link classification, cgroup v1/v2 + user/system
+  parsing), `Alert::is_worth_notifying` + initial-adverse
+  diff behaviour (surfaces without consuming the debounce
+  budget), and the notification-center unread counter.
+- Semver-stable surfaces untouched. The new `NodeConfig` /
+  `AppOverrides` fields are additive `Option`s; the
+  `bee_log_tailer` signature changes and the `bee_log_discover`
+  module are internal (not part of the committed surface).
+
 ## [1.14.0] - 2026-05-13
 
 The "notification center" minor release. Operators kept asking

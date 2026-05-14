@@ -3,7 +3,7 @@
 `bee-tui` is a terminal cockpit for [Ethereum Swarm](https://www.ethswarm.org/)
 Bee node operators. It surfaces the state Bee's API hides — bucket
 collisions, redistribution skip reasons, bin starvation, NAT reality — in
-fourteen live screens, with an always-on HTTP request tail so operators
+fifteen live screens, with an always-on HTTP request tail so operators
 trust what they see.
 
 ![bee-tui cold-start tour](https://raw.githubusercontent.com/ethswarm-tools/bee-tui/main/docs/tapes/cold-start.gif)
@@ -57,10 +57,22 @@ exists to address:
   history overlay (`Ctrl+Alt+N`). Optional desktop notifications
   via libnotify / D-Bus + terminal-bell threshold (`fail` /
   `warn`) make sure you don't miss a `Fail` while heads-down.
+- **"I connected to a running Bee and the log tabs are empty."**
+  — v1.15 tails an externally-managed Bee's log into the bottom
+  pane's Bee-side tabs. For a **local** node it's automatic:
+  bee-tui finds the Bee process, sees where its stdout goes (a
+  file, systemd's journal, a docker container), and tails it —
+  no config. When it finds a local Bee it *can't* capture
+  (logging to a bare terminal), the tabs say exactly why and
+  how to fix it. For **remote** nodes you point it explicitly
+  at a log **file** (`log_file` / `--bee-log`) or a **command's
+  stdout** (`log_command` / `--bee-log-cmd` — `journalctl -u
+  bee -f`, `docker logs -f bee`, `ssh host 'tail -f …'`).
 - **"Is anything running in the background?"** — top-bar awareness
-  chips (`subs N`, `watch N`, `alerts ●`, v1.10+) appear whenever
-  a pubsub subscription, a `:watch-ref` daemon, or webhook alerting
-  is active, and disappear when nothing is.
+  chips (`subs N`, `watch N`, `alerts ●`, v1.10+; plus a `notif N`
+  unread-notification count, v1.15+) appear whenever a pubsub
+  subscription, a `:watch-ref` daemon, webhook alerting, or an
+  unseen notification is present, and disappear when nothing is.
 
 ## What this handbook is *not*
 

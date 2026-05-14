@@ -74,14 +74,29 @@ impl Alert {
         s
     }
 
-    /// True for transitions worth pinging on. Transitions to/from
-    /// `Unknown` are ignored — that's "data not loaded yet" and
-    /// flapping during startup would spam.
+    /// True for transitions worth pinging a **webhook** on.
+    /// Transitions to/from `Unknown` are ignored — that's "data not
+    /// loaded yet" and flapping during startup would spam.
     pub fn is_worth_alerting(&self) -> bool {
         if self.from == GateStatus::Unknown || self.to == GateStatus::Unknown {
             return false;
         }
         self.from != self.to
+    }
+
+    /// True for transitions the in-cockpit **notification center**
+    /// should surface. A superset of [`Self::is_worth_alerting`]: it
+    /// additionally includes the *first* time a gate is observed in
+    /// an adverse state (`Unknown → Warn/Fail`), so the operator
+    /// sees problems that were already true when the cockpit
+    /// launched — a batch already near expiry never *transitions*
+    /// into Warn, it starts there. Webhooks deliberately stay
+    /// transition-only via `is_worth_alerting`, so a cockpit restart
+    /// doesn't re-spam the channel.
+    pub fn is_worth_notifying(&self) -> bool {
+        self.is_worth_alerting()
+            || (self.from == GateStatus::Unknown
+                && matches!(self.to, GateStatus::Warn | GateStatus::Fail))
     }
 }
 
@@ -133,17 +148,24 @@ impl AlertState {
                 value: gate.value.clone(),
                 why: gate.why.clone(),
             };
-            if !alert.is_worth_alerting() {
-                continue;
-            }
-            // Debounce check.
-            if let Some(last) = self.last_fired.get(gate.label) {
-                if now.duration_since(*last).unwrap_or_default() < self.debounce {
-                    continue;
+            if alert.is_worth_alerting() {
+                // A real transition — webhook-eligible, subject to
+                // the per-gate debounce window.
+                if let Some(last) = self.last_fired.get(gate.label) {
+                    if now.duration_since(*last).unwrap_or_default() < self.debounce {
+                        continue;
+                    }
                 }
+                self.last_fired.insert(gate.label.to_string(), now);
+                out.push(alert);
+            } else if alert.is_worth_notifying() {
+                // First observation of an already-adverse gate
+                // (`Unknown → Warn/Fail`). Surfaced to the in-cockpit
+                // notification center but NOT the webhook, and it
+                // does *not* consume the debounce budget — a later
+                // real escalation (e.g. Warn → Fail) still fires.
+                out.push(alert);
             }
-            self.last_fired.insert(gate.label.to_string(), now);
-            out.push(alert);
         }
         out
     }
@@ -271,6 +293,61 @@ mod tests {
             t0 + Duration::from_secs(122),
         );
         assert_eq!(out.len(), 1);
+    }
+
+    fn alert(from: GateStatus, to: GateStatus) -> Alert {
+        Alert {
+            gate: "Stamp TTL".into(),
+            from,
+            to,
+            value: String::new(),
+            why: None,
+        }
+    }
+
+    #[test]
+    fn is_worth_notifying_includes_initial_adverse_states() {
+        // First observation of an already-bad gate: webhooks stay
+        // silent, but the notification center should surface it.
+        assert!(!alert(GateStatus::Unknown, GateStatus::Warn).is_worth_alerting());
+        assert!(alert(GateStatus::Unknown, GateStatus::Warn).is_worth_notifying());
+        assert!(!alert(GateStatus::Unknown, GateStatus::Fail).is_worth_alerting());
+        assert!(alert(GateStatus::Unknown, GateStatus::Fail).is_worth_notifying());
+        // Cold-start into a *healthy* state is still silent.
+        assert!(!alert(GateStatus::Unknown, GateStatus::Pass).is_worth_notifying());
+        // Data loss (→ Unknown) stays silent on both channels.
+        assert!(!alert(GateStatus::Pass, GateStatus::Unknown).is_worth_notifying());
+        // Real transitions are worth both.
+        assert!(alert(GateStatus::Pass, GateStatus::Warn).is_worth_notifying());
+        // No change is worth neither.
+        assert!(!alert(GateStatus::Warn, GateStatus::Warn).is_worth_notifying());
+    }
+
+    #[test]
+    fn diff_records_initial_adverse_gate_without_consuming_debounce() {
+        // A batch already near expiry when the cockpit launches: the
+        // gate's first observed value is Warn. `diff_and_record`
+        // surfaces it (from = Unknown) so the notification center
+        // isn't blind to pre-existing problems...
+        let mut s = AlertState::new(60);
+        let t0 = SystemTime::now();
+        let out = s.diff_and_record_at(&[gate("Stamp TTL", GateStatus::Warn, "6d left")], t0);
+        assert_eq!(
+            out.len(),
+            1,
+            "initial adverse state should surface: {out:?}"
+        );
+        assert_eq!(out[0].from, GateStatus::Unknown);
+        assert_eq!(out[0].to, GateStatus::Warn);
+        // ...and because it did NOT consume the debounce budget, a
+        // real escalation moments later still fires.
+        let out = s.diff_and_record_at(
+            &[gate("Stamp TTL", GateStatus::Fail, "20h left")],
+            t0 + Duration::from_secs(5),
+        );
+        assert_eq!(out.len(), 1, "escalation must not be debounced: {out:?}");
+        assert_eq!(out[0].from, GateStatus::Warn);
+        assert_eq!(out[0].to, GateStatus::Fail);
     }
 
     #[test]

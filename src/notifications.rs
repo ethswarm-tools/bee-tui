@@ -95,6 +95,11 @@ pub struct NotificationCenter {
     /// timestamp computed at ingest time using the configured
     /// `toast_seconds`. Drained on every tick by [`purge_expired`].
     toasts: VecDeque<(Notification, Instant)>,
+    /// Notifications ingested since the operator last opened the
+    /// history overlay. Drives the top-bar `notif N` chip — a
+    /// persistent, glanceable cue that doesn't auto-dismiss the way
+    /// a toast does. Reset to 0 by [`mark_all_read`].
+    unread: usize,
 }
 
 impl NotificationCenter {
@@ -109,11 +114,12 @@ impl NotificationCenter {
         cfg: &NotificationsConfig,
         now: Instant,
     ) -> Option<Instant> {
-        // 1. Append to history (ring buffer).
+        // 1. Append to history (ring buffer) + bump the unread count.
         if self.history.len() >= HISTORY_CAPACITY {
             self.history.pop_front();
         }
         self.history.push_back(notification.clone());
+        self.unread += 1;
 
         let mut dismiss_at = None;
 
@@ -145,10 +151,12 @@ impl NotificationCenter {
         // Center on macOS, Windows toast on Windows. Errors get a
         // single warn log and don't propagate — a missing dbus
         // session shouldn't kill the cockpit.
-        if cfg.desktop && matches!(
-            notification.severity,
-            NotificationSeverity::Fail | NotificationSeverity::Warn
-        ) {
+        if cfg.desktop
+            && matches!(
+                notification.severity,
+                NotificationSeverity::Fail | NotificationSeverity::Warn
+            )
+        {
             fire_desktop_notification(&notification);
         }
 
@@ -184,6 +192,19 @@ impl NotificationCenter {
     /// the overlay header.
     pub fn history_len(&self) -> usize {
         self.history.len()
+    }
+
+    /// Notifications ingested since the history overlay was last
+    /// opened. Drives the top-bar `notif N` chip; `0` hides it.
+    pub fn unread_count(&self) -> usize {
+        self.unread
+    }
+
+    /// Clear the unread count — called when the operator opens the
+    /// history overlay (`Ctrl+Alt+N` / `:notifications`), i.e. they
+    /// have now seen everything. Does not touch `history`.
+    pub fn mark_all_read(&mut self) {
+        self.unread = 0;
     }
 }
 
@@ -250,6 +271,25 @@ mod tests {
     }
 
     #[test]
+    fn unread_count_tracks_ingest_and_clears_on_mark_read() {
+        let mut nc = NotificationCenter::default();
+        let c = cfg(false, 5, "off", false);
+        let now = Instant::now();
+        assert_eq!(nc.unread_count(), 0);
+        nc.ingest(notif(NotificationSeverity::Warn, "a"), &c, now);
+        nc.ingest(notif(NotificationSeverity::Fail, "b"), &c, now);
+        assert_eq!(nc.unread_count(), 2);
+        // Opening the overlay clears unread but keeps history.
+        nc.mark_all_read();
+        assert_eq!(nc.unread_count(), 0);
+        assert_eq!(nc.history_len(), 2);
+        // Counting resumes from zero — it's "since last seen", not
+        // a running total.
+        nc.ingest(notif(NotificationSeverity::Info, "c"), &c, now);
+        assert_eq!(nc.unread_count(), 1);
+    }
+
+    #[test]
     fn ingest_skips_toast_when_disabled() {
         let mut nc = NotificationCenter::default();
         let c = cfg(false, 5, "off", false);
@@ -276,10 +316,11 @@ mod tests {
         assert_eq!(nc.history_len(), HISTORY_CAPACITY);
         // Newest survived; oldest was evicted.
         let newest_first = nc.history_newest_first();
-        assert!(newest_first[0].headline.contains(&format!(
-            "event {}",
-            HISTORY_CAPACITY + 50 - 1
-        )));
+        assert!(
+            newest_first[0]
+                .headline
+                .contains(&format!("event {}", HISTORY_CAPACITY + 50 - 1))
+        );
     }
 
     #[test]

@@ -45,7 +45,7 @@ fields. As soon as something is running in the background,
 v1.10+ appends awareness chips after the `ping` block:
 
 ```
- bee-tui   local @ http://localhost:1633   ping 4ms   UTC HH:MM:SS   subs 2   watch 1   alerts ●
+ bee-tui   local @ http://localhost:1633   ping 4ms   UTC HH:MM:SS   subs 2   watch 1   alerts ●   notif 3
 ```
 
 - `subs N` — active PSS / GSOC subscriptions (see S15 and the
@@ -54,6 +54,11 @@ v1.10+ appends awareness chips after the `ping` block:
 - `alerts ●` — present whenever `[alerts].webhook_url` is set
   in `config.toml`; the green dot confirms outbound pinging is
   configured even when no alerts are firing.
+- `notif N` (v1.15+) — notifications that have arrived since you
+  last opened the `Ctrl+Alt+N` history overlay. Warn-coloured so
+  it's noticeable; cleared to zero when you open the overlay.
+  Toasts auto-dismiss, so this is the persistent "have I seen
+  everything?" cue.
 
 Each chip is hidden when its count is zero (or `alerts` isn't
 configured), so the header stays calm on a fresh session and

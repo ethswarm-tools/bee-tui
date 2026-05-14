@@ -52,7 +52,55 @@ loads on launch. The others are reachable via `:context <name>`.
 | `name` | string | yes | Identifier shown in the top bar and used by `:context <name>`. Keep short — `prod-1`, `lab`, `staging`. |
 | `url` | string | yes | Base URL of the Bee node, e.g. `http://localhost:1633` or `https://bee.example.com:1633`. Trailing slash optional. |
 | `token` | string | no | Bearer token. May be the literal token string, or `@env:VAR_NAME` to resolve from an environment variable at startup. Empty / missing = no auth header sent. |
+| `log_file` | path | no | Path to this node's log **file** (v1.15+). When set **and** bee-tui is *not* spawning Bee itself, the cockpit tails this file to populate the bottom log pane's Bee-side tabs (Errors / Warn / Info / Debug / Bee HTTP). Tailing starts at end-of-file — pre-existing history is not replayed. |
+| `log_command` | string | no | Shell **command** whose stdout streams this node's log (v1.15+) — `journalctl -u bee -f`, `docker logs -f bee 2>&1`, `ssh host 'tail -f /var/log/bee.log'`. For a Bee whose log file the cockpit can't read directly: remote host, container, restricted permissions. Run via `sh -c`. Takes **precedence** over `log_file` when both are set. |
 | `default` | bool | no | If true, this profile is loaded on launch. Exactly one entry should have it. |
+
+**You usually don't need either field for a local node.** If
+you set *neither* `log_file` nor `log_command`, bee-tui tries
+**auto-discovery** (v1.15+): for a local node it finds the Bee
+process listening on the API port and inspects where its
+stdout goes — a log file gets tailed directly, a systemd unit
+becomes `journalctl -u …`, a docker container becomes
+`docker logs -f …`. If it finds a local Bee whose log it
+genuinely can't reach (Bee logging to a bare terminal, or to
+`/dev/null`), the Bee-side log tabs show a precise explanation
+and fix instead of staying silently empty. Auto-discovery is
+Linux-only and only works for local nodes — set `log_file` /
+`log_command` explicitly for remote nodes, or to override what
+discovery picked.
+
+`log_file` and `log_command` are ignored when bee-tui owns the
+supervisor (`[bee]` / `--bee-bin`) — the supervised child's
+captured log is tailed instead. `:context`-switching follows
+the new node's source: the old node's tailer is cancelled and
+a fresh one resolved (explicit config, then auto-discovery)
+for the new node.
+
+```toml
+[[nodes]]
+name    = "local"
+url     = "http://localhost:1633"          # logs auto-discovered — no log_* needed
+default = true
+
+[[nodes]]
+name        = "prod-eu"
+url         = "https://bee-eu.example.com:1633"
+token       = "@env:BEE_TOKEN_EU"
+log_command = "ssh bee-eu 'tail -f /var/log/bee/bee.log'"   # remote: must be explicit
+```
+
+The `--bee-log <PATH>` and `--bee-log-cmd <CMD>` CLI flags
+override `log_file` / `log_command` on the **active** node at
+startup — handy for a one-off without editing config.
+`--bee-log-cmd` takes precedence over `--bee-log`. They do not
+affect other `[[nodes]]` entries; subsequent `:context`
+switches use each node's own config. Both are ignored when
+`--bee-bin` is set (supervisor mode wins).
+
+> **stderr.** The command tailer follows **stdout** only. Log
+> sources that write to stderr (notably `docker logs`) need a
+> `2>&1` redirect in the command string — `sh -c` handles it.
 
 ### `[ui]` — UI preferences
 

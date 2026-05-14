@@ -31,6 +31,8 @@ async fn main() -> color_eyre::Result<ExitCode> {
             no_color: args.no_color,
             bee_bin: args.bee_bin,
             bee_config: args.bee_config,
+            bee_log: args.bee_log,
+            bee_log_cmd: args.bee_log_cmd,
         },
     )
     .await?;

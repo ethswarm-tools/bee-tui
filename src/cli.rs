@@ -43,6 +43,26 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub bee_config: Option<PathBuf>,
 
+    /// Path to an already-running Bee's log file to tail. Use this
+    /// when bee-tui connects to an external Bee (not spawned via
+    /// `--bee-bin`) but you still want its log lines in the bottom
+    /// pane's Bee-side tabs. Tailing starts at end-of-file — existing
+    /// history is not replayed. Overrides `log_file` on the active
+    /// `[[nodes]]` entry. Ignored when `--bee-bin` is set.
+    #[arg(long, value_name = "PATH")]
+    pub bee_log: Option<PathBuf>,
+
+    /// Shell command whose stdout streams an already-running Bee's
+    /// log. Run via `sh -c`, so pipes / quoting / redirects work:
+    /// `journalctl -u bee -f`, `docker logs -f bee 2>&1`,
+    /// `kubectl logs -f bee-0`, `ssh host 'tail -f /var/log/bee.log'`.
+    /// The cockpit tails the command's stdout into the bottom pane's
+    /// Bee-side tabs and kills the child on quit. Overrides
+    /// `log_command` on the active `[[nodes]]` entry. Takes precedence
+    /// over `--bee-log`; ignored when `--bee-bin` is set.
+    #[arg(long, value_name = "CMD")]
+    pub bee_log_cmd: Option<String>,
+
     /// Run a single verb without launching the TUI. Prints the
     /// result on stdout and exits with `0` (ok), `1` (unhealthy /
     /// failed), or `2` (usage error). Designed for CI / shell

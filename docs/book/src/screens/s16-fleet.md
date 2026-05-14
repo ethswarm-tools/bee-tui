@@ -103,12 +103,6 @@ glitch worth ignoring anyway.
   Enter to switch context and use the existing S1-S14.
   Splitting the per-node depth between two screens would
   duplicate logic for no operator benefit.
-- **No fleet-aggregate webhook.** Each node still fires its
-  own `[alerts].webhook_url` alerts independently. A "3 of
-  5 nodes failing" aggregate webhook would be useful for
-  large fleets but adds policy questions (which alerts fold
-  together? what's the debounce?) that deserve their own
-  design pass. Likely v1.12+ if operators ask.
 - **No subset filter.** Every `[[nodes]]` entry from
   `config.toml` is in the fleet. If you want a node out of
   the rotation, remove it from config. (A `[fleet].include`
@@ -117,9 +111,20 @@ glitch worth ignoring anyway.
 
 ## Configuration
 
-S15 reads `config.nodes` directly — no separate `[fleet]`
-section in `config.toml`. Just maintain your
+S15 itself reads `config.nodes` directly — just maintain your
 `[[nodes]]` list and they show up here automatically.
+
+There's also an optional `[fleet]` section (v1.12+) that turns
+on a **fleet-aggregate webhook**: instead of each node firing
+its own `[alerts].webhook_url` ping during a network blip,
+bee-tui consolidates per-node status transitions across the
+whole fleet into a single rolled-up POST per coalesce window.
+Set `[fleet].aggregate_webhook_url` to enable it; tune
+`[fleet].aggregate_window_secs` (default 60). Per-node
+`[alerts]` keeps working independently when both are set. See
+[Configuration → `[fleet]`](../config.md#fleet--fleet-aggregate-webhook-v112-optional).
+Fleet status transitions also feed the in-cockpit notification
+center (v1.14+), the same as per-gate health transitions.
 
 The `default = true` marker (used by `Ctrl+N` to pick the
 landing node) doubles as the `★` indicator in the fleet

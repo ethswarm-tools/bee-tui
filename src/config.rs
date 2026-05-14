@@ -33,6 +33,25 @@ pub struct NodeConfig {
     /// `@env:VAR_NAME` indirection — see [`NodeConfig::resolved_token`].
     #[serde(default)]
     pub token: Option<String>,
+    /// Optional path to this node's log file. When set and bee-tui is
+    /// *not* spawning Bee itself (no `[bee]` block / `--bee-bin`), the
+    /// cockpit tails this file to populate the bottom log pane's
+    /// Bee-side tabs (Errors / Warn / Info / Debug / Bee HTTP). Tailing
+    /// starts at end-of-file — pre-existing history is not replayed.
+    /// Ignored when bee-tui owns the supervisor (the supervised child's
+    /// captured log is tailed instead).
+    #[serde(default)]
+    pub log_file: Option<PathBuf>,
+    /// Optional shell command whose stdout streams this node's log —
+    /// e.g. `journalctl -u bee -f`, `docker logs -f bee 2>&1`,
+    /// `ssh host 'tail -f /var/log/bee.log'`. Run via `sh -c`, so
+    /// pipes / quoting / redirects work. Lets bee-tui surface logs
+    /// for a node whose log *file* it can't read directly (remote
+    /// host, container, restricted permissions). Takes precedence
+    /// over `log_file` when both are set. Same supervisor caveat as
+    /// `log_file` — ignored when bee-tui spawns Bee itself.
+    #[serde(default)]
+    pub log_command: Option<String>,
     /// Marks the default profile loaded on startup. If no entry has
     /// `default = true`, the first node in the list is used.
     #[serde(default)]
@@ -537,6 +556,8 @@ fn default_nodes() -> Vec<NodeConfig> {
         name: "local".to_string(),
         url: "http://localhost:1633".to_string(),
         token: None,
+        log_file: None,
+        log_command: None,
         default: true,
     }]
 }

@@ -84,6 +84,13 @@ bee-tui --ascii
 
 # Suppress colour (also honours NO_COLOR env per <https://no-color.org>)
 bee-tui --no-color
+
+# Bee logs in the bottom pane (v1.15+): for a LOCAL node, just run `bee-tui` —
+# it auto-discovers where Bee's log goes (file / systemd journal / docker).
+# For a remote node, or to be explicit, point it at a file or a command:
+bee-tui --bee-log /var/log/bee/bee.log              # a log file
+bee-tui --bee-log-cmd "journalctl -u bee -f"        # ...or a command's stdout
+bee-tui --bee-log-cmd "ssh bee-host 'tail -f /var/log/bee.log'"   # ...remote
 ```
 
 A minimal `~/.config/bee-tui/config.toml`:
@@ -97,7 +104,7 @@ default = true
 
 [[nodes]]
 name = "lab"
-url  = "http://localhost:1633"
+url  = "http://localhost:1633"          # local node — Bee logs auto-discovered (v1.15+)
 
 [ui]
 theme           = "default"        # "default" | "mono"
@@ -225,7 +232,7 @@ intercept it.
 
 ### Command bar
 
-The cockpit now ships 52 verbs. The headline categories — see the
+The cockpit now ships 54 verbs. The headline categories — see the
 v1.10 **Verbs** page in `?` for the full catalogue:
 
 | Category | Examples |
@@ -253,9 +260,10 @@ startup. Three ways to switch / monitor:
   default-flagged row `★`.
 - **`:context <name>`** — typed switch, same flow under the hood.
 
-The top bar reflects the active profile (`<name> @ <endpoint>`); the v1.10
-awareness chips (`subs N`, `watch N`, `alerts ●`) show what's running in
-the background and disappear when there's nothing to surface.
+The top bar reflects the active profile (`<name> @ <endpoint>`); the
+awareness chips (`subs N`, `watch N`, `alerts ●` from v1.10; `notif N`
+unread-notification count from v1.15) show what's running in the
+background and disappear when there's nothing to surface.
 
 ## Theme & accessibility
 
@@ -280,15 +288,18 @@ Runtime theme switching (`:theme <name>`) lands in v0.6.
 
 ## Status
 
-**v1.14.0** on crates.io (May 2026). Fifteen-screen cockpit with drill panes,
+**v1.15.0** on crates.io (May 2026). Fifteen-screen cockpit with drill panes,
 54 cockpit verbs (24 also exposed as `--once` CI verbs), simultaneous fleet
 view, in-cockpit notification center (toasts + history overlay + optional
-desktop / terminal-bell sinks), fleet-aggregate webhook, supervised Bee
-auto-restart watchdog, fullscreen log mode + inline log filter, node-picker
-overlay, top-bar awareness chips, paged help, batch-economics modal, webhook
-health alerts, manifest browser, durability + feed timeline + pubsub watches,
-recursive uploads, multi-node, theme system, ASCII fallback, scrollbars, `?`
-help overlay, and prebuilt installers for all five major targets.
+desktop / terminal-bell sinks), external Bee log tailing (auto-discovery for
+local nodes, or explicit file / command — `[[nodes]].log_file` / `log_command`
+/ `--bee-log` / `--bee-log-cmd`), fleet-aggregate webhook, supervised Bee
+auto-restart watchdog,
+fullscreen log mode + inline log filter, node-picker overlay, top-bar
+awareness chips, paged help, batch-economics modal, webhook health alerts,
+manifest browser, durability + feed timeline + pubsub watches, recursive
+uploads, multi-node, theme system, ASCII fallback, scrollbars, `?` help
+overlay, and prebuilt installers for all five major targets.
 
 | Version | Scope | State |
 |---|---|---|
@@ -310,6 +321,7 @@ help overlay, and prebuilt installers for all five major targets.
 | v1.12.0 | Batch-economics modal (`Shift+E`, guided form for topup/dilute/extend/buy/plan previews), `[bee.supervisor].auto_restart` watchdog with exponential backoff + sliding-hour budget + uptime/restart chip, `[fleet].aggregate_webhook_url` for consolidated multi-node alerts | ✅ shipped |
 | v1.13.0 | Log-pane viewing polish — `Shift+L` toggles fullscreen log mode (collapses active screen so log pane fills the middle), `/` opens inline case-insensitive substring filter with live match-count chip + Esc-to-clear | ✅ shipped |
 | v1.14.0 | Notification center — every gate / fleet transition feeds a top-right toast overlay + `Ctrl+Alt+N` history overlay (last 200, always on). Opt-in desktop notifications (libnotify / D-Bus, pure-Rust zbus backend so no `libdbus` dep) + terminal-bell threshold (`fail` / `warn`). Sits alongside `[alerts]` / `[fleet]` webhooks — same diff pipeline, additional sinks. | ✅ shipped |
+| v1.15.0 | External Bee log tailing — fills the bottom pane's Bee-side tabs for a Bee bee-tui didn't spawn. **Local nodes: automatic** — `/proc`-based discovery finds the Bee process and tails its log file / systemd journal / docker logs with zero config (and shows a precise "can't capture, here's the fix" message when Bee logs to a bare terminal). **Remote / explicit:** `log_file` / `--bee-log` tail a file (from EOF), `log_command` / `--bee-log-cmd` tail a command's stdout (`journalctl`, `docker logs`, `ssh … tail`). Per-node; `:context`-switching follows the new node's source. Plus a `notif N` top-bar unread-notification chip, notifications now surface problems already true at startup, and three bug fixes (active-screen key routing, command-bar Enter, notification cold-start). Closes the "connected to a running Bee, log tabs empty" gap. | ✅ shipped |
 
 Backed by [bee-rs](https://github.com/ethswarm-tools/bee-rs) v1.6 (full
 coverage of the Bee 8.0.0 OpenAPI surface). Full screen specs in

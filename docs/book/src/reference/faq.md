@@ -220,6 +220,67 @@ binary, wait for its API to come up, then open the cockpit
 on top. The wrapper sits over the connect path; it isn't a
 separate mode.
 
+### The bottom log pane's Bee tabs are empty — why?
+
+The Bee-side tabs (Errors / Warn / Info / Debug / Bee HTTP)
+need a **log source** — and since Bee has no log-streaming API
+and no log-file option, its log lines only ever exist on the
+`bee` process's stdout. Something has to be capturing that.
+
+As of v1.15, for a **local** node bee-tui tries to find it for
+you (auto-discovery) — and the empty-tab placeholder *tells you
+what it found*. The cases:
+
+- **Auto-discovery worked** — you ran plain `bee-tui` against a
+  local Bee, and the cockpit located the process, saw where its
+  stdout goes (a file, systemd's journal, or a docker
+  container), and started tailing it. No config needed; the
+  tabs fill on their own.
+- **Auto-discovery found a Bee it can't capture** — typically
+  Bee was started bare in a terminal (`./bee start …`), so its
+  logs only exist on that terminal. The Bee-side tabs show a
+  precise message: which PID, where it's logging, and how to
+  fix it. Fixes: restart Bee with output redirected
+  (`bee start … > bee.log 2>&1`), run it under systemd/docker,
+  or let bee-tui spawn it (`--bee-bin`).
+- **Remote node, or you want to be explicit** — auto-discovery
+  is local-only. Set a source yourself:
+  - `log_file` / `--bee-log <path>` — tail a log file (from
+    end-of-file, so a multi-GB log doesn't flood the pane).
+  - `log_command` / `--bee-log-cmd "<cmd>"` — tail a command's
+    stdout, runs via `sh -c`:
+
+    ```toml
+    log_command = "journalctl -u bee -f"
+    log_command = "docker logs -f bee 2>&1"
+    log_command = "ssh bee-host 'tail -f /var/log/bee/bee.log'"
+    ```
+
+    `log_command` follows **stdout** only — sources that log to
+    stderr (notably `docker logs`) need the `2>&1` shown above.
+- **Supervisor mode** — `bee-tui --bee-bin … --bee-config …`
+  (or the `[bee]` block). bee-tui spawns Bee, owns its stdout
+  pipe, and captures the log with zero discovery.
+
+Explicit `log_file` / `log_command` always override
+auto-discovery. The **Cockpit** tab works regardless — that's
+bee-tui's *own* tracing output, not Bee's, so it's always
+populated (and it logs what auto-discovery decided).
+
+### Can bee-tui show logs for a *remote* Bee?
+
+Yes, but indirectly — Bee has no log-streaming API, so bee-tui
+can't fetch a remote node's logs over HTTP. What it *can* do is
+tail the stdout of a command you give it (`log_command` /
+`--bee-log-cmd`, v1.15+), and that command can reach across the
+network: `ssh bee-host 'tail -f /var/log/bee/bee.log'`,
+`kubectl logs -f bee-0`, `docker -H ssh://host logs -f bee`.
+bee-tui just follows the resulting stdout stream. For a node
+you genuinely can't reach the logs of at all, the API-derived
+screens (health gates, peers, stamps, NAT, …) *are* the
+observability story — the cockpit watches Bee's **state**, and
+logs are a bonus layer on top.
+
 ### How do I turn on webhook alerts for unhealthy gates?
 
 Set `[alerts].webhook_url` in `config.toml` to a Slack-compatible

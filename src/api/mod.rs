@@ -103,6 +103,8 @@ mod tests {
             name: "test".into(),
             url: url.into(),
             token: token.map(String::from),
+            log_file: None,
+            log_command: None,
             default: false,
         }
     }
