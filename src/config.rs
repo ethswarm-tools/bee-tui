@@ -566,6 +566,85 @@ fn default_nodes() -> Vec<NodeConfig> {
     }]
 }
 
+/// Prepend `http://` to a scheme-less URL so `localhost:1633` works
+/// as a positional argument.
+fn normalize_url(url: &str) -> String {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        url.to_string()
+    } else {
+        format!("http://{url}")
+    }
+}
+
+/// Extract the host (no scheme, no port, no path) from a URL.
+/// Handles `[ipv6]:port` and `host:port` forms.
+fn host_of(url: &str) -> &str {
+    let no_scheme = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let host_port = no_scheme.split(['/', '?', '#']).next().unwrap_or(no_scheme);
+    if let Some(rest) = host_port.strip_prefix('[') {
+        // `[ipv6]:port` → `ipv6`
+        rest.split(']').next().unwrap_or(rest)
+    } else {
+        // `host:port` → `host`, but only when the suffix is a port.
+        match host_port.rsplit_once(':') {
+            Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => h,
+            _ => host_port,
+        }
+    }
+}
+
+/// Derive a short node name from a URL. A multi-label domain
+/// (`bee-eu.example.com`) collapses to its first label (`bee-eu`);
+/// bare hosts (`localhost`) and IP literals are kept whole. Returns
+/// an empty string when no host can be parsed.
+fn node_name_from_url(url: &str) -> String {
+    let host = host_of(url);
+    if host.is_empty() {
+        return String::new();
+    }
+    let ip_like = host.chars().all(|c| c.is_ascii_digit() || c == '.');
+    if !ip_like && host.contains('.') {
+        host.split('.').next().unwrap_or(host).to_string()
+    } else {
+        host.to_string()
+    }
+}
+
+/// Build an ad-hoc node list from positional URL arguments
+/// (`bee-tui url1 url2 …`). The first URL is the default/active
+/// node; names are derived from each URL's host with a `-2`, `-3`,
+/// … suffix on collision and a `nodeN` fallback when no host parses.
+/// Scheme-less URLs are normalised to `http://`.
+pub fn nodes_from_urls(urls: &[String]) -> Vec<NodeConfig> {
+    let mut used: HashSet<String> = HashSet::new();
+    urls.iter()
+        .enumerate()
+        .map(|(i, raw)| {
+            let url = normalize_url(raw);
+            let derived = node_name_from_url(&url);
+            let base = if derived.is_empty() {
+                format!("node{}", i + 1)
+            } else {
+                derived
+            };
+            let mut name = base.clone();
+            let mut n = 2;
+            while !used.insert(name.clone()) {
+                name = format!("{base}-{n}");
+                n += 1;
+            }
+            NodeConfig {
+                name,
+                url,
+                token: None,
+                log_file: None,
+                log_command: None,
+                default: i == 0,
+            }
+        })
+        .collect()
+}
+
 lazy_static! {
     pub static ref PROJECT_NAME: String = env!("CARGO_CRATE_NAME").to_uppercase().to_string();
     pub static ref DATA_FOLDER: Option<PathBuf> =
@@ -1142,6 +1221,50 @@ mod tests {
         );
         assert_eq!(format_from_extension(Path::new("nodes.conf")), None);
         assert_eq!(format_from_extension(Path::new("nodes")), None);
+    }
+
+    #[test]
+    fn node_name_from_url_derives_short_names() {
+        assert_eq!(node_name_from_url("http://localhost:1633"), "localhost");
+        assert_eq!(
+            node_name_from_url("https://bee-eu.example.com:1633"),
+            "bee-eu"
+        );
+        // IP literals are kept whole, not collapsed at the first dot.
+        assert_eq!(node_name_from_url("http://10.0.1.5:1633"), "10.0.1.5");
+        // IPv6 in brackets.
+        assert_eq!(node_name_from_url("http://[::1]:1633"), "::1");
+        // Scheme-less + path are tolerated.
+        assert_eq!(node_name_from_url("bee.example.org/"), "bee");
+    }
+
+    #[test]
+    fn nodes_from_urls_builds_adhoc_fleet() {
+        let nodes = nodes_from_urls(&[
+            "http://localhost:1633".to_string(),
+            "bee-eu.example.com:1633".to_string(), // scheme-less
+        ]);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].name, "localhost");
+        assert_eq!(nodes[0].url, "http://localhost:1633");
+        assert!(nodes[0].default);
+        // Scheme-less arg was normalised to http://.
+        assert_eq!(nodes[1].name, "bee-eu");
+        assert_eq!(nodes[1].url, "http://bee-eu.example.com:1633");
+        assert!(!nodes[1].default);
+    }
+
+    #[test]
+    fn nodes_from_urls_disambiguates_colliding_names() {
+        let nodes = nodes_from_urls(&[
+            "http://bee.a.com:1633".to_string(),
+            "http://bee.b.com:1633".to_string(),
+            "http://bee.c.com:1633".to_string(),
+        ]);
+        // All three collapse to "bee" — suffix the dupes.
+        assert_eq!(nodes[0].name, "bee");
+        assert_eq!(nodes[1].name, "bee-2");
+        assert_eq!(nodes[2].name, "bee-3");
     }
 
     #[test]

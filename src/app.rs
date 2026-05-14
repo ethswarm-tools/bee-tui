@@ -850,6 +850,10 @@ pub struct AppOverrides {
     /// `--config` CLI override — load this exact config file instead
     /// of searching the standard directories.
     pub config_file: Option<PathBuf>,
+    /// Positional node URLs (`bee-tui url1 url2 …`). When non-empty,
+    /// they replace `config.nodes` with an ad-hoc fleet for the
+    /// session — no config file needed. First URL is the active node.
+    pub node_urls: Vec<String>,
     /// `--bee-bin` CLI override.
     pub bee_bin: Option<PathBuf>,
     /// `--bee-config` CLI override.
@@ -941,7 +945,17 @@ impl App {
         let (durability_tx, durability_rx) = mpsc::unbounded_channel();
         let (feed_timeline_tx, feed_timeline_rx) = mpsc::unbounded_channel();
         let (pubsub_msg_tx, pubsub_msg_rx) = mpsc::unbounded_channel();
-        let config = Config::load(overrides.config_file.as_deref())?;
+        let mut config = Config::load(overrides.config_file.as_deref())?;
+        // Positional URL args (`bee-tui url1 url2 …`) replace the
+        // configured node list with an ad-hoc fleet for this session.
+        if !overrides.node_urls.is_empty() {
+            config.nodes = crate::config::nodes_from_urls(&overrides.node_urls);
+            tracing::info!(
+                target: "bee_tui::config",
+                "using {} node URL(s) from the command line; config.nodes ignored",
+                config.nodes.len(),
+            );
+        }
 
         // Optional pubsub history-file writer. Failures here aren't
         // fatal — the live tail keeps working without persistence —

@@ -257,6 +257,9 @@ pub struct Lottery {
     bench: BenchState,
     bench_tx: mpsc::UnboundedSender<Result<RCHashResponse, String>>,
     bench_rx: mpsc::UnboundedReceiver<Result<RCHashResponse, String>>,
+    /// Free-scroll offset for the stake card — grows with rchash
+    /// benchmark output.
+    scroll_offset: usize,
 }
 
 impl Lottery {
@@ -277,6 +280,7 @@ impl Lottery {
             bench: BenchState::Idle,
             bench_tx,
             bench_rx,
+            scroll_offset: 0,
         }
     }
 
@@ -532,6 +536,8 @@ impl Component for Lottery {
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if matches!(key.code, KeyCode::Char('r')) {
             self.maybe_start_bench();
+        } else {
+            self.scroll_offset = super::scroll::scroll_key(self.scroll_offset, key.code);
         }
         Ok(None)
     }
@@ -740,11 +746,28 @@ impl Component for Lottery {
                 ]));
             }
         }
-        frame.render_widget(Paragraph::new(stake_lines), chunks[3]);
+        let stake_area = chunks[3];
+        let visible_rows = stake_area.height as usize;
+        let stake_total = stake_lines.len();
+        self.scroll_offset =
+            super::scroll::clamp_offset(self.scroll_offset, visible_rows, stake_total);
+        frame.render_widget(
+            Paragraph::new(stake_lines).scroll((self.scroll_offset as u16, 0)),
+            stake_area,
+        );
+        super::scroll::render_scrollbar(
+            frame,
+            stake_area,
+            self.scroll_offset,
+            visible_rows,
+            stake_total,
+        );
 
         // Footer
         frame.render_widget(
             Paragraph::new(Line::from(vec![
+                Span::styled(" ↑↓ ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" scroll  "),
                 Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" switch screen  "),
                 Span::styled(" r ", Style::default().fg(Color::Black).bg(Color::White)),

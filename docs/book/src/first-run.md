@@ -14,6 +14,11 @@ out of the box:
 bee-tui
 ```
 
+To point at a different node — or several at once, or a
+specific config file — see [Launching bee-tui](./launching.md)
+for every invocation mode. The rest of this page assumes the
+plain `bee-tui` launch above.
+
 The cockpit takes over the terminal in *alt-screen* mode —
 your shell prompt is preserved underneath and restored on
 quit. If alt-screen doesn't work (e.g., piped output, no

@@ -179,6 +179,8 @@ pub struct Network {
     /// the "stable for X" window the tooltip displays.
     last_seen_reachability: Option<String>,
     reachability_changed_at: Option<Instant>,
+    /// Free-scroll offset for the public-addresses list.
+    scroll_offset: usize,
 }
 
 impl Network {
@@ -195,6 +197,7 @@ impl Network {
             topology,
             last_seen_reachability: None,
             reachability_changed_at: None,
+            scroll_offset: 0,
         }
     }
 
@@ -374,6 +377,11 @@ impl Component for Network {
         Ok(None)
     }
 
+    fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<Option<Action>> {
+        self.scroll_offset = super::scroll::scroll_key(self.scroll_offset, key.code);
+        Ok(None)
+    }
+
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let chunks = Layout::vertical([
             Constraint::Length(3), // header
@@ -514,11 +522,28 @@ impl Component for Network {
                 Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         }
-        frame.render_widget(Paragraph::new(addr_lines), chunks[3]);
+        let addr_area = chunks[3];
+        let visible_rows = addr_area.height as usize;
+        let addr_total = addr_lines.len();
+        self.scroll_offset =
+            super::scroll::clamp_offset(self.scroll_offset, visible_rows, addr_total);
+        frame.render_widget(
+            Paragraph::new(addr_lines).scroll((self.scroll_offset as u16, 0)),
+            addr_area,
+        );
+        super::scroll::render_scrollbar(
+            frame,
+            addr_area,
+            self.scroll_offset,
+            visible_rows,
+            addr_total,
+        );
 
         // Footer
         frame.render_widget(
             Paragraph::new(Line::from(vec![
+                Span::styled(" ↑↓ ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" scroll  "),
                 Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" switch screen  "),
                 Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::White)),

@@ -25,6 +25,9 @@ pub struct Pubsub {
     /// Newest at the front; capped at [`MAX_MESSAGES`].
     rows: VecDeque<PubsubMessage>,
     selected: usize,
+    /// Scroll offset (in rendered lines) keeping the cursored message
+    /// visible when the timeline overflows the body pane.
+    scroll_offset: usize,
     /// Number of currently active subscriptions, displayed in the
     /// header. Updated by `App` via [`Self::set_active_count`] when
     /// subscriptions start / stop.
@@ -47,6 +50,7 @@ impl Pubsub {
         Self {
             rows: VecDeque::with_capacity(MAX_MESSAGES),
             selected: 0,
+            scroll_offset: 0,
             active_subs: 0,
             filter: None,
         }
@@ -56,6 +60,7 @@ impl Pubsub {
     pub fn set_filter(&mut self, substring: Option<String>) {
         self.filter = substring.map(|s| s.to_ascii_lowercase());
         self.selected = 0;
+        self.scroll_offset = 0;
     }
 
     /// True iff `msg` matches the active filter (or no filter is
@@ -159,6 +164,9 @@ impl Component for Pubsub {
             "  TIME      KIND   CHANNEL      SIZE   PREVIEW",
             Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
         )));
+        // Body-line index of the cursored row, so `clamp_scroll` can
+        // keep it visible. Stays 0 (the header) when nothing matches.
+        let mut selected_line = 0usize;
         if self.rows.is_empty() {
             body.push(Line::from(Span::styled(
                 "  (no messages yet — start a subscription with :pubsub-pss <topic> or :pubsub-gsoc <owner> <id>)",
@@ -180,11 +188,32 @@ impl Component for Pubsub {
                 )));
             } else {
                 for (i, msg) in &visible {
+                    if *i == self.selected {
+                        selected_line = body.len();
+                    }
                     body.push(render_row(msg, *i == self.selected, t));
                 }
             }
         }
-        frame.render_widget(Paragraph::new(body), chunks[1]);
+        let body_area = chunks[1];
+        let visible_rows = body_area.height as usize;
+        self.scroll_offset = super::scroll::clamp_scroll(
+            selected_line,
+            self.scroll_offset,
+            visible_rows,
+            body.len(),
+        );
+        frame.render_widget(
+            Paragraph::new(body.clone()).scroll((self.scroll_offset as u16, 0)),
+            body_area,
+        );
+        super::scroll::render_scrollbar(
+            frame,
+            body_area,
+            self.scroll_offset,
+            visible_rows,
+            body.len(),
+        );
 
         // Detail — full preview of the cursored row's payload + channel.
         let detail = match self.rows.get(self.selected) {

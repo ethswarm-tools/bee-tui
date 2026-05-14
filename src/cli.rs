@@ -91,10 +91,16 @@ pub struct Cli {
     #[arg(long)]
     pub json: bool,
 
-    /// Trailing positional args consumed by `--once <verb>`. Not
-    /// used in TUI mode.
-    #[arg(trailing_var_arg = true)]
-    pub once_args: Vec<String>,
+    /// Trailing positional args. Interpreted by mode: with
+    /// `--once <verb>` they are the verb's arguments; otherwise
+    /// (normal TUI launch) they are **node URLs** — an ad-hoc fleet
+    /// that replaces `config.nodes` for the session, no config file
+    /// needed. The first URL is the active/default node; all of them
+    /// show up in `Ctrl+N` and the S16 Fleet view. A scheme-less arg
+    /// (`localhost:1633`) is treated as `http://`. Bearer tokens
+    /// can't be passed this way — use a config file for auth'd nodes.
+    #[arg(trailing_var_arg = true, value_name = "URL")]
+    pub positional: Vec<String>,
 }
 
 const VERSION_MESSAGE: &str = concat!(

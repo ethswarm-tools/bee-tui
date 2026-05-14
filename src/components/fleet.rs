@@ -62,6 +62,9 @@ pub struct Fleet {
     snapshot: FleetSnapshot,
     active_node_name: String,
     selected: usize,
+    /// Scroll offset (in rendered lines) keeping the cursored node
+    /// visible when the fleet has more nodes than the viewport fits.
+    scroll_offset: usize,
     /// Operator-triggered "re-poll now" signal. Set by the poller's
     /// `spawn_poller` return value; pressing `r` sends `()`.
     resync_tx: tokio::sync::mpsc::UnboundedSender<()>,
@@ -79,6 +82,7 @@ impl Fleet {
             snapshot,
             active_node_name,
             selected: 0,
+            scroll_offset: 0,
             resync_tx,
         }
     }
@@ -225,13 +229,18 @@ impl Component for Fleet {
         let chunks = Layout::vertical([
             Constraint::Length(2), // header line + spacer
             Constraint::Min(0),    // rows
+            Constraint::Length(1), // key hint (pinned)
         ])
         .split(area);
 
         let header = build_header_line(&view.header, t);
         frame.render_widget(Paragraph::new(header), chunks[0]);
 
-        let mut lines: Vec<Line> = Vec::with_capacity(view.rows.len() * 2 + 2);
+        // `row_starts[i]` is the line index where node `i`'s main row
+        // begins — lets `clamp_scroll` keep the cursored node visible
+        // even though non-pass rows render a second continuation line.
+        let mut row_starts: Vec<usize> = Vec::with_capacity(view.rows.len());
+        let mut lines: Vec<Line> = Vec::with_capacity(view.rows.len() * 2 + 1);
         // Column header
         lines.push(Line::from(vec![
             Span::raw("  "),
@@ -244,6 +253,7 @@ impl Component for Fleet {
             ),
         ]));
         for (i, row) in view.rows.iter().enumerate() {
+            row_starts.push(lines.len());
             let cursor = if i == view.selected { "▸ " } else { "  " };
             let mut marks = String::new();
             if row.active {
@@ -312,12 +322,31 @@ impl Component for Fleet {
                 Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         }
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  ↑/↓ select   Enter switch context   r re-poll cursored row   ● active  ★ default",
-            Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
-        )));
-        frame.render_widget(Paragraph::new(lines), chunks[1]);
+
+        let body = chunks[1];
+        let visible_rows = body.height as usize;
+        // Keep the cursored node's main row on screen. Falls back to
+        // the top when the fleet is empty.
+        let visual_cursor = row_starts.get(view.selected).copied().unwrap_or(0);
+        self.scroll_offset = super::scroll::clamp_scroll(
+            visual_cursor,
+            self.scroll_offset,
+            visible_rows,
+            lines.len(),
+        );
+        frame.render_widget(
+            Paragraph::new(lines.clone()).scroll((self.scroll_offset as u16, 0)),
+            body,
+        );
+        super::scroll::render_scrollbar(frame, body, self.scroll_offset, visible_rows, lines.len());
+
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "  ↑/↓ select   Enter switch context   r re-poll cursored row   ● active  ★ default",
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
+            ))),
+            chunks[2],
+        );
 
         Ok(())
     }

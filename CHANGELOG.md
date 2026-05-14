@@ -11,6 +11,53 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.16.0] - 2026-05-14
+
+The "scrollable panels + ad-hoc fleet" minor release. Several
+screens rendered overflow-prone lists into a fixed pane — content
+past the fold was simply clipped, and on two screens (Fleet,
+Pubsub) the selection cursor could walk off-screen entirely. Also
+adds a zero-config way to point bee-tui at one or more nodes.
+
+### Added
+
+- **Vertical scrolling on seven screens.** S3 Swap (cheques +
+  settlements), S1 Health (gates), S4 Lottery (stake card),
+  S7 Network (public addresses), S8 API (pending-tx table),
+  S15 Pubsub (message timeline), and S16 Fleet (node rows) now
+  scroll, with a right-edge scrollbar that appears only when the
+  content overflows.
+  - Cursorless screens (S1/S3/S4/S7/S8) free-scroll with
+    `↑↓` / `j k`, `PgUp` / `PgDn` (±10), and `Home` / `End`.
+  - Cursor screens (S15/S16) keep the selected row visible as
+    you move through it.
+- **S3 Swap two-pane focus.** Swap stacks two scrollable tables;
+  `←` / `→` (or `h` / `l`) pick which one the scroll keys drive,
+  and the focused table's title is accent-coloured.
+- **Positional node URLs — `bee-tui <url> [<url>…]`.** Launch
+  against one or more nodes with no config file: the URLs become
+  an ad-hoc fleet that replaces `config.nodes` for the session.
+  First URL is the active node; all of them show up in `Ctrl+N`
+  and the S16 Fleet view. Node names are derived from each URL's
+  host (`bee-eu.example.com` → `bee-eu`), with a `-2` / `-3`
+  suffix on collision. Scheme-less args (`localhost:1633`) are
+  normalised to `http://`. Bearer tokens still need a config
+  file. With `--once`, positional args remain the verb's args.
+
+### Fixed
+
+- **Fleet (S16) and Pubsub (S15) clipped the cursor.** Both had
+  a selection cursor but no scroll-to-visible — moving the cursor
+  past the viewport hid it (and its row) below the fold. The
+  cursor now stays on screen.
+
+### Internals
+
+- `components/scroll.rs` gains `clamp_offset` (cursorless
+  free-scroll clamp) and `scroll_key` (maps a key press to an
+  offset delta), alongside the existing `clamp_scroll` /
+  `render_scrollbar`. 506 lib tests (+6).
+
 ## [1.15.2] - 2026-05-14
 
 ### Added

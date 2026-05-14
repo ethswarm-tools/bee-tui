@@ -6,6 +6,7 @@
 //! Each helper is pure where possible so unit tests can exercise the
 //! offset arithmetic without spinning up a Frame.
 
+use crossterm::event::KeyCode;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -38,6 +39,36 @@ pub fn clamp_scroll(
         offset = selected + 1 - visible_rows;
     }
     offset.min(max_offset)
+}
+
+/// Clamp a free-scroll offset (no selection cursor) to the valid
+/// range `[0, total_rows - visible_rows]`. For panes the operator
+/// scrolls directly with `↑`/`↓` rather than via a selection cursor
+/// (S1 gates, S3 cheques/settlements, S7 addresses, S8 pending tx).
+///
+/// Pure — callers bump `scroll_offset` freely in their key handler
+/// (even to `usize::MAX` for an "End" jump) and let this rein it in
+/// at draw time once the real row counts are known.
+pub fn clamp_offset(scroll_offset: usize, visible_rows: usize, total_rows: usize) -> usize {
+    let visible_rows = visible_rows.max(1);
+    scroll_offset.min(total_rows.saturating_sub(visible_rows))
+}
+
+/// Apply a free-scroll key press to `scroll_offset`, returning the new
+/// (still unclamped) offset — `clamp_offset` reins it in at draw time
+/// once the real row count is known. Recognises `↑`/`↓`, `j`/`k`,
+/// `PageUp`/`PageDown` (±10), and `Home`/`End`. Any other key returns
+/// the offset unchanged, so callers can route every key through this.
+pub fn scroll_key(scroll_offset: usize, key: KeyCode) -> usize {
+    match key {
+        KeyCode::Up | KeyCode::Char('k') => scroll_offset.saturating_sub(1),
+        KeyCode::Down | KeyCode::Char('j') => scroll_offset.saturating_add(1),
+        KeyCode::PageUp => scroll_offset.saturating_sub(10),
+        KeyCode::PageDown => scroll_offset.saturating_add(10),
+        KeyCode::Home => 0,
+        KeyCode::End => usize::MAX,
+        _ => scroll_offset,
+    }
 }
 
 /// Render the right-edge scrollbar over `area` if the list overflows.
@@ -107,5 +138,50 @@ mod tests {
         // Vertical layout can momentarily yield height=0 during
         // resize; treat as visible_rows=1 for safety.
         let _ = clamp_scroll(3, 0, 0, 50);
+    }
+
+    #[test]
+    fn clamp_offset_caps_at_max_and_passes_valid_offsets() {
+        // total=50, visible=10 → max_offset=40.
+        assert_eq!(clamp_offset(0, 10, 50), 0);
+        assert_eq!(clamp_offset(25, 10, 50), 25);
+        assert_eq!(clamp_offset(40, 10, 50), 40);
+        // Over-scrolled (incl. the usize::MAX "End" jump) clamps down.
+        assert_eq!(clamp_offset(999, 10, 50), 40);
+        assert_eq!(clamp_offset(usize::MAX, 10, 50), 40);
+    }
+
+    #[test]
+    fn clamp_offset_yields_zero_when_content_fits() {
+        assert_eq!(clamp_offset(0, 10, 5), 0);
+        assert_eq!(clamp_offset(7, 10, 5), 0);
+    }
+
+    #[test]
+    fn clamp_offset_handles_zero_visible_rows_without_panic() {
+        let _ = clamp_offset(3, 0, 50);
+    }
+
+    #[test]
+    fn scroll_key_moves_by_one_and_by_page() {
+        assert_eq!(scroll_key(5, KeyCode::Down), 6);
+        assert_eq!(scroll_key(5, KeyCode::Char('j')), 6);
+        assert_eq!(scroll_key(5, KeyCode::Up), 4);
+        assert_eq!(scroll_key(5, KeyCode::Char('k')), 4);
+        assert_eq!(scroll_key(5, KeyCode::PageDown), 15);
+        assert_eq!(scroll_key(5, KeyCode::PageUp), 0); // saturates
+        assert_eq!(scroll_key(20, KeyCode::PageUp), 10);
+    }
+
+    #[test]
+    fn scroll_key_home_and_end() {
+        assert_eq!(scroll_key(42, KeyCode::Home), 0);
+        assert_eq!(scroll_key(42, KeyCode::End), usize::MAX);
+    }
+
+    #[test]
+    fn scroll_key_ignores_unrelated_keys() {
+        assert_eq!(scroll_key(7, KeyCode::Char('x')), 7);
+        assert_eq!(scroll_key(7, KeyCode::Enter), 7);
     }
 }

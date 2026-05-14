@@ -5,6 +5,7 @@
 # Getting started
 
 - [Install](./install.md)
+- [Launching bee-tui](./launching.md)
 - [First run](./first-run.md)
 - [Configuration](./config.md)
 

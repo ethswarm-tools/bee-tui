@@ -32,7 +32,10 @@ exists to address:
   the exact phase a stuck upload is in.
 - **"Which of my nodes am I driving?"** — `Ctrl+N` opens the v1.10
   node picker over a list of every `[[nodes]]` entry; the top-bar
-  metadata line always names the active profile + endpoint.
+  metadata line always names the active profile + endpoint. You can
+  also launch straight against one or more nodes by URL —
+  `bee-tui url1 url2 …` (v1.16+), no config file needed. See
+  [Launching bee-tui](./launching.md).
 - **"Is anything red across my whole fleet?"** — S15 Fleet view
   (v1.11+) polls every configured node every 10 s and surfaces the
   aggregate status / peers / worst stamp TTL / ping per row. Enter

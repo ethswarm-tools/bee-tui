@@ -132,6 +132,8 @@ pub struct ApiHealth {
     health: HealthSnapshot,
     transactions: TransactionsSnapshot,
     log_capture: Option<LogCapture>,
+    /// Free-scroll offset for the pending-tx table.
+    scroll_offset: usize,
 }
 
 impl ApiHealth {
@@ -150,6 +152,7 @@ impl ApiHealth {
             health,
             transactions,
             log_capture,
+            scroll_offset: 0,
         }
     }
 
@@ -313,6 +316,11 @@ impl Component for ApiHealth {
         if matches!(action, Action::Tick) {
             self.pull_latest();
         }
+        Ok(None)
+    }
+
+    fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<Option<Action>> {
+        self.scroll_offset = super::scroll::scroll_key(self.scroll_offset, key.code);
         Ok(None)
     }
 
@@ -494,11 +502,28 @@ impl Component for ApiHealth {
                 Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         }
-        frame.render_widget(Paragraph::new(pending_lines), chunks[3]);
+        let pending_area = chunks[3];
+        let visible_rows = pending_area.height as usize;
+        let pending_total = pending_lines.len();
+        self.scroll_offset =
+            super::scroll::clamp_offset(self.scroll_offset, visible_rows, pending_total);
+        frame.render_widget(
+            Paragraph::new(pending_lines).scroll((self.scroll_offset as u16, 0)),
+            pending_area,
+        );
+        super::scroll::render_scrollbar(
+            frame,
+            pending_area,
+            self.scroll_offset,
+            visible_rows,
+            pending_total,
+        );
 
         // Footer
         frame.render_widget(
             Paragraph::new(Line::from(vec![
+                Span::styled(" ↑↓ ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" scroll  "),
                 Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" switch screen  "),
                 Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::White)),

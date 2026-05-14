@@ -74,7 +74,7 @@ standard release profile and takes a hair longer at runtime.
 
 ```sh
 bee-tui --version
-# bee-tui 1.0.0
+# bee-tui 1.16.0
 ```
 
 If the version prints and Bee is running on `localhost:1633`,
@@ -83,6 +83,10 @@ the cockpit will launch with no further configuration:
 ```sh
 bee-tui
 ```
+
+For every other way to start it — pointing at a remote node,
+several nodes at once, a specific config file, or letting
+bee-tui spawn Bee itself — see [Launching bee-tui](./launching.md).
 
 ## Platform-specific notes
 

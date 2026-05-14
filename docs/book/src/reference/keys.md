@@ -31,8 +31,31 @@ offline reference.
 
 ## Screen-specific keys
 
-S1 / S3 / S5 / S7 / S8 are read-only — they have no
-screen-specific keys.
+S5 is read-only with no screen-specific keys. S1 / S7 / S8 are
+read-only but their content can overflow a short terminal, so
+they take the **free-scroll keys** below (v1.16+).
+
+### Free-scroll keys (S1, S3, S4, S7, S8)
+
+Screens whose body can outgrow the viewport but have no
+selection cursor scroll directly:
+
+| Key | Effect |
+|---|---|
+| `↑↓` / `j k` | Scroll one line |
+| `PgUp` / `PgDn` | Scroll ten lines |
+| `Home` / `End` | Jump to top / bottom |
+
+A right-edge scrollbar appears whenever the content overflows.
+On **S3 Swap**, which stacks two scrollable tables, `←`/`→`
+(or `h`/`l`) pick which table the scroll keys drive — the
+focused table's title is accent-coloured.
+
+### S1 — Health gates
+
+| Key | Effect |
+|---|---|
+| `↑↓` / `j k` / `PgUp` / `PgDn` / `Home` / `End` | Free-scroll the gates list |
 
 ### S2 — Stamps + bucket drill
 
@@ -42,11 +65,31 @@ screen-specific keys.
 | `↵` | Drill into selected batch (bucket histogram + worst-N) |
 | `Esc` | Close drill |
 
+### S3 — Swap / cheques
+
+| Key | Effect |
+|---|---|
+| `←→` / `h l` | Focus the cheques ↔ settlements table |
+| `↑↓` / `j k` / `PgUp` / `PgDn` / `Home` / `End` | Free-scroll the focused table |
+
 ### S4 — Lottery + rchash
 
 | Key | Effect |
 |---|---|
 | `r` | Fire / re-fire rchash benchmark |
+| `↑↓` / `j k` / `PgUp` / `PgDn` / `Home` / `End` | Free-scroll the stake card |
+
+### S7 — Network / NAT
+
+| Key | Effect |
+|---|---|
+| `↑↓` / `j k` / `PgUp` / `PgDn` / `Home` / `End` | Free-scroll the public-addresses list |
+
+### S8 — API / chain
+
+| Key | Effect |
+|---|---|
+| `↑↓` / `j k` / `PgUp` / `PgDn` / `Home` / `End` | Free-scroll the pending-tx table |
 
 ### S6 — Peers + bin saturation + drill
 
@@ -105,6 +148,20 @@ terminal-native click-drag copy — there's no explicit copy key.
 | `↑↓` / `j k` | Move cursor through the merged PSS / GSOC timeline |
 | `PgUp` / `PgDn` | Page ten entries |
 | `c` | Clear the timeline (subscriptions stay open) |
+
+The view scrolls to keep the cursored message visible, with a
+right-edge scrollbar when the timeline overflows (v1.16+).
+
+### S16 — Fleet view
+
+| Key | Effect |
+|---|---|
+| `↑↓` / `j k` | Move cursor through configured nodes |
+| `↵` | Switch context to the cursored node |
+| `r` | Re-poll the cursored row now |
+
+The view scrolls to keep the cursored node visible, with a
+right-edge scrollbar when the fleet overflows (v1.16+).
 
 ## The command bar
 

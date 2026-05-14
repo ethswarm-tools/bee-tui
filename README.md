@@ -76,6 +76,11 @@ Point bee-tui at a running Bee node:
 # Default config talks to http://localhost:1633
 bee-tui
 
+# Point at one or more nodes by URL — no config file needed (v1.16+).
+# First URL is the active node; all of them appear in Ctrl+N + S16 Fleet.
+bee-tui http://localhost:1633
+bee-tui http://localhost:1633 https://bee-eu.example.com:1633 https://bee-us.example.com:1633
+
 # Point at a specific config file (v1.15.2+) — straight at the file
 bee-tui --config ~/work/bee-nodes.toml
 
@@ -291,17 +296,19 @@ Runtime theme switching (`:theme <name>`) lands in v0.6.
 
 ## Status
 
-**v1.15.0** on crates.io (May 2026). Fifteen-screen cockpit with drill panes,
+**v1.16.0** on crates.io (May 2026). Fifteen-screen cockpit with drill panes,
 54 cockpit verbs (24 also exposed as `--once` CI verbs), simultaneous fleet
 view, in-cockpit notification center (toasts + history overlay + optional
 desktop / terminal-bell sinks), external Bee log tailing (auto-discovery for
 local nodes, or explicit file / command — `[[nodes]].log_file` / `log_command`
 / `--bee-log` / `--bee-log-cmd`), fleet-aggregate webhook, supervised Bee
-auto-restart watchdog,
+auto-restart watchdog, ad-hoc fleets from positional node URLs
+(`bee-tui url1 url2 …`), `--config <file>`,
 fullscreen log mode + inline log filter, node-picker overlay, top-bar
 awareness chips, paged help, batch-economics modal, webhook health alerts,
 manifest browser, durability + feed timeline + pubsub watches, recursive
-uploads, multi-node, theme system, ASCII fallback, scrollbars, `?` help
+uploads, multi-node, theme system, ASCII fallback, vertical scrolling on
+every overflow-prone screen, `?` help
 overlay, and prebuilt installers for all five major targets.
 
 | Version | Scope | State |
@@ -325,6 +332,9 @@ overlay, and prebuilt installers for all five major targets.
 | v1.13.0 | Log-pane viewing polish — `Shift+L` toggles fullscreen log mode (collapses active screen so log pane fills the middle), `/` opens inline case-insensitive substring filter with live match-count chip + Esc-to-clear | ✅ shipped |
 | v1.14.0 | Notification center — every gate / fleet transition feeds a top-right toast overlay + `Ctrl+Alt+N` history overlay (last 200, always on). Opt-in desktop notifications (libnotify / D-Bus, pure-Rust zbus backend so no `libdbus` dep) + terminal-bell threshold (`fail` / `warn`). Sits alongside `[alerts]` / `[fleet]` webhooks — same diff pipeline, additional sinks. | ✅ shipped |
 | v1.15.0 | External Bee log tailing — fills the bottom pane's Bee-side tabs for a Bee bee-tui didn't spawn. **Local nodes: automatic** — `/proc`-based discovery finds the Bee process and tails its log file / systemd journal / docker logs with zero config (and shows a precise "can't capture, here's the fix" message when Bee logs to a bare terminal). **Remote / explicit:** `log_file` / `--bee-log` tail a file (from EOF), `log_command` / `--bee-log-cmd` tail a command's stdout (`journalctl`, `docker logs`, `ssh … tail`). Per-node; `:context`-switching follows the new node's source. Plus a `notif N` top-bar unread-notification chip, notifications now surface problems already true at startup, and three bug fixes (active-screen key routing, command-bar Enter, notification cold-start). Closes the "connected to a running Bee, log tabs empty" gap. | ✅ shipped |
+| v1.15.1 | Config discovery searches `~/.config/bee-tui/` on every platform (macOS / Windows no longer need the platform-native dir); `bee-tui --version` reports the resolved config directory | ✅ shipped |
+| v1.15.2 | `--config <file>` CLI flag — points straight at a config file, bypassing the directory search; works in `--once` mode too; fails fast on missing file / unknown extension | ✅ shipped |
+| v1.16.0 | Vertical scrolling on seven overflow-prone screens (S1 / S3 / S4 / S7 / S8 free-scroll, S15 / S16 cursor-follow, right-edge scrollbar); S3 Swap two-pane focus (`←→`); fixes cursor-clipping on Fleet + Pubsub. Plus ad-hoc fleets from positional node URLs — `bee-tui url1 url2 …` launches against one or more nodes with no config file | ✅ shipped |
 
 Backed by [bee-rs](https://github.com/ethswarm-tools/bee-rs) v1.6 (full
 coverage of the Bee 8.0.0 OpenAPI surface). Full screen specs in

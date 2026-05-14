@@ -19,6 +19,7 @@
 //! sort order, net-balance highlighting) without launching a TUI.
 
 use color_eyre::Result;
+use crossterm::event::{KeyCode, KeyEvent};
 use num_bigint::BigInt;
 use ratatui::{
     Frame,
@@ -147,6 +148,15 @@ pub struct MarketTile {
     pub cold_start: bool,
 }
 
+/// Which of the two stacked tables the operator is scrolling. The
+/// focused pane gets a highlighted title + an active scrollbar;
+/// `←`/`→` toggles between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwapPane {
+    Cheques,
+    Settlements,
+}
+
 pub struct Swap {
     rx: watch::Receiver<SwapSnapshot>,
     snapshot: SwapSnapshot,
@@ -156,6 +166,12 @@ pub struct Swap {
     /// a row on placeholder text.
     market_rx: Option<watch::Receiver<crate::economics_oracle::EconomicsSnapshot>>,
     market: crate::economics_oracle::EconomicsSnapshot,
+    /// Which table `↑`/`↓` scroll. Defaults to the cheques pane.
+    focus: SwapPane,
+    /// Free-scroll offsets (in rendered lines) for each table.
+    /// Clamped to content height at draw time.
+    cheques_offset: usize,
+    settlements_offset: usize,
 }
 
 impl Swap {
@@ -166,6 +182,9 @@ impl Swap {
             snapshot,
             market_rx: None,
             market: crate::economics_oracle::EconomicsSnapshot::default(),
+            focus: SwapPane::Cheques,
+            cheques_offset: 0,
+            settlements_offset: 0,
         }
     }
 
@@ -184,6 +203,15 @@ impl Swap {
         self.snapshot = self.rx.borrow().clone();
         if let Some(rx) = &self.market_rx {
             self.market = rx.borrow().clone();
+        }
+    }
+
+    /// Mutable handle to the scroll offset of whichever table is
+    /// currently focused.
+    fn focused_offset_mut(&mut self) -> &mut usize {
+        match self.focus {
+            SwapPane::Cheques => &mut self.cheques_offset,
+            SwapPane::Settlements => &mut self.settlements_offset,
         }
     }
 
@@ -432,6 +460,21 @@ impl Component for Swap {
         Ok(None)
     }
 
+    fn handle_key_event(&mut self, key: KeyEvent) -> Result<Option<Action>> {
+        // `←`/`→` pick which stacked table scrolls; every other key is
+        // routed through the shared free-scroll helper, which moves the
+        // focused pane's offset (and ignores keys it doesn't handle).
+        match key.code {
+            KeyCode::Left | KeyCode::Char('h') => self.focus = SwapPane::Cheques,
+            KeyCode::Right | KeyCode::Char('l') => self.focus = SwapPane::Settlements,
+            other => {
+                let off = self.focused_offset_mut();
+                *off = super::scroll::scroll_key(*off, other);
+            }
+        }
+        Ok(None)
+    }
+
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let view = Self::view_for(
             &self.snapshot,
@@ -565,10 +608,20 @@ impl Component for Swap {
             card_slot,
         );
 
-        // Tables stacked: cheques (top) + settlements (bottom)
+        // Tables stacked: cheques (top) + settlements (bottom). Each
+        // is independently scrollable; `←`/`→` picks which one `↑`/`↓`
+        // drive, and the focused pane's title is accent-coloured.
         let table_chunks =
             Layout::vertical([Constraint::Percentage(40), Constraint::Percentage(60)])
                 .split(tables_slot);
+
+        let title_style = |pane: SwapPane| {
+            if self.focus == pane {
+                Style::default().fg(t.accent).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            }
+        };
 
         // Cheques table
         let mut cheque_lines: Vec<Line> = vec![Line::from(Span::styled(
@@ -600,14 +653,29 @@ impl Component for Swap {
                 ]));
             }
         }
+        let cheques_block = Block::default()
+            .borders(Borders::BOTTOM)
+            .title(Span::styled(
+                " last cheques ",
+                title_style(SwapPane::Cheques),
+            ));
+        let cheques_inner = cheques_block.inner(table_chunks[0]);
+        let cheques_visible = cheques_inner.height as usize;
+        let cheques_total = cheque_lines.len();
+        self.cheques_offset =
+            super::scroll::clamp_offset(self.cheques_offset, cheques_visible, cheques_total);
         frame.render_widget(
-            Paragraph::new(cheque_lines).block(Block::default().borders(Borders::BOTTOM).title(
-                Span::styled(
-                    " last cheques ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            )),
+            Paragraph::new(cheque_lines)
+                .block(cheques_block)
+                .scroll((self.cheques_offset as u16, 0)),
             table_chunks[0],
+        );
+        super::scroll::render_scrollbar(
+            frame,
+            cheques_inner,
+            self.cheques_offset,
+            cheques_visible,
+            cheques_total,
         );
 
         // Settlements table
@@ -647,21 +715,38 @@ impl Component for Swap {
                 ]));
             }
         }
+        let settle_block = Block::default().title(Span::styled(
+            " settlements ",
+            title_style(SwapPane::Settlements),
+        ));
+        let settle_inner = settle_block.inner(table_chunks[1]);
+        let settle_visible = settle_inner.height as usize;
+        let settle_total = settle_lines.len();
+        self.settlements_offset =
+            super::scroll::clamp_offset(self.settlements_offset, settle_visible, settle_total);
         frame.render_widget(
-            Paragraph::new(settle_lines).block(Block::default().title(Span::styled(
-                " settlements ",
-                Style::default().add_modifier(Modifier::BOLD),
-            ))),
+            Paragraph::new(settle_lines)
+                .block(settle_block)
+                .scroll((self.settlements_offset as u16, 0)),
             table_chunks[1],
+        );
+        super::scroll::render_scrollbar(
+            frame,
+            settle_inner,
+            self.settlements_offset,
+            settle_visible,
+            settle_total,
         );
 
         // Footer
         frame.render_widget(
             Paragraph::new(Line::from(vec![
+                Span::styled(" ←→ ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" focus pane  "),
+                Span::styled(" ↑↓ ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" scroll  "),
                 Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" switch screen  "),
-                Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::White)),
-                Span::raw(" help  "),
                 Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" quit  "),
                 Span::styled(" net ", Style::default().fg(t.fail)),

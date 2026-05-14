@@ -13,8 +13,11 @@ re-points to a different Bee endpoint.
 
 ## The picker overlay (added v1.10.0)
 
-`Ctrl+N` (or `:nodes`) opens a centred list of every
-`[[nodes]]` entry from `config.toml`. The cursor lands on the
+`Ctrl+N` (or `:nodes`) opens a centred list of every node in
+the session — the `[[nodes]]` entries from `config.toml`, or
+the ad-hoc fleet you passed as positional URLs on the command
+line (`bee-tui url1 url2 …`, see
+[Launching bee-tui](../launching.md)). The cursor lands on the
 active node; ↑/↓ (or `j`/`k`) move it, `↵` switches, `Esc` or
 `Ctrl+N` close without switching. The active node is marked
 `●` and the `default = true` entry is marked `★`. The picker
@@ -143,10 +146,13 @@ context switch failed: no node configured with name "prd-1"
 Typo. The original profile is still active; the failed switch
 is a no-op (no partial teardown happens before the lookup).
 
-### "I have one [[nodes]] entry, no `default = true` set"
+### "I have [[nodes]] entries but no `default = true` set"
 
-The cockpit refuses to start with a clear error. Add
-`default = true` to your single entry. See [Configuration](../config.md#schema-reference).
+bee-tui falls back to the **first** entry in the list — it
+doesn't refuse to start. Setting `default = true` on the entry
+you want is still recommended so the landing node is explicit
+rather than list-order-dependent. See
+[Configuration](../config.md#schema-reference).
 
 ## See also
 

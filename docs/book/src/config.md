@@ -7,11 +7,34 @@ soon as you have a real Bee node with a Bearer token, or
 multiple nodes you want to switch between, you'll want a
 config.
 
+## Quickest start: node URLs on the command line
+
+You don't need a config file at all to point bee-tui at one or
+more nodes — pass their URLs as positional arguments (v1.16+):
+
+```sh
+bee-tui http://localhost:1633
+bee-tui http://localhost:1633 https://bee-eu.example.com:1633 https://bee-us.example.com:1633
+```
+
+The URLs become an **ad-hoc fleet** that replaces `config.nodes`
+for that session. The first URL is the active/default node; all
+of them show up in the `Ctrl+N` picker and the S16 Fleet view.
+Node names are derived from each URL's host (`bee-eu.example.com`
+→ `bee-eu`), with a `-2` / `-3` suffix on collision. A scheme-less
+argument (`localhost:1633`) is treated as `http://`.
+
+What command-line URLs **can't** carry is a bearer token — for
+restricted-mode nodes you still need a config file (or
+`--config`). When positional URLs are given, `config.nodes` is
+ignored, but everything else from the config file (`[ui]`,
+`[alerts]`, …) still applies.
+
 ## Where the config lives
 
-The fastest way to load a specific file is the `--config` flag
-(v1.15.2+) — it points **straight at the file**, no directory
-search, no fixed file name:
+The fastest way to load a specific config *file* is the
+`--config` flag (v1.15.2+) — it points **straight at the file**,
+no directory search, no fixed file name:
 
 ```sh
 bee-tui --config ~/work/bee-nodes.toml

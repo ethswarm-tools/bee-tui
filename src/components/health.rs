@@ -77,6 +77,9 @@ pub struct Health {
     topology_rx: watch::Receiver<TopologySnapshot>,
     snapshot: HealthSnapshot,
     topology: TopologySnapshot,
+    /// Free-scroll offset for the gates list — 10 gates with their
+    /// `why` lines overflow a short terminal.
+    scroll_offset: usize,
 }
 
 impl Health {
@@ -93,6 +96,7 @@ impl Health {
             topology_rx,
             snapshot,
             topology,
+            scroll_offset: 0,
         }
     }
 
@@ -512,6 +516,11 @@ impl Component for Health {
         Ok(None)
     }
 
+    fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Result<Option<Action>> {
+        self.scroll_offset = super::scroll::scroll_key(self.scroll_offset, key.code);
+        Ok(None)
+    }
+
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let chunks = Layout::vertical([
             Constraint::Length(3), // header
@@ -580,11 +589,22 @@ impl Component for Health {
                 ]));
             }
         }
-        frame.render_widget(Paragraph::new(lines), chunks[1]);
+        let gates_area = chunks[1];
+        let visible_rows = gates_area.height as usize;
+        self.scroll_offset =
+            super::scroll::clamp_offset(self.scroll_offset, visible_rows, lines.len());
+        let total = lines.len();
+        frame.render_widget(
+            Paragraph::new(lines).scroll((self.scroll_offset as u16, 0)),
+            gates_area,
+        );
+        super::scroll::render_scrollbar(frame, gates_area, self.scroll_offset, visible_rows, total);
 
         // ---- Footer (keymap) -----------------------------------------
         frame.render_widget(
             Paragraph::new(Line::from(vec![
+                Span::styled(" ↑↓ ", Style::default().fg(Color::Black).bg(Color::White)),
+                Span::raw(" scroll  "),
                 Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
                 Span::raw(" switch screen  "),
                 Span::styled(" ? ", Style::default().fg(Color::Black).bg(Color::White)),
