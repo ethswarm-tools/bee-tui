@@ -1,14 +1,7 @@
-//! S15 — Fleet view.
-//!
-//! Renders the [`crate::fleet::FleetSnapshot`] produced by the
-//! fleet poller. One row per `[[nodes]]` entry, with aggregate
-//! status / peers / worst-batch TTL / ping. Operators land here to
-//! answer "is anything red?" across every node they run without
-//! switching contexts.
-//!
-//! Pure render: snapshot → [`FleetView`] (in this file) → ratatui
-//! widgets. `tests/s15_fleet_view.rs` asserts the view shape across
-//! representative fleet states without spinning up a TUI.
+//! S15 — Fleet view. Pure view-data half lives in
+//! [`bee_cockpit_core::views::fleet`]; this module owns the watch
+//! subscription, the cursor, the resync request channel, and the
+//! ratatui draw path.
 
 use color_eyre::Result;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -21,41 +14,14 @@ use ratatui::{
 };
 use tokio::sync::watch;
 
+pub use bee_cockpit_core::views::fleet::{
+    FleetHeader, FleetRowView, FleetView, format_ttl, view_for,
+};
+
 use super::Component;
 use crate::action::Action;
-use crate::fleet::{FleetRow, FleetSnapshot, FleetStatus};
+use crate::fleet::{FleetSnapshot, FleetStatus};
 use crate::theme;
-
-/// Pure, render-ready view of the fleet.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FleetView {
-    pub header: FleetHeader,
-    pub rows: Vec<FleetRowView>,
-    pub selected: usize,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct FleetHeader {
-    pub total: usize,
-    pub pass: usize,
-    pub warn: usize,
-    pub fail: usize,
-    pub unknown: usize,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct FleetRowView {
-    pub name: String,
-    pub url: String,
-    pub default: bool,
-    pub active: bool,
-    pub status: FleetStatus,
-    pub status_label: String,
-    pub peers_label: String,
-    pub ttl_label: String,
-    pub ping_label: String,
-    pub why: Option<String>,
-}
 
 pub struct Fleet {
     rx: watch::Receiver<FleetSnapshot>,
@@ -87,14 +53,10 @@ impl Fleet {
         }
     }
 
-    /// Update which node is currently active (called by App when
-    /// `:context` switches so the `●` marker follows).
     pub fn set_active_node(&mut self, name: String) {
         self.active_node_name = name;
     }
 
-    /// Name of the row the cursor is on, used by App to drive
-    /// Enter-to-switch.
     pub fn selected_name(&self) -> Option<String> {
         self.snapshot
             .rows
@@ -119,75 +81,17 @@ impl Fleet {
         let _ = self.resync_tx.send(());
     }
 
+    /// Re-export of core's pure view computation as an inherent
+    /// function so existing `Fleet::view_for` call sites resolve.
+    pub fn view_for(snap: &FleetSnapshot, active_name: &str, selected: usize) -> FleetView {
+        view_for(snap, active_name, selected)
+    }
+
     fn pull_latest(&mut self) {
         self.snapshot = self.rx.borrow().clone();
         if self.selected >= self.snapshot.rows.len() && !self.snapshot.rows.is_empty() {
             self.selected = self.snapshot.rows.len() - 1;
         }
-    }
-
-    pub fn view_for(snap: &FleetSnapshot, active_name: &str, selected: usize) -> FleetView {
-        let (pass, warn, fail, unknown) = snap.counts();
-        let rows = snap
-            .rows
-            .iter()
-            .map(|r| row_view(r, active_name))
-            .collect::<Vec<_>>();
-        FleetView {
-            header: FleetHeader {
-                total: snap.rows.len(),
-                pass,
-                warn,
-                fail,
-                unknown,
-            },
-            rows,
-            selected,
-        }
-    }
-}
-
-fn row_view(r: &FleetRow, active_name: &str) -> FleetRowView {
-    let status_label = match r.status {
-        FleetStatus::Pass => "pass".into(),
-        FleetStatus::Warn => "warn".into(),
-        FleetStatus::Fail => "fail".into(),
-        FleetStatus::Unknown => "…loading".into(),
-    };
-    let peers_label = r.peers.map(|p| p.to_string()).unwrap_or_else(|| "—".into());
-    let ttl_label = r
-        .worst_ttl_secs
-        .map(format_ttl)
-        .unwrap_or_else(|| "—".into());
-    let ping_label = r
-        .ping_ms
-        .map(|p| format!("{p}ms"))
-        .unwrap_or_else(|| "—".into());
-    FleetRowView {
-        name: r.name.clone(),
-        url: r.url.clone(),
-        default: r.default,
-        active: r.name == active_name,
-        status: r.status,
-        status_label,
-        peers_label,
-        ttl_label,
-        ping_label,
-        why: r.why.clone(),
-    }
-}
-
-/// Human-readable TTL — same convention as the Stamps screen, just
-/// compacter (one unit max).
-fn format_ttl(secs: u64) -> String {
-    if secs >= 86_400 {
-        format!("{}d", secs / 86_400)
-    } else if secs >= 3_600 {
-        format!("{}h", secs / 3_600)
-    } else if secs >= 60 {
-        format!("{}m", secs / 60)
-    } else {
-        format!("{secs}s")
     }
 }
 
@@ -223,25 +127,21 @@ impl Component for Fleet {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
-        let view = Self::view_for(&self.snapshot, &self.active_node_name, self.selected);
+        let view = view_for(&self.snapshot, &self.active_node_name, self.selected);
         let t = theme::active();
 
         let chunks = Layout::vertical([
-            Constraint::Length(2), // header line + spacer
-            Constraint::Min(0),    // rows
-            Constraint::Length(1), // key hint (pinned)
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(1),
         ])
         .split(area);
 
         let header = build_header_line(&view.header, t);
         frame.render_widget(Paragraph::new(header), chunks[0]);
 
-        // `row_starts[i]` is the line index where node `i`'s main row
-        // begins — lets `clamp_scroll` keep the cursored node visible
-        // even though non-pass rows render a second continuation line.
         let mut row_starts: Vec<usize> = Vec::with_capacity(view.rows.len());
         let mut lines: Vec<Line> = Vec::with_capacity(view.rows.len() * 2 + 1);
-        // Column header
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::styled(
@@ -281,8 +181,6 @@ impl Component for Fleet {
             } else {
                 Style::default()
             };
-            // Truncate the URL to fit the column, since some operators
-            // run nodes behind long DNS names + ports.
             let url_col = truncate(&row.url, 42);
             lines.push(Line::from(vec![
                 Span::styled(cursor.to_string(), row_style),
@@ -325,8 +223,6 @@ impl Component for Fleet {
 
         let body = chunks[1];
         let visible_rows = body.height as usize;
-        // Keep the cursored node's main row on screen. Falls back to
-        // the top when the fleet is empty.
         let visual_cursor = row_starts.get(view.selected).copied().unwrap_or(0);
         self.scroll_offset = super::scroll::clamp_scroll(
             visual_cursor,
@@ -405,100 +301,6 @@ fn truncate(s: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fleet::{FleetRow, FleetSnapshot, FleetStatus};
-    use std::time::Instant;
-
-    fn row(name: &str, status: FleetStatus, peers: Option<u64>, ttl: Option<u64>) -> FleetRow {
-        FleetRow {
-            name: name.into(),
-            url: format!("http://{name}.example:1633"),
-            default: false,
-            status,
-            peers,
-            worst_ttl_secs: ttl,
-            ping_ms: Some(12),
-            warming_up: false,
-            last_probe: Some(Instant::now()),
-            why: match status {
-                FleetStatus::Fail => Some("0 peers — isolated".into()),
-                FleetStatus::Warn => Some("only 2 peers (< 4)".into()),
-                _ => None,
-            },
-        }
-    }
-
-    #[test]
-    fn view_header_counts_partition() {
-        let snap = FleetSnapshot {
-            rows: vec![
-                row("a", FleetStatus::Pass, Some(87), Some(86_400 * 30)),
-                row("b", FleetStatus::Warn, Some(2), Some(86_400 * 30)),
-                row("c", FleetStatus::Fail, Some(0), Some(86_400 * 30)),
-            ],
-            last_update: Some(Instant::now()),
-        };
-        let view = Fleet::view_for(&snap, "a", 0);
-        assert_eq!(view.header.total, 3);
-        assert_eq!(view.header.pass, 1);
-        assert_eq!(view.header.warn, 1);
-        assert_eq!(view.header.fail, 1);
-        assert_eq!(view.header.unknown, 0);
-    }
-
-    #[test]
-    fn view_active_row_is_marked() {
-        let snap = FleetSnapshot {
-            rows: vec![row("a", FleetStatus::Pass, Some(87), Some(86_400 * 30))],
-            last_update: Some(Instant::now()),
-        };
-        let view = Fleet::view_for(&snap, "a", 0);
-        assert!(view.rows[0].active);
-    }
-
-    #[test]
-    fn view_inactive_row_is_not_marked() {
-        let snap = FleetSnapshot {
-            rows: vec![row("a", FleetStatus::Pass, Some(87), Some(86_400 * 30))],
-            last_update: Some(Instant::now()),
-        };
-        let view = Fleet::view_for(&snap, "different-context", 0);
-        assert!(!view.rows[0].active);
-    }
-
-    #[test]
-    fn view_ttl_formatting_picks_largest_unit() {
-        let snap = FleetSnapshot {
-            rows: vec![
-                row("days", FleetStatus::Pass, Some(87), Some(86_400 * 30)),
-                row("hours", FleetStatus::Warn, Some(87), Some(3_600 * 14)),
-                row("mins", FleetStatus::Fail, Some(0), Some(60 * 14)),
-            ],
-            last_update: Some(Instant::now()),
-        };
-        let view = Fleet::view_for(&snap, "", 0);
-        assert_eq!(view.rows[0].ttl_label, "30d");
-        assert_eq!(view.rows[1].ttl_label, "14h");
-        assert_eq!(view.rows[2].ttl_label, "14m");
-    }
-
-    #[test]
-    fn view_empty_peers_show_dash() {
-        let snap = FleetSnapshot {
-            rows: vec![row("down", FleetStatus::Fail, None, None)],
-            last_update: Some(Instant::now()),
-        };
-        let view = Fleet::view_for(&snap, "", 0);
-        assert_eq!(view.rows[0].peers_label, "—");
-        assert_eq!(view.rows[0].ttl_label, "—");
-    }
-
-    #[test]
-    fn format_ttl_handles_all_buckets() {
-        assert_eq!(format_ttl(86_400 * 5), "5d");
-        assert_eq!(format_ttl(3_600 * 3), "3h");
-        assert_eq!(format_ttl(60 * 45), "45m");
-        assert_eq!(format_ttl(42), "42s");
-    }
 
     #[test]
     fn truncate_keeps_short_strings_intact() {
