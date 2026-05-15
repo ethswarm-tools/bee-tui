@@ -1,7 +1,7 @@
-//! S15 Pubsub watch screen. Renders the merged timeline of PSS +
-//! GSOC subscriptions managed by [`crate::pubsub`]. Newest message
-//! at the top; the cursor lets the operator inspect a specific
-//! row's full hex/ASCII payload via the detail line.
+//! S15 Pubsub watch screen. Per-row formatting + filter logic live
+//! in [`bee_cockpit_core::views::pubsub`]; this module owns the
+//! ring buffer, the cursor, the active-subscription count, and the
+//! ratatui draw path.
 
 use std::any::Any;
 use std::collections::VecDeque;
@@ -16,9 +16,13 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+pub use bee_cockpit_core::views::pubsub::{
+    PubsubRowView, PubsubView, format_clock, match_filter, row_view, short_hex, view_for,
+};
+
 use super::Component;
 use crate::action::Action;
-use crate::pubsub::{MAX_MESSAGES, PubsubKind, PubsubMessage, smart_preview};
+use crate::pubsub::{MAX_MESSAGES, PubsubKind, PubsubMessage};
 use crate::theme;
 
 pub struct Pubsub {
@@ -28,14 +32,8 @@ pub struct Pubsub {
     /// Scroll offset (in rendered lines) keeping the cursored message
     /// visible when the timeline overflows the body pane.
     scroll_offset: usize,
-    /// Number of currently active subscriptions, displayed in the
-    /// header. Updated by `App` via [`Self::set_active_count`] when
-    /// subscriptions start / stop.
     active_subs: usize,
-    /// Optional case-insensitive substring filter. When `Some`,
-    /// only rows whose channel hex or smart-preview contains the
-    /// substring are rendered; the underlying ring still receives
-    /// every message (filtering is presentation-only).
+    /// Optional case-insensitive substring filter, pre-lowercased.
     filter: Option<String>,
 }
 
@@ -56,7 +54,6 @@ impl Pubsub {
         }
     }
 
-    /// Set or clear the substring filter. `None` clears it.
     pub fn set_filter(&mut self, substring: Option<String>) {
         self.filter = substring.map(|s| s.to_ascii_lowercase());
         self.selected = 0;
@@ -64,22 +61,12 @@ impl Pubsub {
     }
 
     /// True iff `msg` matches the active filter (or no filter is
-    /// set). Pure for testability.
+    /// set). Thin wrapper over core's `match_filter` so existing
+    /// call sites resolve.
     pub fn matches_filter(&self, msg: &PubsubMessage) -> bool {
-        let Some(needle) = self.filter.as_deref() else {
-            return true;
-        };
-        if msg.channel.to_ascii_lowercase().contains(needle) {
-            return true;
-        }
-        let preview = smart_preview(&msg.payload, 200).to_ascii_lowercase();
-        preview.contains(needle)
+        match_filter(msg, self.filter.as_deref())
     }
 
-    /// Push a freshly-received message onto the front of the
-    /// timeline. Bounded — when the ring is full the oldest entry
-    /// is evicted. Cursor stays anchored on the row the operator
-    /// was looking at unless the eviction pushed it off the end.
     pub fn record(&mut self, msg: PubsubMessage) {
         if self.rows.len() == MAX_MESSAGES {
             self.rows.pop_back();
@@ -134,7 +121,6 @@ impl Component for Pubsub {
         ])
         .split(area);
 
-        // Header
         let mut header_spans = vec![
             Span::styled(
                 "PUBSUB WATCH",
@@ -164,8 +150,6 @@ impl Component for Pubsub {
             "  TIME      KIND   CHANNEL      SIZE   PREVIEW",
             Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
         )));
-        // Body-line index of the cursored row, so `clamp_scroll` can
-        // keep it visible. Stays 0 (the header) when nothing matches.
         let mut selected_line = 0usize;
         if self.rows.is_empty() {
             body.push(Line::from(Span::styled(
@@ -173,8 +157,6 @@ impl Component for Pubsub {
                 Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
             )));
         } else {
-            // Pre-collect filtered rows so the cursor index lines up
-            // with what's actually displayed.
             let visible: Vec<(usize, &PubsubMessage)> = self
                 .rows
                 .iter()
@@ -191,7 +173,7 @@ impl Component for Pubsub {
                     if *i == self.selected {
                         selected_line = body.len();
                     }
-                    body.push(render_row(msg, *i == self.selected, t));
+                    body.push(render_row(&row_view(msg), *i == self.selected, t));
                 }
             }
         }
@@ -215,17 +197,16 @@ impl Component for Pubsub {
             body.len(),
         );
 
-        // Detail — full preview of the cursored row's payload + channel.
         let detail = match self.rows.get(self.selected) {
             Some(msg) => {
-                let preview_long = smart_preview(&msg.payload, 200);
+                let rv = row_view(msg);
                 vec![
                     Line::from(Span::styled(
-                        format!("  channel: {} · {} bytes", msg.channel, msg.payload.len(),),
+                        format!("  channel: {} · {} bytes", rv.channel, rv.payload_bytes),
                         Style::default().fg(t.dim),
                     )),
                     Line::from(Span::styled(
-                        format!("  data: {preview_long}"),
+                        format!("  data: {}", rv.preview_long),
                         Style::default().fg(t.dim),
                     )),
                 ]
@@ -234,7 +215,6 @@ impl Component for Pubsub {
         };
         frame.render_widget(Paragraph::new(detail), chunks[2]);
 
-        // Footer — keymap.
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
@@ -257,50 +237,22 @@ impl Component for Pubsub {
     }
 }
 
-fn render_row(msg: &PubsubMessage, is_selected: bool, t: &theme::Theme) -> Line<'static> {
-    let time_str = format_clock(msg.received_at);
-    let kind_str = match msg.kind {
-        PubsubKind::Pss => "PSS ",
-        PubsubKind::Gsoc => "GSOC",
-    };
-    let chan_short = short_hex(&msg.channel, 12);
-    let preview = smart_preview(&msg.payload, 50);
+fn render_row(rv: &PubsubRowView, is_selected: bool, t: &theme::Theme) -> Line<'static> {
     let row_style = if is_selected {
         Style::default().add_modifier(Modifier::REVERSED)
     } else {
-        match msg.kind {
+        match rv.kind {
             PubsubKind::Pss => Style::default(),
             PubsubKind::Gsoc => Style::default().fg(t.info),
         }
     };
     Line::from(vec![Span::styled(
         format!(
-            "  {time_str}   {kind_str}  {chan_short:<12}  {:>4}   {preview}",
-            msg.payload.len(),
+            "  {}   {}  {:<12}  {:>4}   {}",
+            rv.time_label, rv.kind_label, rv.channel_short, rv.payload_bytes, rv.preview_short,
         ),
         row_style,
     )])
-}
-
-fn short_hex(hex: &str, len: usize) -> String {
-    let s = hex.trim_start_matches("0x");
-    if s.len() > len {
-        format!("{}…", &s[..len])
-    } else {
-        s.to_string()
-    }
-}
-
-fn format_clock(t: std::time::SystemTime) -> String {
-    use std::time::{Duration, UNIX_EPOCH};
-    let secs = t
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_secs();
-    let h = (secs / 3600) % 24;
-    let m = (secs / 60) % 60;
-    let s = secs % 60;
-    format!("{h:02}:{m:02}:{s:02}")
 }
 
 #[cfg(test)]
@@ -333,7 +285,6 @@ mod tests {
             s.record(msg(PubsubKind::Pss, "topic", format!("msg-{i}").as_bytes()));
         }
         assert_eq!(s.rows.len(), MAX_MESSAGES);
-        // Newest at the front: msg-(MAX_MESSAGES + 4).
         let head = std::str::from_utf8(&s.rows[0].payload).unwrap();
         assert_eq!(head, format!("msg-{}", MAX_MESSAGES + 4));
     }
@@ -365,36 +316,5 @@ mod tests {
         let mut s = Pubsub::new();
         s.set_active_count(3);
         assert_eq!(s.active_subs, 3);
-    }
-
-    #[test]
-    fn matches_filter_no_filter_set_passes_everything() {
-        let s = Pubsub::new();
-        let m = msg(PubsubKind::Pss, "abc123", b"hello");
-        assert!(s.matches_filter(&m));
-    }
-
-    #[test]
-    fn matches_filter_substring_in_channel() {
-        let mut s = Pubsub::new();
-        s.set_filter(Some("CAFE".to_string()));
-        let m = msg(PubsubKind::Pss, "cafebabe1234", b"unrelated");
-        assert!(s.matches_filter(&m), "channel match (case-insensitive)");
-    }
-
-    #[test]
-    fn matches_filter_substring_in_preview() {
-        let mut s = Pubsub::new();
-        s.set_filter(Some("ping".to_string()));
-        let m = msg(PubsubKind::Pss, "topic", b"{\"event\":\"ping\"}");
-        assert!(s.matches_filter(&m), "preview match");
-    }
-
-    #[test]
-    fn matches_filter_no_match_drops() {
-        let mut s = Pubsub::new();
-        s.set_filter(Some("xyz".to_string()));
-        let m = msg(PubsubKind::Pss, "topic", b"hello");
-        assert!(!s.matches_filter(&m));
     }
 }

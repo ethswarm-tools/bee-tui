@@ -1,9 +1,7 @@
-//! S14 Feed Timeline screen. Renders the [`Timeline`] produced by
-//! [`crate::feed_timeline::walk`] as a scrollable table with cursor
-//! plus selection-detail line. Loading state is driven by
-//! `:feed-timeline <owner> <topic>` (which spawns the walk and pushes
-//! the result through an mpsc channel into `App`'s tick handler —
-//! same shape as the durability_tx → S13 Watchlist plumbing).
+//! S14 Feed Timeline screen. Per-row formatting + `view_for` live in
+//! [`bee_cockpit_core::views::feed_timeline`]; this module owns the
+//! screen-state machine (loading / error / pending-label / cursor)
+//! and the ratatui draw path.
 
 use std::any::Any;
 use std::time::SystemTime;
@@ -18,27 +16,20 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+pub use bee_cockpit_core::views::feed_timeline::{
+    FeedRowView, FeedTimelineHeader, FeedTimelineView, row_view, short_hex, view_for,
+};
+
 use super::Component;
 use crate::action::Action;
-use crate::feed_timeline::{Timeline, TimelineEntry, format_age_secs};
+use crate::feed_timeline::{Timeline, TimelineEntry};
 use crate::theme;
 
-/// Screen state. The walk happens in a background task; results
-/// land here via `set_loading` → `set_timeline` / `set_error`.
 pub struct FeedTimeline {
-    /// `Some(timeline)` once the walk completes successfully.
     timeline: Option<Timeline>,
-    /// `Some(message)` when the walk errored. Mutually exclusive
-    /// with `timeline` — a fresh walk clears both.
     error: Option<String>,
-    /// `true` while a walk is in flight. Drives the spinner glyph
-    /// in the header.
     loading: bool,
-    /// Header strip set when the verb kicks off a walk so the
-    /// screen shows the operator-supplied owner/topic immediately,
-    /// even before the latest-index probe completes.
     pending_label: Option<String>,
-    /// Cursor row in the entries list.
     selected: usize,
 }
 
@@ -59,9 +50,6 @@ impl FeedTimeline {
         }
     }
 
-    /// Called by `App` when `:feed-timeline <owner> <topic>` kicks
-    /// off a walk. Clears prior state so the operator doesn't see
-    /// stale entries while the new walk is in flight.
     pub fn set_loading(&mut self, label: impl Into<String>) {
         self.timeline = None;
         self.error = None;
@@ -70,7 +58,6 @@ impl FeedTimeline {
         self.selected = 0;
     }
 
-    /// Walk completed cleanly — replace the displayed entries.
     pub fn set_timeline(&mut self, t: Timeline) {
         self.loading = false;
         self.error = None;
@@ -78,21 +65,23 @@ impl FeedTimeline {
         self.selected = 0;
     }
 
-    /// Walk failed — surface the operator-facing reason.
     pub fn set_error(&mut self, msg: impl Into<String>) {
         self.loading = false;
         self.timeline = None;
         self.error = Some(msg.into());
     }
 
-    /// Reference under the cursor — used by future "c=copy" /
-    /// "Enter=inspect" key bindings. Returns `None` when there is no
-    /// timeline, no entries, or the selected row has no reference.
     pub fn selected_reference(&self) -> Option<&str> {
         self.timeline
             .as_ref()
             .and_then(|t| t.entries.get(self.selected))
             .and_then(|e| e.reference_hex.as_deref())
+    }
+
+    fn selected_entry(&self) -> Option<&TimelineEntry> {
+        self.timeline
+            .as_ref()
+            .and_then(|t| t.entries.get(self.selected))
     }
 }
 
@@ -131,6 +120,12 @@ impl Component for FeedTimeline {
         ])
         .split(area);
 
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let view = view_for(self.timeline.as_ref(), now);
+
         // Header
         let mut header_line = vec![Span::styled(
             "FEED TIMELINE",
@@ -146,13 +141,10 @@ impl Component for FeedTimeline {
                 header_line.push(Span::raw("  "));
                 header_line.push(Span::styled(label.clone(), Style::default().fg(t.dim)));
             }
-        } else if let Some(tm) = &self.timeline {
+        } else if let Some(h) = &view.header {
             header_line.push(Span::raw(format!(
                 "  owner=0x{}  topic={}  latest=idx{}  · {} entries",
-                short_hex(&tm.owner_hex, 12),
-                short_hex(&tm.topic_hex, 8),
-                tm.latest_index,
-                tm.entries.len(),
+                h.owner_hex_short, h.topic_hex_short, h.latest_index, h.entry_count,
             )));
         } else if let Some(e) = &self.error {
             header_line.push(Span::raw("  "));
@@ -171,33 +163,23 @@ impl Component for FeedTimeline {
         );
 
         // Body — table of entries.
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
         let mut body_lines: Vec<Line> = Vec::new();
         body_lines.push(Line::from(Span::styled(
             "  INDEX     AGE      SIZE   TYPE      REF / ERROR",
             Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
         )));
-        match &self.timeline {
-            Some(tm) if !tm.entries.is_empty() => {
-                for (i, e) in tm.entries.iter().enumerate() {
-                    body_lines.push(render_row(e, now, i == self.selected, t));
-                }
+        if view.header.is_some() && !view.rows.is_empty() {
+            for (i, r) in view.rows.iter().enumerate() {
+                body_lines.push(render_row(r, i == self.selected, t));
             }
-            Some(_) => {
-                body_lines.push(Line::from(Span::styled(
-                    "  (no entries — feed exists but every fetch errored)",
-                    Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
-                )));
-            }
-            None if self.loading => { /* spinner already in header */ }
-            None => {}
+        } else if view.header.is_some() {
+            body_lines.push(Line::from(Span::styled(
+                "  (no entries — feed exists but every fetch errored)",
+                Style::default().fg(t.dim).add_modifier(Modifier::ITALIC),
+            )));
         }
         frame.render_widget(Paragraph::new(body_lines), chunks[1]);
 
-        // Selected-line detail (full reference when present).
         let detail = match self.selected_entry() {
             Some(e) if e.reference_hex.is_some() => {
                 format!("  selected: ref={}", e.reference_hex.as_deref().unwrap())
@@ -217,7 +199,6 @@ impl Component for FeedTimeline {
             chunks[2],
         );
 
-        // Footer — keymap.
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
@@ -238,54 +219,21 @@ impl Component for FeedTimeline {
     }
 }
 
-impl FeedTimeline {
-    fn selected_entry(&self) -> Option<&TimelineEntry> {
-        self.timeline
-            .as_ref()
-            .and_then(|t| t.entries.get(self.selected))
-    }
-}
-
-fn render_row<'a>(e: &'a TimelineEntry, now: u64, is_selected: bool, t: &theme::Theme) -> Line<'a> {
-    let age = e
-        .timestamp_unix
-        .map(|ts| format_age_secs(now.saturating_sub(ts)))
-        .unwrap_or_else(|| "—".to_string());
-    let kind = if e.error.is_some() {
-        "miss"
-    } else if e.reference_hex.is_some() {
-        "ref"
-    } else {
-        "raw"
-    };
-    let body = match (&e.error, &e.reference_hex) {
-        (Some(err), _) => format!("[{err}]"),
-        (_, Some(r)) => short_hex(r, 12),
-        (_, None) => format!("payload {}B", e.payload_bytes.saturating_sub(8)),
-    };
+fn render_row<'a>(r: &'a FeedRowView, is_selected: bool, t: &theme::Theme) -> Line<'a> {
     let row_style = if is_selected {
         Style::default().add_modifier(Modifier::REVERSED)
-    } else if e.error.is_some() {
+    } else if r.is_error {
         Style::default().fg(t.dim)
     } else {
         Style::default()
     };
     Line::from(vec![Span::styled(
         format!(
-            "  {:>6}  {:>10}  {:>4}  {:<8}  {body}",
-            e.index, age, e.payload_bytes, kind,
+            "  {:>6}  {:>10}  {:>4}  {:<8}  {}",
+            r.index, r.age_label, r.size_label, r.kind, r.body,
         ),
         row_style,
     )])
-}
-
-fn short_hex(hex: &str, len: usize) -> String {
-    let s = hex.trim_start_matches("0x");
-    if s.len() > len {
-        format!("{}…", &s[..len])
-    } else {
-        s.to_string()
-    }
 }
 
 #[cfg(test)]
@@ -364,7 +312,6 @@ mod tests {
         assert_eq!(s.selected_reference(), Some("a".repeat(64).as_str()));
         s.selected = 2;
         assert_eq!(s.selected_reference(), Some("b".repeat(64).as_str()));
-        // Row 1 has no reference (raw payload).
         s.selected = 1;
         assert!(s.selected_reference().is_none());
     }
@@ -373,7 +320,6 @@ mod tests {
     fn keypress_does_not_advance_past_last_row() {
         let mut s = FeedTimeline::new();
         s.set_timeline(timeline(vec![entry(1, None, None), entry(0, None, None)]));
-        // Press Down twice — should clamp at 1.
         for _ in 0..5 {
             s.handle_key_event(KeyEvent::from(KeyCode::Down)).unwrap();
         }
