@@ -1044,7 +1044,10 @@ async fn once_price() -> OnceResult {
 /// on success — gas fluctuates, gating CI on a threshold should
 /// happen at the workflow level.
 async fn once_basefee() -> OnceResult {
-    let url = match load_config().ok().and_then(|c| c.economics.gnosis_rpc_url) {
+    let url = match load_config()
+        .ok()
+        .and_then(|c| c.economics.gnosis_rpc_url.clone())
+    {
         Some(u) => u,
         None => {
             return OnceResult::usage("basefee", "set [economics].gnosis_rpc_url in config.toml");
@@ -1072,7 +1075,10 @@ async fn once_basefee() -> OnceResult {
 fn once_config_doctor(args: &[String]) -> OnceResult {
     let path: std::path::PathBuf = match args.first() {
         Some(p) => std::path::PathBuf::from(p),
-        None => match load_config().ok().and_then(|c| c.bee.map(|b| b.config)) {
+        None => match load_config()
+            .ok()
+            .and_then(|c| c.bee.as_ref().map(|b| b.config.clone()))
+        {
             Some(p) => p,
             None => {
                 return OnceResult::usage(

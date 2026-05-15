@@ -330,6 +330,7 @@ version = "0.1.0"
 dependencies = [
  "bee-rs",
  "color-eyre",
+ "config",
  "directories",
  "futures",
  "libc",
