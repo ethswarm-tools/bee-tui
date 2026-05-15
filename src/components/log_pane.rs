@@ -36,98 +36,12 @@ use crate::theme;
 /// catch a burst of errors while staying memory-cheap.
 const BEE_TAB_RING_CAPACITY: usize = 500;
 
-/// The six tabs, in display order. Order is `Errors → Debug` so the
-/// most operator-relevant severity is leftmost (matches reading
-/// direction).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogTab {
-    Errors,
-    Warning,
-    Info,
-    Debug,
-    BeeHttp,
-    SelfHttp,
-    /// Cockpit-internal events: anything bee-tui emits that isn't a
-    /// `bee::http` request — supervisor lifecycle, watch poll loops,
-    /// command-bar dispatches, etc.
-    Cockpit,
-}
-
-impl LogTab {
-    pub const ALL: [LogTab; 7] = [
-        LogTab::Errors,
-        LogTab::Warning,
-        LogTab::Info,
-        LogTab::Debug,
-        LogTab::BeeHttp,
-        LogTab::SelfHttp,
-        LogTab::Cockpit,
-    ];
-
-    /// Parse the kebab-case form persisted in `state.toml`. Unknown
-    /// strings → SelfHttp (the only tab guaranteed to have data
-    /// regardless of whether [bee] is configured).
-    pub fn from_kebab(s: &str) -> Self {
-        match s {
-            "errors" => Self::Errors,
-            "warning" => Self::Warning,
-            "info" => Self::Info,
-            "debug" => Self::Debug,
-            "bee-http" => Self::BeeHttp,
-            "self-http" => Self::SelfHttp,
-            "cockpit" => Self::Cockpit,
-            _ => Self::SelfHttp,
-        }
-    }
-
-    pub fn to_kebab(self) -> &'static str {
-        match self {
-            Self::Errors => "errors",
-            Self::Warning => "warning",
-            Self::Info => "info",
-            Self::Debug => "debug",
-            Self::BeeHttp => "bee-http",
-            Self::SelfHttp => "self-http",
-            Self::Cockpit => "cockpit",
-        }
-    }
-
-    /// Short label rendered in the tab strip.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Errors => "Errors",
-            Self::Warning => "Warn",
-            Self::Info => "Info",
-            Self::Debug => "Debug",
-            Self::BeeHttp => "Bee HTTP",
-            Self::SelfHttp => "bee::http",
-            Self::Cockpit => "Cockpit",
-        }
-    }
-
-    /// Index into [`LogTab::ALL`].
-    fn index(self) -> usize {
-        Self::ALL.iter().position(|t| *t == self).unwrap_or(5)
-    }
-
-    fn from_index(i: usize) -> Self {
-        Self::ALL.get(i).copied().unwrap_or(Self::SelfHttp)
-    }
-}
-
-/// Single line on a Bee-side tab. The supervisor's log tailer
-/// (increment 3) builds these from parsed Bee log entries; for now
-/// the structure exists so the renderer + key handling can be
-/// validated end-to-end against synthetic inputs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BeeLogLine {
-    /// `time` field from the source log line, rendered verbatim.
-    pub timestamp: String,
-    /// `logger` field — usually `node/<subsystem>`.
-    pub logger: String,
-    /// `msg` field plus any extra key-value pairs the parser kept.
-    pub message: String,
-}
+// `LogTab` (enum + impl) and `BeeLogLine` (struct) now live in
+// `bee_cockpit_core::bee_log` so the parser + tailer in core can use
+// them without depending on the renderer. Re-exported here so existing
+// `components::log_pane::LogTab` / `BeeLogLine` paths inside bee-tui
+// keep working.
+pub use bee_cockpit_core::bee_log::{BeeLogLine, LogTab};
 
 /// Renderable row inside the active tab. Pure data so the renderer
 /// stays straightforward and snapshot tests can lock layout.

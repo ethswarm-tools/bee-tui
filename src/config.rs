@@ -171,39 +171,10 @@ fn default_backoff_max_secs() -> u64 {
     30
 }
 
-/// `[bee.logs]` table from `config.toml`. Bounds the size of the
-/// supervised Bee process's captured stdout+stderr file so a
-/// long-running node doesn't fill `$TMPDIR`.
-#[derive(Clone, Debug, Deserialize)]
-pub struct BeeLogsConfig {
-    /// Active log file rolls over once it reaches this many MiB.
-    /// Default 64 MiB — large enough that operator-relevant traces
-    /// fit in the live file, small enough that rotation happens
-    /// within a day or two on a busy node.
-    #[serde(default = "default_rotate_size_mb")]
-    pub rotate_size_mb: u64,
-    /// How many rotated files (`.1` .. `.N`) to retain. Default 5.
-    /// At the 64 MiB default that's ~320 MiB of log history kept on
-    /// disk; older content is unlinked.
-    #[serde(default = "default_keep_files")]
-    pub keep_files: u32,
-}
-
-impl Default for BeeLogsConfig {
-    fn default() -> Self {
-        Self {
-            rotate_size_mb: default_rotate_size_mb(),
-            keep_files: default_keep_files(),
-        }
-    }
-}
-
-fn default_rotate_size_mb() -> u64 {
-    64
-}
-fn default_keep_files() -> u32 {
-    5
-}
+// `BeeLogsConfig` (struct + Default impl + default helpers) moved to
+// bee-cockpit-core::config alongside NodeConfig — re-exported here so
+// existing `crate::config::BeeLogsConfig` paths keep working.
+pub use bee_cockpit_core::config::BeeLogsConfig;
 
 /// `[metrics]` table from `config.toml`. Off by default — a
 /// Prometheus endpoint is a network-facing surface, even if it
