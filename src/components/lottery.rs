@@ -19,8 +19,8 @@ use tokio::sync::{mpsc, watch};
 
 pub use bee_cockpit_core::views::lottery::{
     AnchorRow, BENCH_DEFAULT_DEPTH, BLOCKS_PER_PHASE, BLOCKS_PER_ROUND, LotteryView, Phase,
-    PhaseSegment, PhaseState, RoundCard, StakeCard, StakeStatus, bench_depth,
-    build_phase_segments, format_when, view_for,
+    PhaseSegment, PhaseState, RoundCard, StakeCard, StakeStatus, bench_depth, build_phase_segments,
+    format_when, view_for,
 };
 
 use super::Component;
@@ -47,13 +47,8 @@ fn stake_color(s: StakeStatus) -> Color {
 pub enum BenchState {
     Idle,
     Running,
-    Done {
-        duration_seconds: f64,
-        hash: String,
-    },
-    Failed {
-        error: String,
-    },
+    Done { duration_seconds: f64, hash: String },
+    Failed { error: String },
 }
 
 const BENCH_ANCHOR_LO: &str = "0000000000000000000000000000000000000000000000000000000000000000";

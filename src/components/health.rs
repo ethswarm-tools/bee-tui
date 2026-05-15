@@ -15,9 +15,7 @@ use ratatui::{
 };
 use tokio::sync::watch;
 
-pub use bee_cockpit_core::views::health::{
-    Gate, GateStatus, gates_for, gates_for_with_stamps,
-};
+pub use bee_cockpit_core::views::health::{Gate, GateStatus, gates_for, gates_for_with_stamps};
 
 use super::Component;
 use crate::action::Action;

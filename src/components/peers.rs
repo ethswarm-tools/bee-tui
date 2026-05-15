@@ -114,7 +114,9 @@ impl Peers {
     }
 
     fn peer_rows_cached(&self) -> Vec<PeerRow> {
-        view_for(&self.snapshot).map(|v| v.peers).unwrap_or_default()
+        view_for(&self.snapshot)
+            .map(|v| v.peers)
+            .unwrap_or_default()
     }
 
     fn drain_fetches(&mut self) {
@@ -354,7 +356,10 @@ impl Component for Peers {
                 ),
                 Span::raw(format!("{:>4} ", r.population)),
                 Span::raw(format!("{:>4}  ", r.connected)),
-                Span::styled(format!("{bar:<14}"), Style::default().fg(bin_color(r.status))),
+                Span::styled(
+                    format!("{bar:<14}"),
+                    Style::default().fg(bin_color(r.status)),
+                ),
                 Span::raw(" "),
                 Span::styled(
                     bin_label(r.status),
