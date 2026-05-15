@@ -1,6 +1,6 @@
 [package]
 name = "bee-tui"
-version = "1.16.0"
+version = "1.17.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Production-grade k9s-style terminal cockpit for Ethereum Swarm Bee node operators."
@@ -16,9 +16,7 @@ build = "build.rs"
 
 [dependencies]
 bee-rs = "1.6"
-# Local path during the bee-cockpit-core extraction. Switches to a
-# crates.io version once core 0.1.0 ships.
-bee-cockpit-core = { path = "../bee-cockpit-core" }
+bee-cockpit-core = "0.1"
 better-panic = "0.3.0"
 num-bigint = "0.4"
 clap = { version = "4.5.20", features = [

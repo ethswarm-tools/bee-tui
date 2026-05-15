@@ -11,6 +11,65 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [1.17.0] - 2026-05-15
+
+The "cockpit-core split" minor release. bee-tui is now a renderer
+that consumes [`bee-cockpit-core`] — a sibling crate holding every
+piece of cockpit logic that doesn't depend on ratatui. The TUI
+behaves identically to v1.16; the change is structural, opening
+the door for a forthcoming egui-based GUI (`beegui`) to share the
+same view computations + alert pipeline + Bee client wrappers
+without duplicating code.
+
+[`bee-cockpit-core`]: https://crates.io/crates/bee-cockpit-core
+
+### Changed
+
+- **bee-cockpit-core dependency.** bee-tui depends on
+  `bee-cockpit-core = "0.1"`. The renderer keeps the
+  ratatui-bound surface (Component impls, draw paths, theme
+  glyphs/colours, key routing, terminal setup, the help overlay,
+  the command bar, the CLI) — about 5 K LOC down from 12 K. The
+  rest moved to core:
+  - **Per-screen view computation** for all 15 visible screens
+    (`bee_cockpit_core::views::{health, stamps, swap, lottery,
+    warmup, peers, network, api_health, tags, pins, manifest,
+    watchlist, feed_timeline, pubsub, fleet}`). Each holds the
+    pure `View` structs and `view_for` / `compute_*` functions
+    the renderer paginates onto the screen.
+  - **The BeeWatch polling hub** and every snapshot type
+    (`HealthSnapshot`, `StampsSnapshot`, …) live in
+    `bee_cockpit_core::watch`.
+  - **Cockpit-wide pipelines**: alerts (webhook +
+    notification-center), notifications, fleet aggregator,
+    metrics renderer + `/metrics` HTTP listener, stamp economics
+    previews, durability checker, pubsub watch, manifest walker,
+    feed timeline / probe.
+  - **Bee process supervision**: `bee_supervisor` +
+    `bee_log_tailer` + `bee_log_writer` + `bee_log_discover` +
+    `bee_log` parser.
+  - **`--once` verb implementations.** (The dispatcher stays in
+    bee-tui because it's CLI-driven and renderer-specific; the
+    individual verbs all live in core.)
+  - **Config schema.** Section structs + the file-discovery /
+    `--config` override / generic `load_raw<T>` loader all moved
+    to core. bee-tui wraps core's `Config` with `TuiConfig` to
+    add the TUI-only `keybindings` / `styles` fields via
+    `#[serde(flatten)]` + `Deref`/`DerefMut`. Every existing
+    `config::Config` call site keeps resolving via a type alias.
+- **No behaviour change for operators.** Same screens, same
+  key bindings, same `--once` verbs, same `/metrics` output,
+  same webhook payloads, same `[bee]`/`[fleet]`/`[alerts]`/
+  `[notifications]`/`[durability]`/`[pubsub]`/`[metrics]`/
+  `[economics]`/`[ui]` config sections.
+
+### Notes for downstream consumers
+
+If you depended on bee-tui as a *library* (rare — it's a
+binary-first crate), most `crate::*` paths still resolve through
+re-export stubs. New code should reach for `bee_cockpit_core::*`
+directly: it's stable across both renderers.
+
 ## [1.16.0] - 2026-05-14
 
 The "scrollable panels + ad-hoc fleet" minor release. Several

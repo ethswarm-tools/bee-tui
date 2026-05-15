@@ -327,6 +327,8 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 [[package]]
 name = "bee-cockpit-core"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91a5cf20b805476512216d2d1aa997f3c56dc18440dcda687f2b79440135739f"
 dependencies = [
  "bee-rs",
  "color-eyre",
@@ -377,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "bee-tui"
-version = "1.16.0"
+version = "1.17.0"
 dependencies = [
  "anyhow",
  "bee-cockpit-core",
