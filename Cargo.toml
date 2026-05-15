@@ -16,6 +16,9 @@ build = "build.rs"
 
 [dependencies]
 bee-rs = "1.6"
+# Local path during the bee-cockpit-core extraction. Switches to a
+# crates.io version once core 0.1.0 ships.
+bee-cockpit-core = { path = "../bee-cockpit-core" }
 better-panic = "0.3.0"
 num-bigint = "0.4"
 clap = { version = "4.5.20", features = [
