@@ -1,16 +1,7 @@
-//! S13 — Durability Watchlist screen.
-//!
-//! Each `:durability-check <ref>` invocation is recorded here as a row
-//! that records the result + the wall-clock age. The list is bounded
-//! to the most-recent N entries (default 50) so the screen stays
-//! useful under heavy operator-driven probing.
-//!
-//! ## Render path
-//!
-//! Pure [`Watchlist::view_for`] turns `(rows, selected)` into a
-//! [`WatchlistView`]. The component owns the `RingBuffer<Row>` and
-//! the cursor; new rows are pushed by `App` when an async durability
-//! check completes.
+//! S13 — Durability Watchlist screen. Pure view-data half lives in
+//! [`bee_cockpit_core::views::watchlist`]; this module owns the
+//! ring buffer of `DurabilityResult`s, the cursor, and the ratatui
+//! draw / key path.
 
 use std::collections::VecDeque;
 use std::time::SystemTime;
@@ -25,36 +16,12 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+pub use bee_cockpit_core::views::watchlist::{MAX_ROWS, WatchlistRow, WatchlistView, view_for};
+
 use super::Component;
 use crate::action::Action;
 use crate::durability::DurabilityResult;
 use crate::theme;
-
-const MAX_ROWS: usize = 50;
-
-/// One row in the watchlist. Cloneable so the view can be assembled
-/// without borrowing the component's storage.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WatchlistRow {
-    pub reference_hex: String,
-    pub status_label: String,
-    /// `true` when this row's check completed cleanly; drives green
-    /// vs red paint in the renderer.
-    pub healthy: bool,
-    /// Pre-formatted breakdown: "12 total · 0 lost · 0 errors · 412ms".
-    pub detail: String,
-    /// Wall-clock seconds since `started_at` at view-build time.
-    pub age_seconds: u64,
-    pub root_is_manifest: bool,
-}
-
-/// View fed to the renderer + snapshot tests.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WatchlistView {
-    pub rows: Vec<WatchlistRow>,
-    pub healthy_count: usize,
-    pub unhealthy_count: usize,
-}
 
 pub struct Watchlist {
     rows: VecDeque<DurabilityResult>,
@@ -81,7 +48,6 @@ impl Watchlist {
     /// was looking at, unless the eviction happened to push it off
     /// the end.
     pub fn record(&mut self, result: DurabilityResult) {
-        // Newest at the front; oldest evicted at the back.
         if self.rows.len() == MAX_ROWS {
             self.rows.pop_back();
         }
@@ -91,67 +57,15 @@ impl Watchlist {
         }
     }
 
-    /// Pure view builder for snapshot tests + the renderer.
+    /// Re-export of core's pure view computation, kept as an
+    /// inherent function so existing `Watchlist::view_for` call
+    /// sites keep working without changing imports.
     pub fn view_for(rows: &VecDeque<DurabilityResult>, now: SystemTime) -> WatchlistView {
-        let mut healthy = 0;
-        let mut unhealthy = 0;
-        let view_rows: Vec<WatchlistRow> = rows
-            .iter()
-            .map(|r| {
-                let h = r.is_healthy();
-                if h {
-                    healthy += 1;
-                } else {
-                    unhealthy += 1;
-                }
-                let age = now
-                    .duration_since(r.started_at)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-                let corrupt_segment = if r.chunks_corrupt > 0 || r.bmt_verified {
-                    format!(" · {} corrupt", r.chunks_corrupt)
-                } else {
-                    String::new()
-                };
-                let swarmscan_segment = match r.swarmscan_seen {
-                    Some(true) => " · scan: seen",
-                    Some(false) => " · scan: NOT seen",
-                    None => "",
-                };
-                let detail = format!(
-                    "{} total · {} lost · {} errors{} · {}ms{}{}{}",
-                    r.chunks_total,
-                    r.chunks_lost,
-                    r.chunks_errors,
-                    corrupt_segment,
-                    r.duration_ms,
-                    if r.bmt_verified { " · BMT" } else { "" },
-                    swarmscan_segment,
-                    if r.truncated { " · truncated" } else { "" },
-                );
-                WatchlistRow {
-                    reference_hex: r.reference.to_hex(),
-                    status_label: if h {
-                        "OK".to_string()
-                    } else {
-                        "UNHEALTHY".to_string()
-                    },
-                    healthy: h,
-                    detail,
-                    age_seconds: age,
-                    root_is_manifest: r.root_is_manifest,
-                }
-            })
-            .collect();
-        WatchlistView {
-            rows: view_rows,
-            healthy_count: healthy,
-            unhealthy_count: unhealthy,
-        }
+        view_for(rows, now)
     }
 
     fn cached_view(&self) -> WatchlistView {
-        Self::view_for(&self.rows, SystemTime::now())
+        view_for(&self.rows, SystemTime::now())
     }
 }
 
@@ -178,7 +92,6 @@ impl Component for Watchlist {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> Result<()> {
         let t = theme::active();
         let view = self.cached_view();
-        // 4-row split: header / body / detail / footer.
         let chunks = Layout::vertical([
             Constraint::Length(2),
             Constraint::Min(0),
@@ -187,7 +100,6 @@ impl Component for Watchlist {
         ])
         .split(area);
 
-        // Header: counts.
         let header = if view.rows.is_empty() {
             Line::from(Span::styled(
                 "no durability checks yet — type :durability-check <ref> to record one",
@@ -218,11 +130,8 @@ impl Component for Watchlist {
             chunks[0],
         );
 
-        // Body: rows.
         let mut lines: Vec<Line> = Vec::with_capacity(view.rows.len() + 1);
-        if view.rows.is_empty() {
-            // Empty state already covered by header.
-        } else {
+        if !view.rows.is_empty() {
             if self.selected >= view.rows.len() {
                 self.selected = view.rows.len() - 1;
             }
@@ -257,7 +166,6 @@ impl Component for Watchlist {
         }
         frame.render_widget(Paragraph::new(lines), chunks[1]);
 
-        // Detail: full ref of cursored row for click-drag copy.
         if !view.rows.is_empty() {
             let row = &view.rows[self.selected.min(view.rows.len() - 1)];
             frame.render_widget(
@@ -269,7 +177,6 @@ impl Component for Watchlist {
             );
         }
 
-        // Footer.
         let footer = Line::from(vec![
             Span::styled(" Tab ", Style::default().fg(Color::Black).bg(Color::White)),
             Span::raw(" switch screen  "),
@@ -323,27 +230,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_view_has_zero_rows() {
-        let rows = VecDeque::new();
-        let v = Watchlist::view_for(&rows, SystemTime::now());
-        assert_eq!(v.rows.len(), 0);
-        assert_eq!(v.healthy_count, 0);
-        assert_eq!(v.unhealthy_count, 0);
-    }
-
-    #[test]
-    fn view_counts_healthy_and_unhealthy_separately() {
-        let mut rows = VecDeque::new();
-        rows.push_back(make_result(true, 10));
-        rows.push_back(make_result(false, 20));
-        rows.push_back(make_result(true, 30));
-        let v = Watchlist::view_for(&rows, SystemTime::now());
-        assert_eq!(v.healthy_count, 2);
-        assert_eq!(v.unhealthy_count, 1);
-        assert_eq!(v.rows.len(), 3);
-    }
-
-    #[test]
     fn record_evicts_oldest_when_full() {
         let mut wl = Watchlist::new();
         for i in 0..MAX_ROWS + 5 {
@@ -361,14 +247,6 @@ mod tests {
         let v = wl.cached_view();
         assert!(v.rows[0].status_label.contains("UNHEALTHY"));
         assert!(v.rows[1].status_label.contains("OK"));
-    }
-
-    #[test]
-    fn view_age_increases_with_time_since_started() {
-        let mut rows = VecDeque::new();
-        rows.push_back(make_result(true, 60));
-        let v = Watchlist::view_for(&rows, SystemTime::now());
-        assert!(v.rows[0].age_seconds >= 60);
     }
 
     #[test]
