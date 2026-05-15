@@ -107,14 +107,10 @@ pub struct StampRow {
     pub why: Option<String>,
 }
 
-/// TTL-threshold constants. Below `TOPUP_SOON_SECS` we suggest
-/// topup in the row's `why` line; below `TOPUP_URGENT_SECS` we
-/// escalate to a critical / red row. Values chosen so a healthy
-/// batch never trips them: 7 days is well above the typical chain-
-/// confirmation lag, and 24 h is the operator's last reaction window
-/// before the batch expires.
-pub const TOPUP_SOON_SECS: i64 = 7 * 24 * 3600;
-pub const TOPUP_URGENT_SECS: i64 = 24 * 3600;
+// TTL-threshold constants moved to `bee_cockpit_core::stamps`; re-exported
+// here so `crate::components::stamps::TOPUP_*` paths inside bee-tui keep
+// resolving.
+pub use bee_cockpit_core::stamps::{TOPUP_SOON_SECS, TOPUP_URGENT_SECS};
 
 /// Bucket fill distribution for [`StampDrillView`]. Six buckets keep
 /// the display compact while still distinguishing "nearly full" from

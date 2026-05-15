@@ -329,7 +329,10 @@ name = "bee-cockpit-core"
 version = "0.1.0"
 dependencies = [
  "bee-rs",
+ "color-eyre",
  "directories",
+ "futures",
+ "num-bigint",
  "reqwest",
  "serde",
  "serde_json",
