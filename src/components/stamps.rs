@@ -536,19 +536,7 @@ pub(crate) fn format_bytes(bytes: u128) -> String {
     }
 }
 
-pub(crate) fn format_ttl_seconds(secs: i64) -> String {
-    if secs <= 0 {
-        return "expired".into();
-    }
-    let days = secs / 86_400;
-    let hours = (secs % 86_400) / 3_600;
-    if days >= 1 {
-        format!("{days}d {hours:>2}h")
-    } else {
-        let minutes = (secs % 3_600) / 60;
-        format!("{hours}h {minutes:>2}m")
-    }
-}
+pub(crate) use bee_cockpit_core::stamps::format_ttl_seconds;
 
 /// 8-character ASCII fill bar.
 fn fill_bar(pct: u32, width: usize) -> String {
