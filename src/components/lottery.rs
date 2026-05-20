@@ -265,6 +265,28 @@ impl Component for Lottery {
                 Span::raw(format!("fees           {}", stake.fees)),
             ]),
         ];
+
+        // Derived economics: is playing the lottery actually paying off?
+        let econ = &view.economics;
+        let net_style = if econ.net_negative {
+            Style::default().fg(theme::active().fail)
+        } else {
+            Style::default().fg(t.info)
+        };
+        let roi = econ.roi_pct.clone().unwrap_or_else(|| "—".to_string());
+        stake_lines.push(Line::from(vec![
+            Span::raw("    net reward "),
+            Span::styled(econ.net_reward.clone(), net_style),
+            Span::raw("   "),
+            Span::raw(format!("ROI            {roi}")),
+        ]));
+        if let Some(n) = econ.rounds_since_win {
+            stake_lines.push(Line::from(Span::styled(
+                format!("    {n} rounds since last win"),
+                Style::default().fg(t.dim),
+            )));
+        }
+
         if let Some(sample) = &stake.last_sample {
             stake_lines.push(Line::from(vec![
                 Span::raw("    last sample "),

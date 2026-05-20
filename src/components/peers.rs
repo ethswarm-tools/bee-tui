@@ -318,31 +318,50 @@ impl Component for Peers {
             }
         };
 
-        let mut strip_lines: Vec<Line> = vec![
-            Line::from(vec![Span::styled(
-                format!(
-                    "  depth {} · connected {} / known {} · reachability {} · net {}",
-                    view.depth,
-                    view.connected,
-                    view.population,
-                    if view.reachability.is_empty() {
-                        "?".to_string()
-                    } else {
-                        view.reachability.clone()
-                    },
-                    if view.network_availability.is_empty() {
-                        "?".to_string()
-                    } else {
-                        view.network_availability.clone()
-                    },
-                ),
-                Style::default().fg(t.dim),
-            )]),
-            Line::from(Span::styled(
-                "  BIN  POP  CONN  BAR              STATUS",
-                Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
-            )),
-        ];
+        let mut strip_lines: Vec<Line> = vec![Line::from(vec![Span::styled(
+            format!(
+                "  depth {} · connected {} / known {} · reachability {} · net {} · blocklisted {}",
+                view.depth,
+                view.connected,
+                view.population,
+                if view.reachability.is_empty() {
+                    "?".to_string()
+                } else {
+                    view.reachability.clone()
+                },
+                if view.network_availability.is_empty() {
+                    "?".to_string()
+                } else {
+                    view.network_availability.clone()
+                },
+                view.blocklist.len(),
+            ),
+            Style::default().fg(t.dim),
+        )])];
+        // Blocklisted peers (GET /blocklist) — usually empty; list them
+        // when present so an operator can see who this node has dropped.
+        if !view.blocklist.is_empty() {
+            let names: Vec<String> = view
+                .blocklist
+                .iter()
+                .take(6)
+                .map(|b| b.peer_short.clone())
+                .collect();
+            let more = view.blocklist.len().saturating_sub(6);
+            let suffix = if more > 0 {
+                format!(" +{more} more")
+            } else {
+                String::new()
+            };
+            strip_lines.push(Line::from(Span::styled(
+                format!("  blocklist: {}{}", names.join(", "), suffix),
+                Style::default().fg(t.warn),
+            )));
+        }
+        strip_lines.push(Line::from(Span::styled(
+            "  BIN  POP  CONN  BAR              STATUS",
+            Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
+        )));
         for r in &view.bins {
             if !r.is_relevant && r.population == 0 {
                 continue;

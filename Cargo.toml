@@ -1,6 +1,6 @@
 [package]
 name = "bee-tui"
-version = "1.17.0"
+version = "1.18.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Production-grade k9s-style terminal cockpit for Ethereum Swarm Bee node operators."
@@ -16,7 +16,10 @@ build = "build.rs"
 
 [dependencies]
 bee-rs = "1.6"
-bee-cockpit-core = "0.1"
+# `swarmscan` feature powers the on-demand `:census` command (network
+# neighborhood population). It only calls api.swarmscan.io when the
+# operator runs `:census` — no background traffic.
+bee-cockpit-core = { version = "0.2", features = ["swarmscan"] }
 better-panic = "0.3.0"
 num-bigint = "0.4"
 clap = { version = "4.5.20", features = [

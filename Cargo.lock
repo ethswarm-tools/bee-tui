@@ -326,9 +326,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bee-cockpit-core"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91a5cf20b805476512216d2d1aa997f3c56dc18440dcda687f2b79440135739f"
+checksum = "2097a525b661a9dc8d57f064c58a35c6195a9ed279342bba0d1d6cf0cc6456e2"
 dependencies = [
  "bee-rs",
  "color-eyre",
@@ -341,6 +341,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "swarmscan-rs",
  "time",
  "tokio",
  "tokio-util",
@@ -379,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "bee-tui"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "anyhow",
  "bee-cockpit-core",
@@ -4193,6 +4194,21 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "swarmscan-rs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9ba631585e1e3f0d0d43bc4a318548d6b33333d58c31c87a4b150b11a7f7e9"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+]
 
 [[package]]
 name = "syn"

@@ -37,6 +37,7 @@ pub mod pprof_bundle;
 pub mod pubsub;
 pub mod stamp_preview;
 pub mod state;
+pub mod support_bundle;
 pub mod theme;
 pub mod tui;
 pub mod uploads;

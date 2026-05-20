@@ -11,6 +11,23 @@ format follows [Keep a Changelog]; the project adheres to
 
 TBD.
 
+## [v1.18.0]
+
+bee-scripts adoption features (all built on `bee-cockpit-core` 0.2):
+
+- `:diagnose --bundle` — full-state JSON support bundle across health,
+  status, topology, stamps, chequebook, stake and peers (the Swarm
+  analog of bee-scripts' `snapshot.sh` + `collect-all.sh`).
+- Redistribution economics on the Lottery screen: net reward, ROI on
+  stake, and rounds-since-last-win.
+- Blocklist display on the Peers screen (`/blocklist`).
+- `:census [depth]` — Swarmscan neighborhood-population census (your
+  neighborhood + the network distribution). Opt-in; the only command
+  that talks to api.swarmscan.io, and only when run.
+- `:geo <overlay>` — Swarmscan country / city / reachability lookup.
+- Corrected the `bad-status.sh` outlier-rule attribution in the peers
+  reserve-state docs.
+
 ## [1.17.0] - 2026-05-15
 
 The "cockpit-core split" minor release. bee-tui is now a renderer

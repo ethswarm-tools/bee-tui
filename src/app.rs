@@ -36,7 +36,7 @@ use crate::{
     config::Config,
     config_doctor, durability, economics_oracle, log_capture,
     manifest_walker::{self, InspectResult},
-    pprof_bundle, stamp_preview,
+    pprof_bundle, stamp_preview, support_bundle,
     state::State,
     theme,
     tui::{Event, Tui},
@@ -754,7 +754,15 @@ const KNOWN_COMMANDS: &[(&str, &str)] = &[
     ),
     (
         "diagnose",
-        "[--pprof[=N]] Export snapshot (+ optional CPU profile + trace)",
+        "[--pprof[=N]] [--bundle] Export snapshot (+ optional CPU profile / full-state JSON bundle)",
+    ),
+    (
+        "census",
+        "[depth] Swarmscan neighborhood-population census (your nbhd + network)",
+    ),
+    (
+        "geo",
+        "<overlay> Swarmscan geo lookup (country / city / reachable)",
     ),
     ("pins-check", "Bulk integrity walk to a file"),
     ("loggers", "Dump live logger registry"),
@@ -787,6 +795,24 @@ fn parse_pprof_arg(line: &str) -> Option<u32> {
         }
     }
     None
+}
+
+/// True when a `:diagnose ...` line carries the `--bundle` flag,
+/// requesting a full-state JSON support bundle (the snapshot.sh /
+/// collect-all.sh analog). Pure for testability.
+fn parse_bundle_flag(line: &str) -> bool {
+    line.split_whitespace().any(|t| t == "--bundle")
+}
+
+/// Parse the optional depth from a `:census [depth]` line. Defaults to
+/// 8 and clamps to 1..=32 (matching `network_census` bounds). Pure for
+/// testability.
+fn parse_census_depth(line: &str) -> u8 {
+    line.split_whitespace()
+        .nth(1)
+        .and_then(|t| t.parse::<u8>().ok())
+        .unwrap_or(8)
+        .clamp(1, 32)
 }
 
 /// Produce the filtered list of (name, description) pairs that match
@@ -1857,7 +1883,9 @@ impl App {
             }
             "diagnose" | "diag" => {
                 let pprof_secs = parse_pprof_arg(trimmed);
-                if let Some(secs) = pprof_secs {
+                if parse_bundle_flag(trimmed) {
+                    self.command_status = Some(self.start_diagnose_bundle());
+                } else if let Some(secs) = pprof_secs {
                     self.command_status = Some(self.start_diagnose_with_pprof(secs));
                 } else {
                     self.command_status = Some(match self.export_diagnostic_bundle() {
@@ -1868,6 +1896,16 @@ impl App {
                         Err(e) => CommandStatus::Err(format!("diagnose failed: {e}")),
                     });
                 }
+            }
+            "census" => {
+                let depth = parse_census_depth(trimmed);
+                self.command_status = Some(self.start_census(depth));
+            }
+            "geo" => {
+                self.command_status = Some(match trimmed.split_whitespace().nth(1) {
+                    Some(overlay) => self.start_geo(overlay.to_string()),
+                    None => CommandStatus::Err("usage: :geo <overlay-hex>".into()),
+                });
             }
             "pins-check" => {
                 // `:pins-check` keeps the legacy bulk-check-to-file behaviour;
@@ -3669,6 +3707,87 @@ impl App {
             "diagnose --pprof={seconds}s in flight (bundle.txt already at {}; profile + trace will join when sampling completes)",
             dir.display()
         ))
+    }
+
+    /// `:diagnose --bundle` — collect the node's full operator-relevant
+    /// API state (health, status, topology, stamps, chequebook, stake,
+    /// peers, …) as one shareable JSON file. The Swarm analog of
+    /// bee-scripts' `snapshot.sh` + `collect-all.sh`. Runs async (it
+    /// hits ~16 endpoints) and reports the path via `cmd_status_tx`.
+    fn start_diagnose_bundle(&self) -> CommandStatus {
+        let secs_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("bee-support-{secs_unix}.json"));
+        let auth_token = self
+            .config
+            .nodes
+            .iter()
+            .find(|n| n.name == self.api.name)
+            .and_then(|n| n.resolved_token());
+        let base_url = self.api.url.clone();
+        let generated_by = format!("bee-tui {}", env!("CARGO_PKG_VERSION"));
+        let tx = self.cmd_status_tx.clone();
+        tokio::spawn(async move {
+            let status = match support_bundle::collect_and_write(
+                &base_url,
+                auth_token.as_deref(),
+                &generated_by,
+                path,
+            )
+            .await
+            {
+                Ok((bundle, p)) => CommandStatus::Info(bundle.summary(&p)),
+                Err(e) => CommandStatus::Err(format!("diagnose --bundle failed: {e}")),
+            };
+            let _ = tx.send(status);
+        });
+        CommandStatus::Info("diagnose --bundle in flight (collecting full node state…)".into())
+    }
+
+    /// `:census [depth]` — query Swarmscan for the network neighborhood
+    /// population at `depth` bits and report the operator's own
+    /// neighborhood plus the network-wide distribution. Opt-in: this is
+    /// the only cockpit command that talks to api.swarmscan.io, and only
+    /// when explicitly run.
+    fn start_census(&self, depth: u8) -> CommandStatus {
+        let overlay = self
+            .watch
+            .network()
+            .borrow()
+            .addresses
+            .as_ref()
+            .map(|a| a.overlay.clone());
+        let tx = self.cmd_status_tx.clone();
+        tokio::spawn(async move {
+            let status = match bee_cockpit_core::network_census::collect_census_mainnet(
+                overlay.as_deref(),
+                depth,
+            )
+            .await
+            {
+                Ok(c) => CommandStatus::Info(bee_cockpit_core::network_census::census_summary(&c)),
+                Err(e) => CommandStatus::Err(format!("census failed: {e}")),
+            };
+            let _ = tx.send(status);
+        });
+        CommandStatus::Info(format!("census @depth {depth} running (querying Swarmscan)…"))
+    }
+
+    /// `:geo <overlay>` — Swarmscan country/city/reachability for one
+    /// node. Opt-in external lookup, same as `:census`.
+    fn start_geo(&self, overlay: String) -> CommandStatus {
+        let tx = self.cmd_status_tx.clone();
+        let overlay_for_msg = overlay.clone();
+        tokio::spawn(async move {
+            let status = match bee_cockpit_core::network_census::lookup_geo_mainnet(&overlay).await {
+                Ok(s) => CommandStatus::Info(s),
+                Err(e) => CommandStatus::Err(format!("geo failed: {e}")),
+            };
+            let _ = tx.send(status);
+        });
+        CommandStatus::Info(format!("geo lookup for {overlay_for_msg} (querying Swarmscan)…"))
     }
 
     fn export_diagnostic_bundle(&self) -> std::io::Result<PathBuf> {
@@ -5751,6 +5870,24 @@ mod tests {
         // Garbage after `=` falls through to None — operator gets the
         // sync diagnostic, not a panic on bad input.
         assert_eq!(parse_pprof_arg("diagnose --pprof=lol"), None);
+    }
+
+    #[test]
+    fn parse_bundle_flag_detects_only_exact_token() {
+        assert!(parse_bundle_flag("diagnose --bundle"));
+        assert!(parse_bundle_flag("diag --bundle"));
+        assert!(!parse_bundle_flag("diagnose"));
+        assert!(!parse_bundle_flag("diagnose --bundles"));
+        assert!(!parse_bundle_flag("diagnose --pprof"));
+    }
+
+    #[test]
+    fn parse_census_depth_defaults_and_clamps() {
+        assert_eq!(parse_census_depth("census"), 8);
+        assert_eq!(parse_census_depth("census 10"), 10);
+        assert_eq!(parse_census_depth("census 0"), 1);
+        assert_eq!(parse_census_depth("census 99"), 32);
+        assert_eq!(parse_census_depth("census lol"), 8);
     }
 
     #[test]
